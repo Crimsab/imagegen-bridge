@@ -48,7 +48,10 @@ def test_sync_client_matches_shared_http_contract(
             "codex-app-server",
             "codex-responses",
         ]
-        assert client.capabilities("codex-app-server").persistent_sessions
+        capabilities = client.capabilities("codex-app-server")
+        assert capabilities.persistent_sessions
+        assert capabilities.input_fidelities == ("high",)
+        assert capabilities.actions == ("auto",)
         assert client.session("sdk-fixture").thread_id == "thread_fixture_01"
         client.delete_session("sdk-fixture")
         assert client.health()["status"] == "live"

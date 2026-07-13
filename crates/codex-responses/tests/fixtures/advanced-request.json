@@ -17,6 +17,7 @@
       "output_format": "webp",
       "background": "opaque",
       "moderation": "low",
+      "action": "auto",
       "output_compression": 80,
       "partial_images": 2
     }

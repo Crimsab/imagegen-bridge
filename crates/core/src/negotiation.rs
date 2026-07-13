@@ -42,6 +42,8 @@ pub fn negotiate_request(
     check_input_counts(request, capabilities)?;
     check_sessions(request, capabilities)?;
     check_user_attribution(request, capabilities)?;
+    check_input_fidelity(request, capabilities)?;
+    check_action(request, capabilities)?;
     negotiate_count(&mut effective_request, capabilities, &mut normalizations)?;
     negotiate_size(&mut effective_request, capabilities, &mut normalizations)?;
     negotiate_hints(&mut effective_request, capabilities, &mut normalizations)?;
@@ -82,6 +84,42 @@ fn check_user_attribution(
         "user",
         "provider cannot consume the requested end-user attribution",
     ))
+}
+
+fn check_input_fidelity(
+    request: &ImageRequest,
+    capabilities: &ProviderCapabilities,
+) -> Result<(), BridgeError> {
+    let Some(requested) = request.parameters.input_fidelity else {
+        return Ok(());
+    };
+    if capabilities.input_fidelities.contains(&requested) {
+        return Ok(());
+    }
+    Err(unsupported(
+        capabilities,
+        "parameters.input_fidelity",
+        "provider cannot honor the requested input fidelity",
+    )
+    .with_detail("requested", requested)
+    .with_detail("supported", &capabilities.input_fidelities))
+}
+
+fn check_action(
+    request: &ImageRequest,
+    capabilities: &ProviderCapabilities,
+) -> Result<(), BridgeError> {
+    let requested = request.parameters.action;
+    if capabilities.actions.contains(&requested) {
+        return Ok(());
+    }
+    Err(unsupported(
+        capabilities,
+        "parameters.action",
+        "provider cannot honor the requested image action",
+    )
+    .with_detail("requested", requested)
+    .with_detail("supported", &capabilities.actions))
 }
 
 fn check_model(
@@ -694,6 +732,8 @@ mod tests {
             negative_prompt: SupportLevel::Emulated,
             revised_prompt: SupportLevel::Unsupported,
             user_attribution: SupportLevel::Unsupported,
+            input_fidelities: BTreeSet::new(),
+            actions: BTreeSet::from([crate::ImageAction::Auto]),
             reference_images: no_inputs(),
             edit_images: no_inputs(),
             masks: no_inputs(),
@@ -748,6 +788,19 @@ mod tests {
             error.details.get("field"),
             Some(&serde_json::Value::String("user".to_owned()))
         );
+    }
+
+    #[test]
+    fn explicit_fidelity_and_action_are_capability_checked() {
+        let mut request = ImageRequest::generate("test");
+        request.parameters.input_fidelity = Some(crate::InputFidelity::High);
+        let error = negotiate_request(&request, &capabilities()).unwrap_err();
+        assert_eq!(error.details["field"], "parameters.input_fidelity");
+
+        request.parameters.input_fidelity = None;
+        request.parameters.action = crate::ImageAction::Generate;
+        let error = negotiate_request(&request, &capabilities()).unwrap_err();
+        assert_eq!(error.details["field"], "parameters.action");
     }
 
     #[test]

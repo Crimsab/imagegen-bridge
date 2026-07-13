@@ -11,7 +11,8 @@
     "background": "opaque",
     "moderation": "auto",
     "partial_images": 1,
-    "failure_policy": "fail_fast"
+    "failure_policy": "fail_fast",
+    "action": "auto"
   },
   "effective": {
     "n": 1,
@@ -21,7 +22,8 @@
     "background": "opaque",
     "moderation": "auto",
     "partial_images": 0,
-    "failure_policy": "fail_fast"
+    "failure_policy": "fail_fast",
+    "action": "auto"
   },
   "normalizations": [
     {

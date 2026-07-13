@@ -11,6 +11,8 @@ OutputFormat: TypeAlias = Literal["png", "jpeg", "webp"]
 Background: TypeAlias = Literal["auto", "opaque", "transparent"]
 Moderation: TypeAlias = Literal["auto", "low"]
 MultiImageFailurePolicy: TypeAlias = Literal["fail_fast", "best_effort"]
+InputFidelity: TypeAlias = Literal["low", "high"]
+ImageAction: TypeAlias = Literal["auto", "generate", "edit"]
 Resolution: TypeAlias = Literal["1k", "2k", "4k"]
 ResponseFormat: TypeAlias = Literal["b64_json", "url", "artifact", "metadata"]
 CompatibilityMode: TypeAlias = Literal["strict", "normalize", "best_effort"]
@@ -92,9 +94,14 @@ class GenerationParameters:
     moderation: Moderation = "auto"
     partial_images: int = 0
     failure_policy: MultiImageFailurePolicy = "fail_fast"
+    input_fidelity: InputFidelity | None = None
+    action: ImageAction = "auto"
 
     def to_dict(self) -> dict[str, JSONValue]:
-        return cast(dict[str, JSONValue], asdict(self))
+        value = cast(dict[str, JSONValue], asdict(self))
+        if self.input_fidelity is None:
+            value.pop("input_fidelity")
+        return value
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> GenerationParameters:
@@ -388,6 +395,8 @@ class ProviderCapabilities:
     negative_prompt: SupportLevel
     revised_prompt: SupportLevel
     user_attribution: SupportLevel
+    input_fidelities: tuple[InputFidelity, ...]
+    actions: tuple[ImageAction, ...]
     reference_images: InputCapabilities
     edit_images: InputCapabilities
     masks: InputCapabilities
@@ -398,7 +407,14 @@ class ProviderCapabilities:
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> ProviderCapabilities:
         copied = dict(value)
-        for key in ("qualities", "output_formats", "backgrounds", "moderation"):
+        for key in (
+            "qualities",
+            "output_formats",
+            "backgrounds",
+            "moderation",
+            "input_fidelities",
+            "actions",
+        ):
             copied[key] = tuple(copied[key])
         copied["count"] = U8Range(**copied["count"])
         copied["sizes"] = SizeCapabilities(

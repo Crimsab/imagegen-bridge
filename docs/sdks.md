@@ -77,6 +77,9 @@ Pass `{ signal }` or `{ timeoutMs }` per request. Streaming is an
 `AsyncIterable<StreamEvent>` and cancels the HTTP body when iteration ends.
 Both SDKs expose requested output indices, optional per-item generation time,
 and structured failures from best-effort multi-image requests.
+The request and capability types also expose input fidelity, image action, and
+the provider-specific accepted value sets instead of assuming every model can
+honor every edit control.
 
 ## Contract verification and packaging
 

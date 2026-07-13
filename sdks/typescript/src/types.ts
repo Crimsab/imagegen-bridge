@@ -10,6 +10,8 @@ export type OutputFormat = "png" | "jpeg" | "webp";
 export type Background = "auto" | "opaque" | "transparent";
 export type Moderation = "auto" | "low";
 export type MultiImageFailurePolicy = "fail_fast" | "best_effort";
+export type InputFidelity = "low" | "high";
+export type ImageAction = "auto" | "generate" | "edit";
 export type Resolution = "1k" | "2k" | "4k";
 export type ResponseFormat = "b64_json" | "url" | "artifact" | "metadata";
 export type CompatibilityMode = "strict" | "normalize" | "best_effort";
@@ -41,6 +43,8 @@ export interface GenerationParameters {
   moderation?: Moderation;
   partial_images?: number;
   failure_policy?: MultiImageFailurePolicy;
+  input_fidelity?: InputFidelity | null;
+  action?: ImageAction;
 }
 
 export interface RoutingOptions {
@@ -153,6 +157,7 @@ export interface ImageResponse {
       | "moderation"
       | "partial_images"
       | "failure_policy"
+      | "action"
     >
   > &
     GenerationParameters;
@@ -167,6 +172,7 @@ export interface ImageResponse {
       | "moderation"
       | "partial_images"
       | "failure_policy"
+      | "action"
     >
   > &
     GenerationParameters;
@@ -246,6 +252,8 @@ export interface ProviderCapabilities {
   negative_prompt: SupportLevel;
   revised_prompt: SupportLevel;
   user_attribution: SupportLevel;
+  input_fidelities: InputFidelity[];
+  actions: ImageAction[];
   reference_images: InputCapabilities;
   edit_images: InputCapabilities;
   masks: InputCapabilities;

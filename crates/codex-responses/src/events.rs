@@ -108,7 +108,10 @@ pub(crate) fn process_event(
                 .and_then(Value::as_str)
                 .or_else(|| event["code"].as_str())
                 .unwrap_or("upstream_failure");
-            state.failure = Some(classified_upstream_error(code));
+            state.failure = Some(with_moderation_details(
+                classified_upstream_error(code),
+                error,
+            ));
         }
         _ => {}
     }
@@ -211,6 +214,44 @@ fn classified_upstream_error(raw_code: &str) -> BridgeError {
     error
         .with_provider("codex-responses")
         .with_detail("upstream_code", safe_code)
+}
+
+fn with_moderation_details(mut error: BridgeError, upstream: Option<&Value>) -> BridgeError {
+    if error.code != ErrorCode::SafetyRejected {
+        return error;
+    }
+    let Some(details) = upstream.and_then(|value| {
+        value
+            .get("moderation_details")
+            .or_else(|| value.get("moderationDetails"))
+    }) else {
+        return error;
+    };
+    if let Some(stage @ ("input" | "output" | "unknown")) = details
+        .get("moderation_stage")
+        .or_else(|| details.get("moderationStage"))
+        .and_then(Value::as_str)
+    {
+        error = error.with_detail("moderation_stage", stage);
+    }
+    let public_categories = details
+        .get("categories")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|category| {
+            matches!(
+                *category,
+                "harassment" | "self-harm" | "sexual" | "violence"
+            )
+        })
+        .take(8)
+        .collect::<Vec<_>>();
+    if !public_categories.is_empty() {
+        error = error.with_detail("moderation_categories", public_categories);
+    }
+    error
 }
 
 fn sanitize_code(raw: &str) -> String {
@@ -330,7 +371,7 @@ mod tests {
     fn classifies_and_sanitizes_upstream_codes() {
         let mut state = EventState::default();
         process_event(
-            r#"{"type":"response.failed","response":{"error":{"code":"content_policy_violation/<secret>"}}}"#,
+            r#"{"type":"response.failed","response":{"error":{"code":"content_policy_violation/<secret>","moderation_details":{"moderation_stage":"input","categories":["harassment","internal_classifier_x"]}}}}"#,
             &mut state,
             100,
         )
@@ -339,6 +380,12 @@ mod tests {
         assert_eq!(error.code, ErrorCode::SafetyRejected);
         assert_eq!(error.details["recovery"], "revise_prompt_or_inputs");
         assert_eq!(error.details["retry_same_request"], false);
+        assert_eq!(error.details["moderation_stage"], "input");
+        assert_eq!(
+            error.details["moderation_categories"],
+            serde_json::json!(["harassment"])
+        );
+        assert!(!format!("{error:?}").contains("internal_classifier_x"));
         assert!(!format!("{error:?}").contains('<'));
     }
 

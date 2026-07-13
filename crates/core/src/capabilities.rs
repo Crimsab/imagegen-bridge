@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{Background, ImageSize, Moderation, OutputFormat, Quality};
+use crate::{Background, ImageAction, ImageSize, InputFidelity, Moderation, OutputFormat, Quality};
 
 /// Degree to which a provider supports a semantic feature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -121,6 +121,10 @@ pub struct ProviderCapabilities {
     pub revised_prompt: SupportLevel,
     /// Opaque end-user attribution support.
     pub user_attribution: SupportLevel,
+    /// Supported explicit input-fidelity values.
+    pub input_fidelities: BTreeSet<InputFidelity>,
+    /// Supported image-tool actions.
+    pub actions: BTreeSet<ImageAction>,
     /// Reference-image constraints.
     pub reference_images: InputCapabilities,
     /// Edit-image constraints.

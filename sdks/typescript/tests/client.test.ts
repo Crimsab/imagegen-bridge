@@ -62,7 +62,10 @@ describe("ImagegenBridgeClient", () => {
       "codex-app-server",
       "codex-responses",
     ]);
-    expect((await client.capabilities("codex-app-server")).persistent_sessions).toBeTrue();
+    const capabilities = await client.capabilities("codex-app-server");
+    expect(capabilities.persistent_sessions).toBeTrue();
+    expect(capabilities.input_fidelities).toEqual(["high"]);
+    expect(capabilities.actions).toEqual(["auto"]);
     expect((await client.session("sdk-fixture")).thread_id).toBe("thread_fixture_01");
     await client.deleteSession("sdk-fixture");
     expect((await client.health()).status).toBe("live");

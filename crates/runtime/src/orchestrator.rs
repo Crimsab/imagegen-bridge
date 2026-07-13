@@ -631,10 +631,10 @@ mod tests {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     use imagegen_bridge_artifacts::{ArtifactStore, ImageLimits, inspect_image};
     use imagegen_bridge_core::{
-        Background, CompatibilityMode, GeneratedImage, GenerationParameters, ImagePayload,
-        ImageProvider, ImageSize, InputCapabilities, Moderation, OutputFormat,
-        ProviderCapabilities, ProviderDescriptor, Quality, ResponseFormat, SizeCapabilities,
-        SupportLevel, Timings, U8Range, Usage,
+        Background, CompatibilityMode, GeneratedImage, GenerationParameters, ImageAction,
+        ImagePayload, ImageProvider, ImageSize, InputCapabilities, InputFidelity, Moderation,
+        OutputFormat, ProviderCapabilities, ProviderDescriptor, Quality, ResponseFormat,
+        SizeCapabilities, SupportLevel, Timings, U8Range, Usage,
     };
 
     use super::*;
@@ -782,6 +782,8 @@ mod tests {
             negative_prompt: SupportLevel::Emulated,
             revised_prompt: SupportLevel::Native,
             user_attribution: SupportLevel::Native,
+            input_fidelities: BTreeSet::from([InputFidelity::Low, InputFidelity::High]),
+            actions: BTreeSet::from([ImageAction::Auto, ImageAction::Generate, ImageAction::Edit]),
             reference_images: unsupported_inputs.clone(),
             edit_images: unsupported_inputs.clone(),
             masks: unsupported_inputs,

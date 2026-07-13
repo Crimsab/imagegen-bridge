@@ -606,9 +606,9 @@ mod tests {
     use axum::{body::Body, http::Request};
     use http_body_util::BodyExt as _;
     use imagegen_bridge_core::{
-        Background, GeneratedImage, ImagePayload, ImageProvider, ImageResponse, InputCapabilities,
-        Moderation, OutputFormat, ProviderCapabilities, ProviderContext, Quality, SizeCapabilities,
-        SupportLevel, Timings, U8Range,
+        Background, GeneratedImage, ImageAction, ImagePayload, ImageProvider, ImageResponse,
+        InputCapabilities, InputFidelity, Moderation, OutputFormat, ProviderCapabilities,
+        ProviderContext, Quality, SizeCapabilities, SupportLevel, Timings, U8Range,
     };
     use imagegen_bridge_runtime::{ProviderRegistry, RuntimeConfig};
     use tower::ServiceExt as _;
@@ -670,6 +670,12 @@ mod tests {
                 negative_prompt: SupportLevel::Native,
                 revised_prompt: SupportLevel::Native,
                 user_attribution: SupportLevel::Native,
+                input_fidelities: [InputFidelity::Low, InputFidelity::High]
+                    .into_iter()
+                    .collect(),
+                actions: [ImageAction::Auto, ImageAction::Generate, ImageAction::Edit]
+                    .into_iter()
+                    .collect(),
                 reference_images: inputs.clone(),
                 edit_images: inputs,
                 masks: InputCapabilities {

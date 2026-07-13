@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 use imagegen_bridge::core::{
-    AspectRatio, Background, CompatibilityMode, ImageSize, Moderation, MultiImageFailurePolicy,
-    NegativePromptMode, OutputFormat, Quality, Resolution, ResponseFormat, RevisedPromptPolicy,
-    SessionMode,
+    AspectRatio, Background, CompatibilityMode, ImageAction, ImageSize, InputFidelity, Moderation,
+    MultiImageFailurePolicy, NegativePromptMode, OutputFormat, Quality, Resolution, ResponseFormat,
+    RevisedPromptPolicy, SessionMode,
 };
 
 #[derive(Debug, Parser)]
@@ -201,6 +201,12 @@ pub(crate) struct ImageArgs {
     /// Behavior when one output in a multi-image request fails.
     #[arg(long, value_parser = parse_failure_policy)]
     pub failure_policy: Option<MultiImageFailurePolicy>,
+    /// Input-image fidelity for edit/reference operations.
+    #[arg(long, value_parser = parse_input_fidelity)]
+    pub input_fidelity: Option<InputFidelity>,
+    /// Image tool action for conversational transports.
+    #[arg(long, value_parser = parse_image_action)]
+    pub action: Option<ImageAction>,
     /// Output payload representation.
     #[arg(long, value_parser = parse_response_format)]
     pub response_format: Option<ResponseFormat>,
@@ -252,6 +258,8 @@ impl ImageArgs {
             && self.moderation.is_none()
             && self.partial_images.is_none()
             && self.failure_policy.is_none()
+            && self.input_fidelity.is_none()
+            && self.action.is_none()
             && self.response_format.is_none()
             && self.filename_prefix.is_none()
             && self.compatibility.is_none()
@@ -412,6 +420,8 @@ enum_parser!(parse_format, OutputFormat);
 enum_parser!(parse_background, Background);
 enum_parser!(parse_moderation, Moderation);
 enum_parser!(parse_failure_policy, MultiImageFailurePolicy);
+enum_parser!(parse_input_fidelity, InputFidelity);
+enum_parser!(parse_image_action, ImageAction);
 enum_parser!(parse_response_format, ResponseFormat);
 enum_parser!(parse_compatibility, CompatibilityMode);
 enum_parser!(parse_negative_prompt_mode, NegativePromptMode);
@@ -458,6 +468,8 @@ mod tests {
             "3",
             "--failure-policy",
             "best_effort",
+            "--action",
+            "generate",
             "--response-format",
             "artifact",
             "--session",

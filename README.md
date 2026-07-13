@@ -28,6 +28,9 @@ are through TOML, the CLI, or the HTTP/SDK interfaces.
 - Multiple images, size, quality, PNG/JPEG/WebP, compression, background,
   moderation, negative-prompt policy, revised-prompt policy, bounded
   concurrency, and explicit partial-failure behavior where supported.
+- Capability-checked edit action and input fidelity. `gpt-image-2` image inputs
+  are always high fidelity; older Responses-routed image models accept explicit
+  `low`/`high`. Masks remain explicitly unsupported by both Codex transports.
 - Independent decoding and verification of format, dimensions, byte length,
   and SHA-256 before an output is returned or stored.
 - Atomic artifact writes, bounded local/remote inputs, retention cleanup, and
@@ -123,6 +126,13 @@ For the Responses adapter, `n > 1` uses at most
 on the first failure. `best_effort` returns successful images in requested-index
 order plus structured `failures`; every success and failure includes its output
 index and per-item generation time.
+
+The Responses adapter forwards `action=auto|generate|edit`. The app-server path
+accepts only `auto`. An explicit `input_fidelity=high` is accepted for
+`gpt-image-2` but omitted upstream because that model already processes image
+inputs at high fidelity; `low` is rejected. These rules follow the current
+[OpenAI image generation contract](https://developers.openai.com/api/docs/guides/image-generation)
+and are also published through provider discovery.
 
 To use the experimental Responses provider, set
 `providers.codex_responses.enabled = true` in the TOML configuration, then

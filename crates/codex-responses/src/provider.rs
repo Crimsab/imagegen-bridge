@@ -13,11 +13,12 @@ use imagegen_bridge_artifacts::{
     ImageLimits, InputLoader, LoadedImage, RemoteImageFetcher, inspect_image,
 };
 use imagegen_bridge_core::{
-    Background, BridgeError, ErrorCode, GeneratedImage, ImageFailure, ImageOperation, ImagePayload,
-    ImageProvider, ImageRequest, ImageResponse, ImageSize, ImageSource, InputCapabilities,
-    Moderation, MultiImageFailurePolicy, OutputFormat, ProviderCapabilities, ProviderContext,
-    ProviderDescriptor, ProviderEvent, Quality, RequestLimits, RevisedPromptPolicy,
-    SizeCapabilities, SupportLevel, Timings, U8Range, Usage, negotiate_request, validate_request,
+    Background, BridgeError, ErrorCode, GeneratedImage, ImageAction, ImageFailure, ImageOperation,
+    ImagePayload, ImageProvider, ImageRequest, ImageResponse, ImageSize, ImageSource,
+    InputCapabilities, InputFidelity, Moderation, MultiImageFailurePolicy, OutputFormat,
+    ProviderCapabilities, ProviderContext, ProviderDescriptor, ProviderEvent, Quality,
+    RequestLimits, RevisedPromptPolicy, SizeCapabilities, SupportLevel, Timings, U8Range, Usage,
+    negotiate_request, validate_request,
 };
 use reqwest::{Client, StatusCode, Url, header};
 use secrecy::ExposeSecret as _;
@@ -437,13 +438,19 @@ impl CodexResponsesProvider {
             "quality": parameters.quality.to_string(),
             "output_format": parameters.output_format.to_string(),
             "background": parameters.background.to_string(),
-            "moderation": parameters.moderation.to_string()
+            "moderation": parameters.moderation.to_string(),
+            "action": parameters.action.to_string()
         });
         if let Some(compression) = parameters.output_compression {
             tool["output_compression"] = json!(compression);
         }
         if parameters.partial_images > 0 {
             tool["partial_images"] = json!(parameters.partial_images);
+        }
+        if image_model != "gpt-image-2"
+            && let Some(input_fidelity) = parameters.input_fidelity
+        {
+            tool["input_fidelity"] = json!(input_fidelity.to_string());
         }
         json!({
             "model": self.config.responses_model,
@@ -625,6 +632,12 @@ fn capabilities(model: &str) -> Result<ProviderCapabilities, BridgeError> {
         negative_prompt: SupportLevel::Emulated,
         revised_prompt: SupportLevel::Native,
         user_attribution: SupportLevel::Unsupported,
+        input_fidelities: if model == "gpt-image-2" {
+            BTreeSet::from([InputFidelity::High])
+        } else {
+            BTreeSet::from([InputFidelity::Low, InputFidelity::High])
+        },
+        actions: BTreeSet::from([ImageAction::Auto, ImageAction::Generate, ImageAction::Edit]),
         reference_images: references.clone(),
         edit_images: references,
         masks: InputCapabilities {
@@ -927,6 +940,7 @@ mod tests {
             &[json!({"type":"input_text","text":"test"})],
         );
         assert_eq!(body["tools"][0]["model"], "gpt-image-1.5");
+        assert_eq!(body["tools"][0]["action"], "auto");
 
         let image_two = provider.capability_document(Some("gpt-image-2")).unwrap();
         assert!(!image_two.backgrounds.contains(&Background::Transparent));
@@ -935,6 +949,34 @@ mod tests {
         let image_one = provider.capability_document(Some("gpt-image-1")).unwrap();
         assert!(image_one.backgrounds.contains(&Background::Transparent));
         assert_eq!(image_one.sizes.allowed.len(), 3);
+    }
+
+    #[test]
+    fn forwards_action_and_only_model_supported_fidelity_controls() {
+        let provider = provider();
+        let mut request = ImageRequest::generate("test");
+        request.parameters.action = ImageAction::Edit;
+        request.parameters.input_fidelity = Some(InputFidelity::High);
+        let older = provider.request_body(
+            &request,
+            "gpt-image-1.5",
+            &[json!({"type":"input_text","text":"test"})],
+        );
+        assert_eq!(older["tools"][0]["action"], "edit");
+        assert_eq!(older["tools"][0]["input_fidelity"], "high");
+
+        let image_two = provider.request_body(
+            &request,
+            "gpt-image-2",
+            &[json!({"type":"input_text","text":"test"})],
+        );
+        assert!(image_two["tools"][0].get("input_fidelity").is_none());
+        let capabilities = provider.capability_document(Some("gpt-image-2")).unwrap();
+        assert_eq!(
+            capabilities.input_fidelities,
+            BTreeSet::from([InputFidelity::High])
+        );
+        assert_eq!(capabilities.masks.support, SupportLevel::Unsupported);
     }
 
     #[test]
@@ -1202,6 +1244,8 @@ mod tests {
         request.parameters.output_format = OutputFormat::Png;
         request.parameters.background = Background::Opaque;
         request.parameters.partial_images = 1;
+        request.parameters.action = ImageAction::Edit;
+        request.parameters.input_fidelity = Some(InputFidelity::High);
         let response = provider
             .execute(
                 request,

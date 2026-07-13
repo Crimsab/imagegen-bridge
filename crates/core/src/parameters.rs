@@ -109,6 +109,29 @@ impl Default for MultiImageFailurePolicy {
 }
 
 string_enum! {
+    /// Fidelity used when processing image inputs.
+    pub enum InputFidelity {
+        Low => "low",
+        High => "high",
+    }
+}
+
+string_enum! {
+    /// Image-generation tool action for conversational transports.
+    pub enum ImageAction {
+        Auto => "auto",
+        Generate => "generate",
+        Edit => "edit",
+    }
+}
+
+impl Default for ImageAction {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
+string_enum! {
     /// Desired output payload representation.
     pub enum ResponseFormat {
         B64Json => "b64_json",

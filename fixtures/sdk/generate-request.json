@@ -15,7 +15,8 @@
     "background": "opaque",
     "moderation": "auto",
     "partial_images": 1,
-    "failure_policy": "fail_fast"
+    "failure_policy": "fail_fast",
+    "action": "auto"
   },
   "routing": {
     "provider": "codex-app-server",

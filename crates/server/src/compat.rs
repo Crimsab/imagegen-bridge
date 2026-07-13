@@ -11,9 +11,10 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use imagegen_bridge_core::{
-    AspectRatio, Background, CompatibilityMode, GeneratedImage, ImageInput, ImageOperation,
-    ImagePayload, ImageRequest, ImageResponse, ImageSize, Moderation, NegativePromptMode,
-    OutputFormat, Quality, Resolution, ResponseFormat, RevisedPromptPolicy, SessionOptions, Usage,
+    AspectRatio, Background, CompatibilityMode, GeneratedImage, ImageAction, ImageInput,
+    ImageOperation, ImagePayload, ImageRequest, ImageResponse, ImageSize, InputFidelity,
+    Moderation, NegativePromptMode, OutputFormat, Quality, Resolution, ResponseFormat,
+    RevisedPromptPolicy, SessionOptions, Usage,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
@@ -76,6 +77,8 @@ struct CompatibleExtensions {
     aspect_ratio: Option<AspectRatio>,
     resolution: Option<Resolution>,
     partial_images: u8,
+    input_fidelity: Option<InputFidelity>,
+    action: ImageAction,
     session: SessionOptions,
     reference_images: Vec<ImageInput>,
     filename_prefix: Option<String>,
@@ -99,6 +102,8 @@ impl CompatibleGenerationRequest {
         request.parameters.background = self.background;
         request.parameters.moderation = self.moderation;
         request.parameters.partial_images = extensions.partial_images;
+        request.parameters.input_fidelity = extensions.input_fidelity;
+        request.parameters.action = extensions.action;
         request.routing.provider = extensions.provider;
         request.routing.model = self.model;
         request.session = extensions.session;
@@ -232,6 +237,7 @@ struct EditFields {
     output_compression: Option<String>,
     background: Option<String>,
     moderation: Option<String>,
+    input_fidelity: Option<String>,
     response_format: Option<String>,
     user: Option<String>,
     provider: Option<String>,
@@ -348,6 +354,7 @@ fn set_text_field(
         "output_compression" => &mut fields.output_compression,
         "background" => &mut fields.background,
         "moderation" => &mut fields.moderation,
+        "input_fidelity" => &mut fields.input_fidelity,
         "response_format" => &mut fields.response_format,
         "user" => &mut fields.user,
         "provider" => &mut fields.provider,
@@ -405,6 +412,13 @@ fn apply_edit_fields(
     }
     if let Some(value) = fields.moderation {
         request.parameters.moderation = parse_enum(&value, "moderation", request_id.clone())?;
+    }
+    if let Some(value) = fields.input_fidelity {
+        request.parameters.input_fidelity = Some(parse_enum::<InputFidelity>(
+            &value,
+            "input_fidelity",
+            request_id.clone(),
+        )?);
     }
     if let Some(value) = fields.response_format {
         request.output.response_format = match value.as_str() {
@@ -482,6 +496,8 @@ mod tests {
                 "aspect_ratio": "3:2",
                 "resolution": "2k",
                 "partial_images": 2,
+                "input_fidelity": "high",
+                "action": "edit",
                 "session": {"mode":"persistent","key":"gallery"},
                 "filename_prefix": "poster"
             }
@@ -491,6 +507,8 @@ mod tests {
         assert_eq!(request.parameters.n, 2);
         assert_eq!(request.parameters.size.to_string(), "1536x1024");
         assert_eq!(request.parameters.output_compression, Some(81));
+        assert_eq!(request.parameters.input_fidelity, Some(InputFidelity::High));
+        assert_eq!(request.parameters.action, ImageAction::Edit);
         assert_eq!(request.routing.provider.as_deref(), Some("codex-responses"));
         assert_eq!(request.negative_prompt.as_deref(), Some("no text"));
         assert_eq!(request.output.response_format, ResponseFormat::Url);
@@ -546,5 +564,20 @@ mod tests {
         assert_eq!(value["data"][0]["revised_prompt"], "revised");
         assert_eq!(value["imagegen_bridge"]["provider"], "codex-app-server");
         assert_eq!(value["imagegen_bridge"]["session"]["reused"], true);
+    }
+
+    #[test]
+    fn multipart_edit_maps_input_fidelity() {
+        let mut request = ImageRequest::generate("edit");
+        apply_edit_fields(
+            &mut request,
+            EditFields {
+                input_fidelity: Some("high".to_owned()),
+                ..EditFields::default()
+            },
+            RequestId("test-request".to_owned()),
+        )
+        .unwrap();
+        assert_eq!(request.parameters.input_fidelity, Some(InputFidelity::High));
     }
 }

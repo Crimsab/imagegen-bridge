@@ -16,6 +16,8 @@
   "negative_prompt": "emulated",
   "revised_prompt": "emulated",
   "user_attribution": "unsupported",
+  "input_fidelities": ["high"],
+  "actions": ["auto"],
   "reference_images": { "support": "native", "max_count": 5, "max_bytes_each": 33554432, "max_bytes_total": 67108864 },
   "edit_images": { "support": "native", "max_count": 5, "max_bytes_each": 33554432, "max_bytes_total": 67108864 },
   "masks": { "support": "unsupported", "max_count": 0, "max_bytes_each": 0, "max_bytes_total": 0 },

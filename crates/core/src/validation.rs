@@ -4,8 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    BridgeError, ErrorCode, ImageOperation, ImageRequest, ImageSource, NegativePromptMode,
-    OutputFormat, ResponseFormat, SessionMode,
+    BridgeError, ErrorCode, ImageAction, ImageOperation, ImageRequest, ImageSource,
+    NegativePromptMode, OutputFormat, ResponseFormat, SessionMode,
 };
 
 /// Configurable limits applied before provider negotiation.
@@ -316,6 +316,30 @@ pub fn validation_issues(request: &ImageRequest, limits: RequestLimits) -> Vec<V
             "total input image count exceeds the configured limit",
         );
     }
+    if request.parameters.input_fidelity.is_some() && edit_images + references.len() == 0 {
+        issue(
+            "parameters.input_fidelity",
+            "incompatible",
+            "input_fidelity requires at least one source or reference image",
+        );
+    }
+    match (&request.operation, request.parameters.action) {
+        (ImageOperation::Generate { reference_images }, ImageAction::Edit)
+            if reference_images.is_empty() =>
+        {
+            issue(
+                "parameters.action",
+                "incompatible",
+                "edit action requires an image in context",
+            );
+        }
+        (ImageOperation::Edit { .. }, ImageAction::Generate) => issue(
+            "parameters.action",
+            "incompatible",
+            "generate action conflicts with the edit operation",
+        ),
+        _ => {}
+    }
 
     issues.sort_by(|left, right| {
         left.field
@@ -409,7 +433,7 @@ fn validate_input(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ImageInput, SessionOptions};
+    use crate::{ImageInput, InputFidelity, SessionOptions};
 
     #[test]
     fn default_generation_request_is_valid() {
@@ -487,5 +511,19 @@ mod tests {
                 .iter()
                 .any(|item| item.code == "invalid_filename")
         );
+    }
+
+    #[test]
+    fn fidelity_and_edit_action_require_image_context() {
+        let mut request = ImageRequest::generate("edit it");
+        request.parameters.input_fidelity = Some(InputFidelity::High);
+        request.parameters.action = ImageAction::Edit;
+        let issues = validation_issues(&request, RequestLimits::default());
+        assert!(
+            issues
+                .iter()
+                .any(|item| item.field == "parameters.input_fidelity")
+        );
+        assert!(issues.iter().any(|item| item.field == "parameters.action"));
     }
 }

@@ -443,6 +443,11 @@
       "description": "Image-generation parameters shared across providers.",
       "type": "object",
       "properties": {
+        "action": {
+          "description": "Generate/edit selection for transports with an image tool action.",
+          "$ref": "#/$defs/ImageAction",
+          "default": "auto"
+        },
         "aspect_ratio": {
           "description": "Optional aspect-ratio hint.",
           "anyOf": [
@@ -463,6 +468,17 @@
           "description": "Behavior when one output in a multi-image request fails.",
           "$ref": "#/$defs/MultiImageFailurePolicy",
           "default": "fail_fast"
+        },
+        "input_fidelity": {
+          "description": "Optional input-image fidelity for edit/reference operations.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InputFidelity"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "moderation": {
           "description": "Requested moderation behavior.",
@@ -523,6 +539,26 @@
         }
       },
       "additionalProperties": false
+    },
+    "ImageAction": {
+      "description": "Image-generation tool action for conversational transports.",
+      "oneOf": [
+        {
+          "description": "Wire value `auto`.",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "Wire value `generate`.",
+          "type": "string",
+          "const": "generate"
+        },
+        {
+          "description": "Wire value `edit`.",
+          "type": "string",
+          "const": "edit"
+        }
+      ]
     },
     "ImageFailure": {
       "description": "Failure for one output in a best-effort multi-image request.",
@@ -677,6 +713,7 @@
           "description": "Image-generation parameters.",
           "$ref": "#/$defs/GenerationParameters",
           "default": {
+            "action": "auto",
             "background": "auto",
             "failure_policy": "fail_fast",
             "moderation": "auto",
@@ -948,6 +985,21 @@
         "max_bytes_total"
       ]
     },
+    "InputFidelity": {
+      "description": "Fidelity used when processing image inputs.",
+      "oneOf": [
+        {
+          "description": "Wire value `low`.",
+          "type": "string",
+          "const": "low"
+        },
+        {
+          "description": "Wire value `high`.",
+          "type": "string",
+          "const": "high"
+        }
+      ]
+    },
     "Moderation": {
       "description": "Provider moderation strictness where configurable.",
       "oneOf": [
@@ -1071,6 +1123,14 @@
       "description": "Complete capability declaration for one provider/model pair.",
       "type": "object",
       "properties": {
+        "actions": {
+          "description": "Supported image-tool actions.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ImageAction"
+          },
+          "uniqueItems": true
+        },
         "aspect_ratio": {
           "description": "Aspect-ratio hint support.",
           "$ref": "#/$defs/SupportLevel"
@@ -1110,6 +1170,14 @@
         "implementation_version": {
           "description": "Provider implementation version.",
           "type": "string"
+        },
+        "input_fidelities": {
+          "description": "Supported explicit input-fidelity values.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InputFidelity"
+          },
+          "uniqueItems": true
         },
         "masks": {
           "description": "Mask constraints.",
@@ -1201,6 +1269,8 @@
         "negative_prompt",
         "revised_prompt",
         "user_attribution",
+        "input_fidelities",
+        "actions",
         "reference_images",
         "edit_images",
         "masks",

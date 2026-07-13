@@ -212,6 +212,10 @@ fn apply_image_args(request: &mut ImageRequest, args: ImageArgs) {
     if let Some(value) = args.failure_policy {
         request.parameters.failure_policy = value;
     }
+    request.parameters.input_fidelity = args.input_fidelity;
+    if let Some(value) = args.action {
+        request.parameters.action = value;
+    }
     if let Some(value) = args.response_format {
         request.output.response_format = value;
     }

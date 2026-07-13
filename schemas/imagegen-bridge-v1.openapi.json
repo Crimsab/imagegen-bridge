@@ -163,6 +163,9 @@
             },
             "type": "array"
           },
+          "input_fidelity": {
+            "$ref": "#/components/schemas/InputFidelity"
+          },
           "mask": {
             "contentMediaType": "image/png",
             "type": "string"
@@ -232,6 +235,9 @@
       "CompatibleExtensions": {
         "additionalProperties": false,
         "properties": {
+          "action": {
+            "$ref": "#/components/schemas/ImageAction"
+          },
           "aspect_ratio": {
             "$ref": "#/components/schemas/AspectRatio"
           },
@@ -240,6 +246,9 @@
           },
           "filename_prefix": {
             "type": "string"
+          },
+          "input_fidelity": {
+            "$ref": "#/components/schemas/InputFidelity"
           },
           "negative_prompt": {
             "type": "string"
@@ -632,6 +641,11 @@
         "additionalProperties": false,
         "description": "Image-generation parameters shared across providers.",
         "properties": {
+          "action": {
+            "$ref": "#/components/schemas/ImageAction",
+            "default": "auto",
+            "description": "Generate/edit selection for transports with an image tool action."
+          },
           "aspect_ratio": {
             "anyOf": [
               {
@@ -652,6 +666,17 @@
             "$ref": "#/components/schemas/MultiImageFailurePolicy",
             "default": "fail_fast",
             "description": "Behavior when one output in a multi-image request fails."
+          },
+          "input_fidelity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InputFidelity"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional input-image fidelity for edit/reference operations."
           },
           "moderation": {
             "$ref": "#/components/schemas/Moderation",
@@ -712,6 +737,26 @@
           }
         },
         "type": "object"
+      },
+      "ImageAction": {
+        "description": "Image-generation tool action for conversational transports.",
+        "oneOf": [
+          {
+            "const": "auto",
+            "description": "Wire value `auto`.",
+            "type": "string"
+          },
+          {
+            "const": "generate",
+            "description": "Wire value `generate`.",
+            "type": "string"
+          },
+          {
+            "const": "edit",
+            "description": "Wire value `edit`.",
+            "type": "string"
+          }
+        ]
       },
       "ImageFailure": {
         "additionalProperties": false,
@@ -925,6 +970,7 @@
           "parameters": {
             "$ref": "#/components/schemas/GenerationParameters",
             "default": {
+              "action": "auto",
               "background": "auto",
               "failure_policy": "fail_fast",
               "moderation": "auto",
@@ -1137,6 +1183,21 @@
         ],
         "type": "object"
       },
+      "InputFidelity": {
+        "description": "Fidelity used when processing image inputs.",
+        "oneOf": [
+          {
+            "const": "low",
+            "description": "Wire value `low`.",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "description": "Wire value `high`.",
+            "type": "string"
+          }
+        ]
+      },
       "Moderation": {
         "description": "Provider moderation strictness where configurable.",
         "oneOf": [
@@ -1307,6 +1368,14 @@
         "additionalProperties": false,
         "description": "Complete capability declaration for one provider/model pair.",
         "properties": {
+          "actions": {
+            "description": "Supported image-tool actions.",
+            "items": {
+              "$ref": "#/components/schemas/ImageAction"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
           "aspect_ratio": {
             "$ref": "#/components/schemas/SupportLevel",
             "description": "Aspect-ratio hint support."
@@ -1346,6 +1415,14 @@
           "implementation_version": {
             "description": "Provider implementation version.",
             "type": "string"
+          },
+          "input_fidelities": {
+            "description": "Supported explicit input-fidelity values.",
+            "items": {
+              "$ref": "#/components/schemas/InputFidelity"
+            },
+            "type": "array",
+            "uniqueItems": true
           },
           "masks": {
             "$ref": "#/components/schemas/InputCapabilities",
@@ -1436,6 +1513,8 @@
           "negative_prompt",
           "revised_prompt",
           "user_attribution",
+          "input_fidelities",
+          "actions",
           "reference_images",
           "edit_images",
           "masks",
@@ -2218,6 +2297,7 @@
                   "response_format": "artifact"
                 },
                 "parameters": {
+                  "action": "auto",
                   "background": "auto",
                   "failure_policy": "fail_fast",
                   "moderation": "auto",
@@ -2269,6 +2349,7 @@
                     }
                   ],
                   "effective": {
+                    "action": "auto",
                     "background": "auto",
                     "failure_policy": "fail_fast",
                     "moderation": "auto",
@@ -2282,6 +2363,7 @@
                   "model": "gpt-image-2",
                   "provider": "codex-app-server",
                   "requested": {
+                    "action": "auto",
                     "background": "auto",
                     "failure_policy": "fail_fast",
                     "moderation": "auto",
@@ -2408,6 +2490,7 @@
                   ],
                   "imagegen_bridge": {
                     "effective": {
+                      "action": "auto",
                       "background": "auto",
                       "failure_policy": "fail_fast",
                       "moderation": "auto",
@@ -2547,6 +2630,7 @@
                   ],
                   "imagegen_bridge": {
                     "effective": {
+                      "action": "auto",
                       "background": "auto",
                       "failure_policy": "fail_fast",
                       "moderation": "auto",
@@ -2656,6 +2740,7 @@
                   "response_format": "artifact"
                 },
                 "parameters": {
+                  "action": "auto",
                   "background": "auto",
                   "failure_policy": "fail_fast",
                   "moderation": "auto",

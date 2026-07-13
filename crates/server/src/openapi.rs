@@ -264,7 +264,7 @@ fn native_request_example() -> Value {
     json!({
         "prompt":"A red origami fox on warm gray",
         "operation":"generate",
-        "parameters":{"n":1,"size":"auto","quality":"auto","output_format":"png","background":"auto","moderation":"auto","partial_images":0,"failure_policy":"fail_fast"},
+        "parameters":{"n":1,"size":"auto","quality":"auto","output_format":"png","background":"auto","moderation":"auto","partial_images":0,"failure_policy":"fail_fast","action":"auto"},
         "routing":{"provider":"codex-app-server"},
         "session":{"mode":"persistent","key":"gallery"},
         "output":{"response_format":"artifact","filename_prefix":"fox"},
@@ -278,8 +278,8 @@ fn native_response_example() -> Value {
         "created":1_713_833_628,
         "provider":"codex-app-server",
         "model":"gpt-image-2",
-        "requested":{"n":1,"size":"auto","quality":"auto","output_format":"png","background":"auto","moderation":"auto","partial_images":0,"failure_policy":"fail_fast"},
-        "effective":{"n":1,"size":"auto","quality":"auto","output_format":"png","background":"auto","moderation":"auto","partial_images":0,"failure_policy":"fail_fast"},
+        "requested":{"n":1,"size":"auto","quality":"auto","output_format":"png","background":"auto","moderation":"auto","partial_images":0,"failure_policy":"fail_fast","action":"auto"},
+        "effective":{"n":1,"size":"auto","quality":"auto","output_format":"png","background":"auto","moderation":"auto","partial_images":0,"failure_policy":"fail_fast","action":"auto"},
         "data":[{"index":0,"type":"artifact","id":"019f-artifact","name":"fox-019f.png","format":"png","width":1024,"height":1024,"bytes":123_456,"sha256":"0000000000000000000000000000000000000000000000000000000000000000","generation_ms":28_000}],
         "revised_prompt":"A centered red origami fox on a warm gray background.",
         "session":{"key":"gallery","thread_id":"019f-thread","reused":false},
@@ -295,7 +295,7 @@ fn compatible_response_example() -> Value {
             "id":"019f0000-0000-7000-8000-000000000000",
             "provider":"codex-app-server",
             "model":"gpt-image-2",
-            "effective":{"n":1,"size":"auto","quality":"auto","output_format":"png","background":"auto","moderation":"auto","partial_images":0,"failure_policy":"fail_fast"},
+            "effective":{"n":1,"size":"auto","quality":"auto","output_format":"png","background":"auto","moderation":"auto","partial_images":0,"failure_policy":"fail_fast","action":"auto"},
             "normalizations":[],
             "session":{"key":"gallery","thread_id":"019f-thread","reused":false},
             "timings":{"queue_ms":0,"input_ms":0,"provider_ms":1000,"artifact_ms":10,"total_ms":1010},
@@ -380,7 +380,7 @@ fn compatible_edit_schema() -> Value {
             "model":{"type":"string"},"n":{"type":"integer","minimum":1},"size":{"$ref":"#/components/schemas/ImageSize"},
             "quality":{"$ref":"#/components/schemas/Quality"},"output_format":{"$ref":"#/components/schemas/OutputFormat"},
             "output_compression":{"type":"integer","minimum":0,"maximum":100},"background":{"$ref":"#/components/schemas/Background"},
-            "moderation":{"$ref":"#/components/schemas/Moderation"},"response_format":{"enum":["b64_json","url"]},"user":{"type":"string"},
+            "moderation":{"$ref":"#/components/schemas/Moderation"},"input_fidelity":{"$ref":"#/components/schemas/InputFidelity"},"response_format":{"enum":["b64_json","url"]},"user":{"type":"string"},
             "provider":{"type":"string"},"negative_prompt":{"type":"string"},"compatibility":{"$ref":"#/components/schemas/CompatibilityMode"},
             "revised_prompt":{"$ref":"#/components/schemas/RevisedPromptPolicy"},"session_key":{"type":"string"}
         }
@@ -409,6 +409,7 @@ fn compatible_extensions_schema() -> Value {
             "compatibility":{"$ref":"#/components/schemas/CompatibilityMode"},"negative_prompt_mode":{"$ref":"#/components/schemas/NegativePromptMode"},
             "revised_prompt":{"$ref":"#/components/schemas/RevisedPromptPolicy"},"aspect_ratio":{"$ref":"#/components/schemas/AspectRatio"},
             "resolution":{"$ref":"#/components/schemas/Resolution"},"partial_images":{"type":"integer","minimum":0,"maximum":3},
+            "input_fidelity":{"$ref":"#/components/schemas/InputFidelity"},"action":{"$ref":"#/components/schemas/ImageAction"},
             "session":{"$ref":"#/components/schemas/SessionOptions"},"reference_images":{"type":"array","items":{"$ref":"#/components/schemas/ImageInput"}},
             "filename_prefix":{"type":"string"}
         }

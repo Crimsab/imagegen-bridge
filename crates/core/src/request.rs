@@ -6,9 +6,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, de};
 
 use crate::{
-    AspectRatio, Background, CompatibilityMode, ImageSize, Moderation, MultiImageFailurePolicy,
-    NegativePromptMode, OutputFormat, Quality, Resolution, ResponseFormat, RevisedPromptPolicy,
-    SessionMode,
+    AspectRatio, Background, CompatibilityMode, ImageAction, ImageSize, InputFidelity, Moderation,
+    MultiImageFailurePolicy, NegativePromptMode, OutputFormat, Quality, Resolution, ResponseFormat,
+    RevisedPromptPolicy, SessionMode,
 };
 
 const COMMON_REQUEST_FIELDS: &[&str] = &[
@@ -335,6 +335,11 @@ pub struct GenerationParameters {
     pub partial_images: u8,
     /// Behavior when one output in a multi-image request fails.
     pub failure_policy: MultiImageFailurePolicy,
+    /// Optional input-image fidelity for edit/reference operations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_fidelity: Option<InputFidelity>,
+    /// Generate/edit selection for transports with an image tool action.
+    pub action: ImageAction,
 }
 
 impl Default for GenerationParameters {
@@ -351,6 +356,8 @@ impl Default for GenerationParameters {
             moderation: Moderation::default(),
             partial_images: 0,
             failure_policy: MultiImageFailurePolicy::default(),
+            input_fidelity: None,
+            action: ImageAction::default(),
         }
     }
 }

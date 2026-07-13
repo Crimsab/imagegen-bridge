@@ -42,7 +42,8 @@ without opening artifact/session storage or starting Codex.
 
 Advanced flags include `--negative-prompt`, `--negative-prompt-mode`,
 `--revised-prompt`, `--aspect-ratio`, `--resolution`, `--compression`,
-`--background`, `--moderation`, `--partial-images`, `--failure-policy`, `--compatibility`,
+`--background`, `--moderation`, `--partial-images`, `--failure-policy`,
+`--input-fidelity`, `--action`, `--compatibility`,
 `--session`, `--session-key`, `--thread-id`, `--idempotency-key`, and
 `--timeout-ms`. Availability is provider/model-specific; inspect it before
 requesting strict parameters:
@@ -65,6 +66,12 @@ silently discarded, including in `best_effort` mode.
 `--failure-policy best_effort` keeps successful outputs and reports failed
 indices in `failures`; this is separate from provider compatibility
 `--compatibility best_effort`.
+
+`--input-fidelity low|high` requires at least one source/reference image.
+`gpt-image-2` accepts only `high` because its inputs are always processed at
+high fidelity. `--action edit` likewise requires image context, while
+`--action generate` cannot be combined with the native edit operation. Masks
+are rejected during capability negotiation on both current Codex transports.
 
 ## Sessions and server
 
