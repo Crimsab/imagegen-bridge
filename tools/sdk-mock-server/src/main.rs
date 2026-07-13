@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 
 const REQUEST_ID: &str = "request_fixture_01";
 const GENERATE_REQUEST: &str = include_str!("../../../fixtures/sdk/generate-request.json");
+const EDIT_REQUEST: &str = include_str!("../../../fixtures/sdk/edit-request.json");
 const IMAGE_RESPONSE: &str = include_str!("../../../fixtures/sdk/image-response.json");
 const ERROR_RESPONSE: &str = include_str!("../../../fixtures/sdk/error-response.json");
 const PROVIDERS_RESPONSE: &str = include_str!("../../../fixtures/sdk/providers-response.json");
@@ -65,24 +66,44 @@ async fn images(headers: HeaderMap, Json(request): Json<Value>) -> Response {
             "application/json",
         );
     }
-    let Ok(expected) = serde_json::from_str::<Value>(GENERATE_REQUEST) else {
+    let fixture = if request.get("operation").and_then(Value::as_str) == Some("edit") {
+        EDIT_REQUEST
+    } else {
+        GENERATE_REQUEST
+    };
+    let Ok(mut expected) = serde_json::from_str::<Value>(fixture) else {
         return error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "shared request fixture is invalid",
         );
     };
+    let selected_provider = request
+        .pointer("/routing/provider")
+        .and_then(Value::as_str)
+        .unwrap_or("codex-app-server");
+    if !matches!(selected_provider, "codex-app-server" | "codex-responses") {
+        return error(StatusCode::NOT_FOUND, "provider was not found");
+    }
+    expected["routing"]["provider"] = Value::String(selected_provider.to_owned());
     if request != expected
         || headers
             .get("idempotency-key")
             .and_then(|value| value.to_str().ok())
-            != Some("sdk-fixture")
+            != request.get("idempotency_key").and_then(Value::as_str)
     {
         return error(
             StatusCode::UNPROCESSABLE_ENTITY,
             "request did not match the shared SDK fixture",
         );
     }
-    fixture_response(StatusCode::OK, IMAGE_RESPONSE, "application/json")
+    let Ok(mut response) = serde_json::from_str::<Value>(IMAGE_RESPONSE) else {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "shared image fixture is invalid",
+        );
+    };
+    response["provider"] = Value::String(selected_provider.to_owned());
+    fixture_response(StatusCode::OK, &response.to_string(), "application/json")
 }
 
 async fn image_stream(headers: HeaderMap, Json(request): Json<Value>) -> Response {
@@ -198,6 +219,8 @@ mod tests {
     #[test]
     fn shared_fixtures_match_the_rust_wire_contract() {
         assert!(serde_json::from_str::<ImageRequest>(GENERATE_REQUEST).is_ok());
+        let edit = serde_json::from_str::<ImageRequest>(EDIT_REQUEST);
+        assert!(edit.is_ok(), "{edit:?}");
         let response = serde_json::from_str::<ImageResponse>(IMAGE_RESPONSE);
         assert!(response.is_ok(), "{response:?}");
         let capabilities = serde_json::from_str::<ProviderCapabilities>(CAPABILITIES_RESPONSE);

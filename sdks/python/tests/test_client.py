@@ -19,7 +19,9 @@ TOKEN = "sdk-test-token"
 
 
 def test_sync_client_matches_shared_http_contract(
-    bridge_url: str, fixture_request: dict[str, object]
+    bridge_url: str,
+    fixture_request: dict[str, object],
+    edit_fixture_request: dict[str, object],
 ) -> None:
     request = ImageRequest.from_dict(fixture_request)
     assert request.to_dict() == fixture_request
@@ -30,6 +32,8 @@ def test_sync_client_matches_shared_http_contract(
         assert result.data[0].width == 1
         assert result.session is not None and result.session.reused
         assert result.normalizations[0].field == "parameters.partial_images"
+        edited = client.images.edit(ImageRequest.from_dict(edit_fixture_request))
+        assert edited.id == "img_fixture_01"
 
         events = list(client.images.stream(request))
         assert isinstance(events[0], StartedEvent)
@@ -46,6 +50,21 @@ def test_sync_client_matches_shared_http_contract(
         assert client.session("sdk-fixture").thread_id == "thread_fixture_01"
         client.delete_session("sdk-fixture")
         assert client.health()["status"] == "live"
+
+
+def test_provider_switching_only_changes_request_configuration(
+    bridge_url: str, fixture_request: dict[str, object]
+) -> None:
+    request = ImageRequest.from_dict(fixture_request)
+    switched = ImageRequest.from_dict(
+        {
+            **request.to_dict(),
+            "routing": {"provider": "codex-responses", "model": None},
+        }
+    )
+    with ImagegenBridgeClient(bridge_url, bearer_token=TOKEN) as client:
+        response = client.images.generate(switched)
+    assert response.provider == "codex-responses"
 
 
 def test_async_client_matches_shared_http_contract(

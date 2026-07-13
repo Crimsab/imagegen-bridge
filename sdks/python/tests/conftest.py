@@ -23,6 +23,13 @@ def fixture_request(repository_root: Path) -> dict[str, object]:
 
 
 @pytest.fixture(scope="session")
+def edit_fixture_request(repository_root: Path) -> dict[str, object]:
+    value = json.loads((repository_root / "fixtures/sdk/edit-request.json").read_text())
+    assert isinstance(value, dict)
+    return value
+
+
+@pytest.fixture(scope="session")
 def bridge_url(repository_root: Path) -> Iterator[str]:
     binary = Path(
         os.environ.get(

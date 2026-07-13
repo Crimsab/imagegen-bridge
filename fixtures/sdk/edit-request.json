@@ -1,0 +1,48 @@
+{
+  "version": "1",
+  "prompt": "make the fixture blue",
+  "negative_prompt": null,
+  "operation": "edit",
+  "reference_images": [],
+  "images": [
+    {
+      "type": "data_url",
+      "data_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAHnOcQAAAAABJRU5ErkJggg==",
+      "filename": "fixture.png"
+    }
+  ],
+  "mask": null,
+  "parameters": {
+    "n": 1,
+    "size": "auto",
+    "aspect_ratio": null,
+    "resolution": null,
+    "quality": "auto",
+    "output_format": "png",
+    "output_compression": null,
+    "background": "auto",
+    "moderation": "auto",
+    "partial_images": 0
+  },
+  "routing": {
+    "provider": "codex-app-server",
+    "model": null
+  },
+  "session": {
+    "mode": "isolated",
+    "key": null,
+    "thread_id": null
+  },
+  "output": {
+    "response_format": "b64_json",
+    "filename_prefix": null
+  },
+  "policies": {
+    "compatibility": "strict",
+    "negative_prompt": "auto",
+    "revised_prompt": "include"
+  },
+  "idempotency_key": "sdk-edit",
+  "timeout_ms": null,
+  "user": null
+}

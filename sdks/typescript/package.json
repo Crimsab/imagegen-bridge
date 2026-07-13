@@ -1,0 +1,37 @@
+{
+  "name": "@imagegen-bridge/typescript",
+  "version": "0.1.0",
+  "description": "Typed Bun and Node SDK for Imagegen Bridge",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "engines": {
+    "node": ">=20",
+    "bun": ">=1.2"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "bun test",
+    "test:node": "node tests/node-smoke.mjs",
+    "lint": "biome check .",
+    "format": "biome format --write ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.3.15",
+    "@types/bun": "1.3.10",
+    "typescript": "6.0.2"
+  }
+}
