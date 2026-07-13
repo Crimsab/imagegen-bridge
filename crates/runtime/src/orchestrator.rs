@@ -825,7 +825,7 @@ mod tests {
         let provider = Arc::new(FakeProvider::new(Duration::from_secs(5)));
         let runtime = runtime(&provider, |_| {});
         let mut request = ImageRequest::generate("test");
-        request.timeout_ms = Some(5);
+        request.timeout_ms = Some(100);
         request.idempotency_key = Some("retryable-key".to_owned());
         let first = runtime.execute(request.clone()).await.unwrap_err();
         assert_eq!(first.code, ErrorCode::Timeout);
