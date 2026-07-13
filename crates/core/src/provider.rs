@@ -4,6 +4,7 @@ use std::{pin::Pin, time::Instant};
 
 use async_trait::async_trait;
 use futures_core::Stream;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -24,6 +25,8 @@ pub struct ProviderContext {
     pub deadline: Instant,
     /// Cooperative cancellation signal.
     pub cancellation: CancellationToken,
+    /// Optional bounded event sink supplied by the shared runtime.
+    pub events: Option<mpsc::Sender<ProviderEvent>>,
 }
 
 /// Provider-neutral image backend.

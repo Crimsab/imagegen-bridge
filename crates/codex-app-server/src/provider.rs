@@ -817,6 +817,7 @@ mod tests {
             request_id: id.to_owned(),
             deadline: Instant::now() + Duration::from_secs(2),
             cancellation: CancellationToken::new(),
+            events: None,
         }
     }
 
@@ -1050,6 +1051,7 @@ mod tests {
                             request_id: "second".to_owned(),
                             deadline: Instant::now() + Duration::from_secs(2),
                             cancellation,
+                            events: None,
                         },
                     )
                     .await
@@ -1170,6 +1172,7 @@ done
                             request_id: "timeout".to_owned(),
                             deadline: Instant::now() + Duration::from_millis(20),
                             cancellation: CancellationToken::new(),
+                            events: None,
                         },
                     )
                     .await
@@ -1217,6 +1220,7 @@ done
                             request_id: "cancel".to_owned(),
                             deadline: Instant::now() + Duration::from_secs(2),
                             cancellation,
+                            events: None,
                         },
                     )
                     .await
@@ -1348,6 +1352,7 @@ done
                     request_id: "live-test-1".to_owned(),
                     deadline: Instant::now() + Duration::from_secs(240),
                     cancellation: CancellationToken::new(),
+                    events: None,
                 },
             )
             .await
@@ -1364,6 +1369,7 @@ done
                     request_id: "live-test-2".to_owned(),
                     deadline: Instant::now() + Duration::from_secs(240),
                     cancellation: CancellationToken::new(),
+                    events: None,
                 },
             )
             .await

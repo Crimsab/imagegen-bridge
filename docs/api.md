@@ -22,10 +22,9 @@ Native generation accepts the versioned `ImageRequest` schema and returns
 `ImageResponse`. `Idempotency-Key` may be supplied for POST requests. The bridge
 returns an `x-request-id` response header for every request.
 
-The current SSE handler emits `started`, then `completed` or `error`, with
-heartbeat comments and disconnect cancellation. Although the wire contract and
-SDKs define progress/partial-image events, provider partial payloads are not yet
-forwarded by this server path.
+The SSE handler emits `started`, bounded provider `progress`/`partial_image`
+events when available, then `completed` or `error`, with heartbeat comments,
+backpressure, and disconnect cancellation.
 
 ## Authentication
 

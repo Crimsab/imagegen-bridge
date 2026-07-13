@@ -15,10 +15,13 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use imagegen_bridge_config::ServerSettings;
-use imagegen_bridge_core::{BridgeError, ErrorCode, ImageRequest, ProviderDescriptor};
+use imagegen_bridge_core::{
+    BridgeError, ErrorCode, ImageRequest, ProviderDescriptor, ProviderEvent,
+};
 use imagegen_bridge_runtime::{ExecutionContext, ImagegenRuntime, ProviderReadinessStatus};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tower::limit::ConcurrencyLimitLayer;
 use tracing::Instrument as _;
@@ -449,8 +452,50 @@ pub(crate) async fn run_request_with_cancellation(
     request_id: RequestId,
     scope: AuthScope,
     headers: &HeaderMap,
+    request: ImageRequest,
+    cancellation: CancellationToken,
+) -> Result<imagegen_bridge_core::ImageResponse, ApiError> {
+    run_request_internal(
+        state,
+        request_id,
+        scope,
+        headers,
+        request,
+        cancellation,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn run_request_with_events(
+    state: &ServerState,
+    request_id: RequestId,
+    scope: AuthScope,
+    headers: &HeaderMap,
+    request: ImageRequest,
+    cancellation: CancellationToken,
+    events: mpsc::Sender<ProviderEvent>,
+) -> Result<imagegen_bridge_core::ImageResponse, ApiError> {
+    run_request_internal(
+        state,
+        request_id,
+        scope,
+        headers,
+        request,
+        cancellation,
+        Some(events),
+    )
+    .await
+}
+
+async fn run_request_internal(
+    state: &ServerState,
+    request_id: RequestId,
+    scope: AuthScope,
+    headers: &HeaderMap,
     mut request: ImageRequest,
     cancellation: CancellationToken,
+    events: Option<mpsc::Sender<ProviderEvent>>,
 ) -> Result<imagegen_bridge_core::ImageResponse, ApiError> {
     if let Some(value) = headers.get("idempotency-key") {
         let key = value.to_str().map_err(|_| {
@@ -489,18 +534,23 @@ pub(crate) async fn run_request_with_cancellation(
         request_id = %request_id.0,
         provider = %provider
     );
-    let result = state
-        .runtime
-        .execute_with(
-            request,
-            ExecutionContext {
-                request_id: Some(request_id.0.clone()),
-                idempotency_scope: scope.0,
-                cancellation,
-            },
-        )
-        .instrument(span)
-        .await;
+    let context = ExecutionContext {
+        request_id: Some(request_id.0.clone()),
+        idempotency_scope: scope.0,
+        cancellation,
+    };
+    let result = async {
+        if let Some(events) = events {
+            state
+                .runtime
+                .execute_with_events(request, context, events)
+                .await
+        } else {
+            state.runtime.execute_with(request, context).await
+        }
+    }
+    .instrument(span)
+    .await;
     guard.disarm();
     if let Some(metrics) = &state.metrics {
         metrics.record(&provider, &result, started.elapsed());
@@ -638,6 +688,18 @@ mod tests {
             request: ImageRequest,
             context: ProviderContext,
         ) -> Result<ImageResponse, BridgeError> {
+            if request.parameters.partial_images > 0
+                && let Some(events) = &context.events
+            {
+                events
+                    .send(ProviderEvent::PartialImage {
+                        index: 0,
+                        partial_index: 0,
+                        b64_json: "partial-fixture".to_owned(),
+                    })
+                    .await
+                    .unwrap();
+            }
             Ok(ImageResponse {
                 id: context.request_id,
                 created: 123,
@@ -772,13 +834,13 @@ mod tests {
         assert_eq!(value["data"][0]["revised_prompt"], "revised");
         assert_eq!(value["imagegen_bridge"]["provider"], "ready");
 
+        let mut stream_request = ImageRequest::generate("test");
+        stream_request.parameters.partial_images = 1;
         let streaming = app
             .oneshot(
                 Request::post("/v1/images/stream")
                     .header(axum::http::header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        serde_json::to_vec(&ImageRequest::generate("test")).unwrap(),
-                    ))
+                    .body(Body::from(serde_json::to_vec(&stream_request).unwrap()))
                     .unwrap(),
             )
             .await
@@ -787,6 +849,8 @@ mod tests {
         let body = streaming.into_body().collect().await.unwrap().to_bytes();
         let body = String::from_utf8(body.to_vec()).unwrap();
         assert!(body.contains("event: started"));
+        assert!(body.contains("event: partial_image"));
+        assert!(body.contains("\"b64_json\":\"partial-fixture\""));
         assert!(body.contains("event: completed"));
         assert!(body.contains("\"provider\":\"ready\""));
     }

@@ -15,9 +15,9 @@ use imagegen_bridge_artifacts::{
 use imagegen_bridge_core::{
     Background, BridgeError, ErrorCode, GeneratedImage, ImageOperation, ImagePayload,
     ImageProvider, ImageRequest, ImageResponse, ImageSize, ImageSource, InputCapabilities,
-    Moderation, OutputFormat, ProviderCapabilities, ProviderContext, ProviderDescriptor, Quality,
-    RequestLimits, RevisedPromptPolicy, SizeCapabilities, SupportLevel, Timings, U8Range, Usage,
-    negotiate_request, validate_request,
+    Moderation, OutputFormat, ProviderCapabilities, ProviderContext, ProviderDescriptor,
+    ProviderEvent, Quality, RequestLimits, RevisedPromptPolicy, SizeCapabilities, SupportLevel,
+    Timings, U8Range, Usage, negotiate_request, validate_request,
 };
 use reqwest::{Client, StatusCode, Url, header};
 use secrecy::ExposeSecret as _;
@@ -163,9 +163,9 @@ impl CodexResponsesProvider {
         let mut images = Vec::with_capacity(usize::from(request.parameters.n));
         let mut revised_prompt = None;
         let mut usage = Usage::default();
-        for _ in 0..request.parameters.n {
+        for output_index in 0..request.parameters.n {
             let result = self
-                .call_once(&request, image_model, &user_content, &context)
+                .call_once(&request, image_model, output_index, &user_content, &context)
                 .await?;
             revised_prompt = result.revised_prompt.or(revised_prompt);
             merge_usage(&mut usage, &result.usage);
@@ -243,6 +243,7 @@ impl CodexResponsesProvider {
         &self,
         request: &ImageRequest,
         image_model: &str,
+        output_index: u8,
         user_content: &[Value],
         context: &ProviderContext,
     ) -> Result<CallResult, BridgeError> {
@@ -279,12 +280,13 @@ impl CodexResponsesProvider {
         // The private Codex endpoint currently omits Content-Type even though the
         // successful body is an SSE stream. The bounded decoder below validates
         // the actual framing and event payloads instead of trusting MIME metadata.
-        self.consume_stream(response, context).await
+        self.consume_stream(response, output_index, context).await
     }
 
     async fn consume_stream(
         &self,
         response: reqwest::Response,
+        output_index: u8,
         context: &ProviderContext,
     ) -> Result<CallResult, BridgeError> {
         let mut stream = response.bytes_stream();
@@ -303,13 +305,44 @@ impl CodexResponsesProvider {
             let Some(chunk) = next else { break };
             let chunk = chunk.map_err(|error| http_transport_error(&error))?;
             for data in decoder.push(&chunk)? {
-                process_event(&data, &mut state, self.config.max_base64_chars)?;
+                self.process_and_forward_event(&data, &mut state, output_index, context)
+                    .await?;
             }
         }
         for data in decoder.finish()? {
-            process_event(&data, &mut state, self.config.max_base64_chars)?;
+            self.process_and_forward_event(&data, &mut state, output_index, context)
+                .await?;
         }
         state.finish()
+    }
+
+    async fn process_and_forward_event(
+        &self,
+        data: &str,
+        state: &mut EventState,
+        output_index: u8,
+        context: &ProviderContext,
+    ) -> Result<(), BridgeError> {
+        let Some(partial) = process_event(data, state, self.config.max_base64_chars)? else {
+            return Ok(());
+        };
+        let Some(events) = &context.events else {
+            return Ok(());
+        };
+        events
+            .send(ProviderEvent::PartialImage {
+                index: output_index,
+                partial_index: partial.partial_index,
+                b64_json: partial.b64_json,
+            })
+            .await
+            .map_err(|_| {
+                BridgeError::new(
+                    ErrorCode::Cancelled,
+                    "image event consumer disconnected during Codex generation",
+                )
+                .with_provider("codex-responses")
+            })
     }
 
     fn request_body(
@@ -603,6 +636,7 @@ mod tests {
 
     async fn mock_responses_server(
         calls: usize,
+        emit_partial: bool,
     ) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -648,8 +682,15 @@ mod tests {
                 assert_eq!(body["store"], false);
                 assert_eq!(body["tools"][0]["type"], "image_generation");
 
+                let partial = if emit_partial {
+                    format!(
+                        "data: {{\"type\":\"response.image_generation_call.partial_image\",\"partial_image_index\":0,\"partial_image_b64\":\"{ONE_PIXEL_PNG}\"}}\n\n"
+                    )
+                } else {
+                    String::new()
+                };
                 let events = format!(
-                    "data: {{\"type\":\"response.output_item.done\",\"item\":{{\"type\":\"image_generation_call\",\"result\":\"{ONE_PIXEL_PNG}\",\"revised_prompt\":\"revised test prompt\"}}}}\n\ndata: {{\"type\":\"response.completed\",\"response\":{{\"usage\":{{\"input_tokens\":2,\"output_tokens\":3,\"total_tokens\":5}}}}}}\n\ndata: [DONE]\n\n"
+                    "{partial}data: {{\"type\":\"response.output_item.done\",\"item\":{{\"type\":\"image_generation_call\",\"result\":\"{ONE_PIXEL_PNG}\",\"revised_prompt\":\"revised test prompt\"}}}}\n\ndata: {{\"type\":\"response.completed\",\"response\":{{\"usage\":{{\"input_tokens\":2,\"output_tokens\":3,\"total_tokens\":5}}}}}}\n\ndata: [DONE]\n\n"
                 );
                 let response_headers = format!(
                     "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -764,7 +805,7 @@ mod tests {
 
     #[tokio::test]
     async fn sends_oauth_headers_and_consumes_fragmented_sse_without_mime_header() {
-        let (address, server) = mock_responses_server(1).await;
+        let (address, server) = mock_responses_server(1, false).await;
         let loader =
             Arc::new(InputLoader::new(Vec::<PathBuf>::new(), ImageLimits::default()).unwrap());
         let mut config = CodexResponsesConfig::production(loader).unwrap();
@@ -777,6 +818,7 @@ mod tests {
                     request_id: "mock-request".to_owned(),
                     deadline: Instant::now() + std::time::Duration::from_secs(10),
                     cancellation: tokio_util::sync::CancellationToken::new(),
+                    events: None,
                 },
             )
             .await
@@ -792,8 +834,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn forwards_partial_images_to_the_bounded_runtime_sink() {
+        let (address, server) = mock_responses_server(1, true).await;
+        let loader =
+            Arc::new(InputLoader::new(Vec::<PathBuf>::new(), ImageLimits::default()).unwrap());
+        let mut config = CodexResponsesConfig::production(loader).unwrap();
+        config.endpoint = Url::parse(&format!("http://{address}/responses")).unwrap();
+        let provider = CodexResponsesProvider::new(Arc::new(FakeCredentials), config).unwrap();
+        let (event_sender, mut event_receiver) = tokio::sync::mpsc::channel(1);
+        let mut request = ImageRequest::generate("test prompt");
+        request.parameters.partial_images = 1;
+        let response = provider
+            .execute(
+                request,
+                ProviderContext {
+                    request_id: "partial-request".to_owned(),
+                    deadline: Instant::now() + std::time::Duration::from_secs(10),
+                    cancellation: tokio_util::sync::CancellationToken::new(),
+                    events: Some(event_sender),
+                },
+            )
+            .await
+            .unwrap();
+        server.await.unwrap();
+        assert_eq!(response.data.len(), 1);
+        let event = event_receiver.recv().await.unwrap();
+        assert!(matches!(
+            event,
+            ProviderEvent::PartialImage {
+                index: 0,
+                partial_index: 0,
+                ref b64_json,
+            } if b64_json == ONE_PIXEL_PNG
+        ));
+    }
+
+    #[tokio::test]
     async fn generates_requested_count_and_aggregates_usage() {
-        let (address, server) = mock_responses_server(2).await;
+        let (address, server) = mock_responses_server(2, false).await;
         let loader =
             Arc::new(InputLoader::new(Vec::<PathBuf>::new(), ImageLimits::default()).unwrap());
         let mut config = CodexResponsesConfig::production(loader).unwrap();
@@ -808,6 +886,7 @@ mod tests {
                     request_id: "mock-request-two".to_owned(),
                     deadline: Instant::now() + std::time::Duration::from_secs(10),
                     cancellation: tokio_util::sync::CancellationToken::new(),
+                    events: None,
                 },
             )
             .await
@@ -855,6 +934,7 @@ mod tests {
                     request_id: "live-codex-responses".to_owned(),
                     deadline: Instant::now() + std::time::Duration::from_secs(240),
                     cancellation: tokio_util::sync::CancellationToken::new(),
+                    events: None,
                 },
             )
             .await

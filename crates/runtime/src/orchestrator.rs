@@ -11,10 +11,10 @@ use std::{
 };
 
 use imagegen_bridge_core::{
-    BridgeError, ErrorCode, ImageRequest, ImageResponse, ProviderContext, RequestLimits,
-    RevisedPromptPolicy, negotiate_request, validate_request,
+    BridgeError, ErrorCode, ImageRequest, ImageResponse, ProviderContext, ProviderEvent,
+    RequestLimits, RevisedPromptPolicy, negotiate_request, validate_request,
 };
-use tokio::sync::{Mutex, Notify, OwnedSemaphorePermit};
+use tokio::sync::{Mutex, Notify, OwnedSemaphorePermit, mpsc};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -230,6 +230,27 @@ impl ImagegenRuntime {
         request: ImageRequest,
         context: ExecutionContext,
     ) -> Result<ImageResponse, BridgeError> {
+        self.execute_with_optional_events(request, context, None)
+            .await
+    }
+
+    /// Executes the complete pipeline and forwards bounded provider events.
+    pub async fn execute_with_events(
+        &self,
+        request: ImageRequest,
+        context: ExecutionContext,
+        events: mpsc::Sender<ProviderEvent>,
+    ) -> Result<ImageResponse, BridgeError> {
+        self.execute_with_optional_events(request, context, Some(events))
+            .await
+    }
+
+    async fn execute_with_optional_events(
+        &self,
+        request: ImageRequest,
+        context: ExecutionContext,
+        events: Option<mpsc::Sender<ProviderEvent>>,
+    ) -> Result<ImageResponse, BridgeError> {
         if self.shutdown.is_cancelled() {
             return Err(cancelled_error("runtime is shutting down"));
         }
@@ -277,6 +298,7 @@ impl ImagegenRuntime {
                 deadline,
                 &context.cancellation,
                 &operation,
+                events,
             )
             .await;
         match (token, &result) {
@@ -349,6 +371,7 @@ impl ImagegenRuntime {
         deadline: Instant,
         external_cancellation: &CancellationToken,
         operation: &CancellationToken,
+        events: Option<mpsc::Sender<ProviderEvent>>,
     ) -> Result<ImageResponse, BridgeError> {
         let total_started = Instant::now();
         let provider = self.registry.resolve(request.routing.provider.as_deref())?;
@@ -400,6 +423,7 @@ impl ImagegenRuntime {
                         request_id: request_id.clone(),
                         deadline,
                         cancellation: operation.clone(),
+                        events,
                     },
                 ),
                 deadline,

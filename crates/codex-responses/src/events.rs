@@ -6,7 +6,7 @@ use serde_json::Value;
 #[derive(Default)]
 pub(crate) struct EventState {
     final_image: Option<String>,
-    partial_image: Option<String>,
+    next_partial_index: u8,
     revised_prompt: Option<String>,
     usage: Usage,
     failure: Option<BridgeError>,
@@ -41,13 +41,19 @@ pub(crate) struct CallResult {
     pub(crate) usage: Usage,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PartialImageData {
+    pub(crate) partial_index: u8,
+    pub(crate) b64_json: String,
+}
+
 pub(crate) fn process_event(
     data: &str,
     state: &mut EventState,
     maximum_base64: usize,
-) -> Result<(), BridgeError> {
+) -> Result<Option<PartialImageData>, BridgeError> {
     if data.trim() == "[DONE]" || data.trim().is_empty() {
-        return Ok(());
+        return Ok(None);
     }
     let event: Value = serde_json::from_str(data)
         .map_err(|_| protocol_error("Codex Responses sent malformed JSON event"))?;
@@ -63,7 +69,23 @@ pub(crate) fn process_event(
                 .or_else(|| event["partial_image"].as_str())
             {
                 check_base64_size(partial, maximum_base64)?;
-                state.partial_image = Some(partial.to_owned());
+                let explicit_index = event["partial_image_index"]
+                    .as_u64()
+                    .or_else(|| event["partialImageIndex"].as_u64())
+                    .map(|value| {
+                        u8::try_from(value).map_err(|_| {
+                            protocol_error(
+                                "Codex partial image index is outside the supported range",
+                            )
+                        })
+                    })
+                    .transpose()?;
+                let partial_index = explicit_index.unwrap_or(state.next_partial_index);
+                state.next_partial_index = partial_index.saturating_add(1);
+                return Ok(Some(PartialImageData {
+                    partial_index,
+                    b64_json: partial.to_owned(),
+                }));
             }
         }
         "response.completed" => {
@@ -90,7 +112,7 @@ pub(crate) fn process_event(
         }
         _ => {}
     }
-    Ok(())
+    Ok(None)
 }
 
 fn capture_image_item(
@@ -213,12 +235,15 @@ mod tests {
     #[test]
     fn final_image_wins_over_partial_and_usage_is_extracted() {
         let mut state = EventState::default();
-        process_event(
+        let partial = process_event(
             r#"{"type":"response.image_generation_call.partial_image","partial_image_b64":"partial"}"#,
             &mut state,
             100,
         )
+        .unwrap()
         .unwrap();
+        assert_eq!(partial.partial_index, 0);
+        assert_eq!(partial.b64_json, "partial");
         process_event(
             r#"{"type":"response.output_item.done","item":{"type":"image_generation_call","result":"final","revised_prompt":"revised"}}"#,
             &mut state,

@@ -166,7 +166,7 @@ Important routes:
 | `POST /v1/images` | Lossless native generation/edit contract |
 | `POST /v1/images/generations` | OpenAI-familiar JSON generation |
 | `POST /v1/images/edits` | OpenAI-familiar multipart editing |
-| `POST /v1/images/stream` | Bounded SSE lifecycle stream |
+| `POST /v1/images/stream` | Bounded SSE progress/partial/completion stream |
 | `GET /v1/providers` | Provider inventory |
 | `GET /v1/providers/{provider}/capabilities` | Model-aware capabilities |
 | `GET /v1/sessions/{key}` | Persistent session lookup |

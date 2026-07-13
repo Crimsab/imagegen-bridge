@@ -48,9 +48,8 @@ async with AsyncImagegenBridgeClient(
     response = await client.images.generate(request)
 ```
 
-Use `client.images.stream(request)` for typed lifecycle events. The client can
-decode progress and partial-image events, but the current server route forwards
-only start/completion/error. `BridgeAPIError` exposes HTTP status, standard
+Use `client.images.stream(request)` for typed lifecycle, progress, partial-image,
+completion, and error events. `BridgeAPIError` exposes HTTP status, standard
 error fields, stable bridge code, retryability, safe provider/upstream IDs,
 details, and request ID.
 

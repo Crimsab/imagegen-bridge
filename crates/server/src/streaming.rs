@@ -14,9 +14,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 
-use crate::{
-    ApiError, RequestId, ServerState, auth::AuthScope, routes::run_request_with_cancellation,
-};
+use crate::{ApiError, RequestId, ServerState, auth::AuthScope, routes::run_request_with_events};
 
 pub(crate) async fn stream_image(
     State(state): State<ServerState>,
@@ -39,27 +37,59 @@ pub(crate) async fn stream_image(
     let cancellation = CancellationToken::new();
     let operation_cancellation = cancellation.clone();
     tokio::spawn(async move {
-        let execution = run_request_with_cancellation(
+        let (event_sender, mut event_receiver) = mpsc::channel(4);
+        let execution = run_request_with_events(
             &state,
             request_id.clone(),
             scope,
             &headers,
             request,
             operation_cancellation,
+            event_sender,
         );
-        tokio::select! {
-            result = execution => {
-                let event = match result {
-                    Ok(response) => json_event(
-                        "completed",
-                        &ProviderEvent::Completed { response: Box::new(response) },
-                    ),
-                    Err(error) => json_event("error", &error.envelope()),
-                };
-                let _ = sender.send(Ok(event)).await;
-            }
-            () = sender.closed() => {
-                cancellation.cancel();
+        tokio::pin!(execution);
+        let mut events_open = true;
+        loop {
+            tokio::select! {
+                result = &mut execution => {
+                    while let Ok(provider_event) = event_receiver.try_recv() {
+                        if sender
+                            .send(Ok(json_event(event_name(&provider_event), &provider_event)))
+                            .await
+                            .is_err()
+                        {
+                            cancellation.cancel();
+                            return;
+                        }
+                    }
+                    let event = match result {
+                        Ok(response) => json_event(
+                            "completed",
+                            &ProviderEvent::Completed { response: Box::new(response) },
+                        ),
+                        Err(error) => json_event("error", &error.envelope()),
+                    };
+                    let _ = sender.send(Ok(event)).await;
+                    break;
+                }
+                event = event_receiver.recv(), if events_open => {
+                    if let Some(event) = event {
+                        if sender
+                            .send(Ok(json_event(event_name(&event), &event)))
+                            .await
+                            .is_err()
+                        {
+                            cancellation.cancel();
+                            break;
+                        }
+                    } else {
+                        events_open = false;
+                    }
+                }
+                () = sender.closed() => {
+                    cancellation.cancel();
+                    break;
+                }
             }
         }
     });
@@ -68,6 +98,15 @@ pub(crate) async fn stream_image(
             .interval(Duration::from_secs(15))
             .text("heartbeat"),
     ))
+}
+
+const fn event_name(event: &ProviderEvent) -> &'static str {
+    match event {
+        ProviderEvent::Started => "started",
+        ProviderEvent::Progress { .. } => "progress",
+        ProviderEvent::PartialImage { .. } => "partial_image",
+        ProviderEvent::Completed { .. } => "completed",
+    }
 }
 
 fn json_event(name: &'static str, value: &impl serde::Serialize) -> Event {
