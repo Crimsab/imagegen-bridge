@@ -263,8 +263,7 @@ pub enum ImageSource {
 }
 
 /// One image input plus optional metadata.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct ImageInput {
     /// Source from which bytes will be loaded.
     #[serde(flatten)]
@@ -275,6 +274,34 @@ pub struct ImageInput {
     /// Optional safe logical filename.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub filename: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for ImageInput {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let mut fields = serde_json::Map::<String, serde_json::Value>::deserialize(deserializer)?;
+        let media_type = fields
+            .remove("media_type")
+            .map(serde_json::from_value::<Option<String>>)
+            .transpose()
+            .map_err(de::Error::custom)?
+            .flatten();
+        let filename = fields
+            .remove("filename")
+            .map(serde_json::from_value::<Option<String>>)
+            .transpose()
+            .map_err(de::Error::custom)?
+            .flatten();
+        let source =
+            serde_json::from_value(serde_json::Value::Object(fields)).map_err(de::Error::custom)?;
+        Ok(Self {
+            source,
+            media_type,
+            filename,
+        })
+    }
 }
 
 /// Image-generation parameters shared across providers.
@@ -352,6 +379,54 @@ mod serde_tests {
             "images": []
         });
         assert!(serde_json::from_value::<ImageRequest>(inconsistent).is_err());
+    }
+
+    #[test]
+    fn every_image_input_source_round_trips_and_rejects_unknown_fields() {
+        let inputs = [
+            ImageInput {
+                source: ImageSource::File {
+                    path: PathBuf::from("fixture.png"),
+                },
+                media_type: Some("image/png".to_owned()),
+                filename: Some("fixture.png".to_owned()),
+            },
+            ImageInput {
+                source: ImageSource::Url {
+                    url: "https://example.test/fixture.png".to_owned(),
+                },
+                media_type: None,
+                filename: None,
+            },
+            ImageInput {
+                source: ImageSource::DataUrl {
+                    data_url: "data:image/png;base64,aW1hZ2U=".to_owned(),
+                },
+                media_type: None,
+                filename: None,
+            },
+            ImageInput {
+                source: ImageSource::Base64 {
+                    data: "aW1hZ2U=".to_owned(),
+                },
+                media_type: Some("image/png".to_owned()),
+                filename: None,
+            },
+        ];
+        for input in inputs {
+            let encoded = serde_json::to_value(&input).unwrap();
+            assert_eq!(
+                serde_json::from_value::<ImageInput>(encoded).unwrap(),
+                input
+            );
+        }
+
+        let unknown = serde_json::json!({
+            "type": "url",
+            "url": "https://example.test/fixture.png",
+            "unexpected": true
+        });
+        assert!(serde_json::from_value::<ImageInput>(unknown).is_err());
     }
 }
 
