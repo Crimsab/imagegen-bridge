@@ -295,6 +295,22 @@ bind = "{address}"
         "daemon never served liveness"
     );
 
+    let request_body =
+        r#"{"prompt":"trace-secret prompt","operation":"generate","parameters":{"n":0}}"#;
+    let mut stream = std::net::TcpStream::connect(address).expect("generation connection");
+    write!(
+        stream,
+        "POST /v1/images HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        request_body.len(),
+        request_body
+    )
+    .expect("write generation request");
+    let mut generation = String::new();
+    stream
+        .read_to_string(&mut generation)
+        .expect("read generation response");
+    assert!(generation.contains("422 Unprocessable Entity"));
+
     std::process::Command::new("kill")
         .args(["-INT", &child.id().to_string()])
         .status()
@@ -302,6 +318,25 @@ bind = "{address}"
     for _ in 0..100 {
         if let Some(status) = child.try_wait().expect("poll daemon") {
             assert!(status.success(), "daemon exited unsuccessfully: {status}");
+            let mut diagnostics = String::new();
+            child
+                .stderr
+                .take()
+                .expect("daemon stderr")
+                .read_to_string(&mut diagnostics)
+                .expect("read daemon diagnostics");
+            assert!(
+                diagnostics.contains("server tracing initialized"),
+                "missing tracing initialization event: {diagnostics}"
+            );
+            assert!(
+                diagnostics.contains("image operation failed"),
+                "missing trace event: {diagnostics}"
+            );
+            assert!(diagnostics.contains("\"provider\":\"codex-app-server\""));
+            assert!(diagnostics.contains("\"request_id\":"));
+            assert!(diagnostics.contains("\"error_code\":\"InvalidRequest\""));
+            assert!(!diagnostics.contains("trace-secret prompt"));
             return;
         }
         std::thread::sleep(Duration::from_millis(25));

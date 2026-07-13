@@ -24,6 +24,7 @@ tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-threa
 tokio-util = { version = "0.7", features = ["rt"] }
 tokio-stream = "0.1"
 tower = { version = "0.5", features = ["limit", "util"] }
+tracing = "0.1"
 uuid = { version = "1", features = ["v7"] }
 
 [dev-dependencies]

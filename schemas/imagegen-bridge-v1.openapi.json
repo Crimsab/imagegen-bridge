@@ -2081,6 +2081,41 @@
         ]
       }
     },
+    "/metrics": {
+      "get": {
+        "description": "Available only when server.metrics.enabled is true.",
+        "operationId": "getMetrics",
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "example": "imagegen_bridge_requests_total{provider=\"codex-app-server\",result=\"success\",code=\"none\"} 1\n",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Prometheus text exposition"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Bridge authentication required"
+          },
+          "404": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Metrics are disabled"
+          }
+        },
+        "security": [
+          {
+            "bridgeBearer": []
+          }
+        ],
+        "tags": [
+          "observability"
+        ]
+      }
+    },
     "/v1/images": {
       "post": {
         "operationId": "executeImage",
@@ -2875,6 +2910,10 @@
     {
       "description": "Persistent session lifecycle",
       "name": "sessions"
+    },
+    {
+      "description": "Opt-in low-cardinality operational metrics",
+      "name": "observability"
     }
   ]
 }

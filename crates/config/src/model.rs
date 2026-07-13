@@ -432,6 +432,10 @@ pub struct ServerSettings {
     pub max_connections: usize,
     /// Request read timeout in milliseconds.
     pub read_timeout_ms: u64,
+    /// Opt-in low-cardinality Prometheus exposition.
+    pub metrics: MetricsSettings,
+    /// Structured content-safe tracing for the standalone server.
+    pub tracing: TracingSettings,
 }
 
 impl Default for ServerSettings {
@@ -443,6 +447,30 @@ impl Default for ServerSettings {
             max_header_bytes: 32 * 1024,
             max_connections: 256,
             read_timeout_ms: 30_000,
+            metrics: MetricsSettings::default(),
+            tracing: TracingSettings::default(),
         }
+    }
+}
+
+/// Safe Prometheus endpoint configuration.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MetricsSettings {
+    /// Expose authenticated `GET /metrics` on the main listener.
+    pub enabled: bool,
+}
+
+/// Structured tracing configuration for standalone transports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TracingSettings {
+    /// Install a safe INFO-level JSON subscriber in the CLI server process.
+    pub enabled: bool,
+}
+
+impl Default for TracingSettings {
+    fn default() -> Self {
+        Self { enabled: true }
     }
 }

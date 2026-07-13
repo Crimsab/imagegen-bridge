@@ -622,6 +622,12 @@ impl ImageProvider for AppServerImageProvider {
         self.sessions.delete(key).await
     }
 
+    fn restart_count(&self) -> Option<u64> {
+        self.process
+            .as_ref()
+            .map(|process| process.generation().saturating_sub(1))
+    }
+
     async fn shutdown(&self) -> Result<(), BridgeError> {
         if let Some(process) = &self.process {
             process.shutdown().await?;

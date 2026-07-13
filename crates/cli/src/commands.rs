@@ -301,6 +301,23 @@ async fn serve_command(
         resolved.config.server.bind = address;
     }
     resolved.config.validate()?;
+    if resolved.config.server.tracing.enabled {
+        let installed = tracing_subscriber::fmt()
+            .json()
+            .flatten_event(true)
+            .with_writer(std::io::stderr)
+            .with_target(false)
+            .with_current_span(true)
+            .with_max_level(tracing_subscriber::filter::LevelFilter::INFO)
+            .try_init()
+            .is_ok();
+        if installed {
+            tracing::info!(
+                event = "server_tracing_initialized",
+                "server tracing initialized"
+            );
+        }
+    }
     let address: SocketAddr = resolved
         .config
         .server

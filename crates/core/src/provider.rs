@@ -73,6 +73,13 @@ pub trait ImageProvider: Send + Sync {
         ))
     }
 
+    /// Returns the number of supervised provider process restarts when exposed.
+    ///
+    /// Implementations must return only a monotonic low-cardinality counter.
+    fn restart_count(&self) -> Option<u64> {
+        None
+    }
+
     /// Releases provider resources during graceful shutdown.
     async fn shutdown(&self) -> Result<(), BridgeError> {
         Ok(())

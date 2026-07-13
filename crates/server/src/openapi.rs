@@ -28,7 +28,8 @@ pub fn openapi_document() -> Value {
             {"name":"images","description":"Native lossless image operations"},
             {"name":"compatibility","description":"OpenAI-familiar Images API"},
             {"name":"providers","description":"Provider discovery and capability negotiation"},
-            {"name":"sessions","description":"Persistent session lifecycle"}
+            {"name":"sessions","description":"Persistent session lifecycle"},
+            {"name":"observability","description":"Opt-in low-cardinality operational metrics"}
         ],
         "paths": {
             "/health/live": {
@@ -115,6 +116,19 @@ pub fn openapi_document() -> Value {
             },
             "/v1/images/edits": {
                 "post": compatible_edit_operation()
+            },
+            "/metrics": {
+                "get": {
+                    "operationId":"getMetrics",
+                    "tags":["observability"],
+                    "security": [{"bridgeBearer": []}],
+                    "description":"Available only when server.metrics.enabled is true.",
+                    "responses": {
+                        "200":{"description":"Prometheus text exposition","content":{"text/plain":{"schema":{"type":"string"},"example":"imagegen_bridge_requests_total{provider=\"codex-app-server\",result=\"success\",code=\"none\"} 1\n"}}},
+                        "401": error_response("Bridge authentication required"),
+                        "404": error_response("Metrics are disabled")
+                    }
+                }
             }
         },
         "components": {

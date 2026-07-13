@@ -3,6 +3,7 @@
 mod auth;
 mod compat;
 mod error;
+mod metrics;
 mod openapi;
 mod routes;
 mod serve;

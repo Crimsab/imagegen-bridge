@@ -1,6 +1,6 @@
 //! Versioned route graph and native request handlers.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use axum::{
     Json, Router,
@@ -8,7 +8,7 @@ use axum::{
         Extension, Path, Query, State,
         rejection::{JsonRejection, QueryRejection},
     },
-    http::{HeaderMap, HeaderValue, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware,
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -21,12 +21,14 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 use tower::limit::ConcurrencyLimitLayer;
+use tracing::Instrument as _;
 use uuid::Uuid;
 
 use crate::{
     ApiError,
     auth::{AuthPolicy, AuthScope, authorize},
     compat::{edit_compatible, generate_compatible},
+    metrics::ServerMetrics,
     openapi::openapi_document,
     streaming::stream_image,
 };
@@ -42,6 +44,7 @@ pub struct ServerState {
     /// Shared provider-neutral execution runtime.
     pub runtime: Arc<ImagegenRuntime>,
     pub(crate) auth: Option<AuthPolicy>,
+    pub(crate) metrics: Option<Arc<ServerMetrics>>,
 }
 
 impl std::fmt::Debug for ServerState {
@@ -50,6 +53,7 @@ impl std::fmt::Debug for ServerState {
             .debug_struct("ServerState")
             .field("runtime", &self.runtime)
             .field("auth", &self.auth.is_some())
+            .field("metrics", &self.metrics.is_some())
             .finish()
     }
 }
@@ -79,17 +83,40 @@ impl ServerState {
                 "configured bridge bearer token is empty",
             ));
         }
-        Ok(Self { runtime, auth })
+        let metrics = settings
+            .metrics
+            .enabled
+            .then(|| Arc::new(ServerMetrics::default()));
+        Ok(Self {
+            runtime,
+            auth,
+            metrics,
+        })
     }
 
     /// Builds state with an explicit secret for embedded/tests use.
     #[must_use]
     pub fn with_bearer(runtime: Arc<ImagegenRuntime>, token: Option<SecretString>) -> Self {
+        Self::with_bearer_and_metrics(runtime, token, false)
+    }
+
+    /// Builds state with explicit auth and metrics controls for embedding/tests.
+    #[must_use]
+    pub fn with_bearer_and_metrics(
+        runtime: Arc<ImagegenRuntime>,
+        token: Option<SecretString>,
+        metrics_enabled: bool,
+    ) -> Self {
         let auth = token.and_then(|token| {
             use secrecy::ExposeSecret as _;
             AuthPolicy::new(token.expose_secret().to_owned())
         });
-        Self { runtime, auth }
+        let metrics = metrics_enabled.then(|| Arc::new(ServerMetrics::default()));
+        Self {
+            runtime,
+            auth,
+            metrics,
+        }
     }
 }
 
@@ -105,7 +132,7 @@ impl RequestId {
 
 /// Builds the complete route graph with configured body and concurrency bounds.
 pub fn router(state: ServerState, settings: &ServerSettings) -> Router {
-    let protected = Router::new()
+    let mut protected = Router::new()
         .route("/v1/images", post(execute_image))
         .route("/v1/images/stream", post(stream_image))
         .route("/v1/images/generations", post(generate_compatible))
@@ -118,8 +145,11 @@ pub fn router(state: ServerState, settings: &ServerSettings) -> Router {
         .route(
             "/v1/sessions/{key}",
             get(get_session).delete(delete_session),
-        )
-        .route_layer(middleware::from_fn_with_state(state.clone(), authorize));
+        );
+    if state.metrics.is_some() {
+        protected = protected.route("/metrics", get(prometheus_metrics));
+    }
+    let protected = protected.route_layer(middleware::from_fn_with_state(state.clone(), authorize));
     Router::new()
         .route("/health/live", get(liveness))
         .route("/health/ready", get(readiness))
@@ -218,6 +248,38 @@ async fn readiness(State(state): State<ServerState>) -> Response {
             status: if ready { "ready" } else { "not_ready" },
             providers,
         }),
+    )
+        .into_response()
+}
+
+async fn prometheus_metrics(State(state): State<ServerState>) -> Response {
+    let provider_restarts = state
+        .runtime
+        .registry()
+        .descriptors()
+        .into_iter()
+        .filter_map(|descriptor| {
+            state
+                .runtime
+                .registry()
+                .resolve(Some(&descriptor.name))
+                .ok()?
+                .restart_count()
+                .map(|count| (descriptor.name, count))
+        })
+        .collect();
+    let body = state.metrics.as_ref().map_or_else(String::new, |metrics| {
+        metrics.render(&state.runtime.queue_snapshot(), &provider_restarts)
+    });
+    (
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/plain; version=0.0.4; charset=utf-8"),
+            ),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+        ],
+        body,
     )
         .into_response()
 }
@@ -413,6 +475,20 @@ pub(crate) async fn run_request_with_cancellation(
         request.idempotency_key = Some(key.to_owned());
     }
     let guard = CancelOnDrop(cancellation.clone());
+    let provider = state
+        .runtime
+        .registry()
+        .resolve(request.routing.provider.as_deref())
+        .map_or_else(
+            |_| "unresolved".to_owned(),
+            |provider| provider.descriptor().name,
+        );
+    let started = Instant::now();
+    let span = tracing::info_span!(
+        "imagegen_bridge.image_operation",
+        request_id = %request_id.0,
+        provider = %provider
+    );
     let result = state
         .runtime
         .execute_with(
@@ -423,8 +499,20 @@ pub(crate) async fn run_request_with_cancellation(
                 cancellation,
             },
         )
+        .instrument(span)
         .await;
     guard.disarm();
+    if let Some(metrics) = &state.metrics {
+        metrics.record(&provider, &result, started.elapsed());
+    }
+    match &result {
+        Ok(_) => {
+            tracing::info!(request_id = %request_id.0, provider = %provider, "image operation completed");
+        }
+        Err(error) => {
+            tracing::warn!(request_id = %request_id.0, provider = %provider, error_code = ?error.code, retryable = error.retryable, "image operation failed");
+        }
+    }
     result.map_err(|error| ApiError::from_bridge(error, request_id))
 }
 
@@ -591,9 +679,10 @@ mod tests {
             ProviderRegistry::new([Arc::new(ReadyProvider) as Arc<dyn ImageProvider>], "ready")
                 .unwrap();
         let runtime = Arc::new(ImagegenRuntime::new(registry, RuntimeConfig::default()).unwrap());
-        let state = ServerState::with_bearer(
+        let state = ServerState::with_bearer_and_metrics(
             runtime,
             token.map(|value| SecretString::from(value.to_owned())),
+            settings.metrics.enabled,
         );
         router(state, settings)
     }
@@ -751,5 +840,83 @@ mod tests {
         assert_eq!(missing.status(), StatusCode::NOT_FOUND);
         let body = missing.into_body().collect().await.unwrap().to_bytes();
         assert!(serde_json::from_slice::<serde_json::Value>(&body).is_ok());
+    }
+
+    #[tokio::test]
+    async fn metrics_are_opt_in_authenticated_and_content_safe() {
+        let disabled = test_router(None)
+            .oneshot(Request::get("/metrics").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(disabled.status(), StatusCode::NOT_FOUND);
+
+        let settings = ServerSettings {
+            metrics: imagegen_bridge_config::MetricsSettings { enabled: true },
+            ..ServerSettings::default()
+        };
+        let app = test_router_with_settings(Some("metrics-secret"), &settings);
+        let unauthorized = app
+            .clone()
+            .oneshot(Request::get("/metrics").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let generation = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/images")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::AUTHORIZATION, "Bearer metrics-secret")
+                    .body(Body::from(
+                        serde_json::to_vec(&ImageRequest::generate("never expose this prompt"))
+                            .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(generation.status(), StatusCode::OK);
+
+        let rejected = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/images")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::AUTHORIZATION, "Bearer metrics-secret")
+                    .body(Body::from(
+                        serde_json::to_vec(&ImageRequest::generate("")).unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        let metrics = app
+            .oneshot(
+                Request::get("/metrics")
+                    .header(header::AUTHORIZATION, "Bearer metrics-secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(metrics.status(), StatusCode::OK);
+        assert_eq!(
+            metrics.headers()[header::CONTENT_TYPE],
+            "text/plain; version=0.0.4; charset=utf-8"
+        );
+        let body = metrics.into_body().collect().await.unwrap().to_bytes();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body.contains("imagegen_bridge_requests_total"));
+        assert!(body.contains("provider=\"ready\""));
+        assert!(body.contains("result=\"success\""));
+        assert!(body.contains("result=\"error\",code=\"invalid_request\""));
+        assert!(body.contains("imagegen_bridge_generated_bytes_total"));
+        assert!(body.contains("} 68"));
+        assert!(body.contains("imagegen_bridge_queue_depth"));
+        assert!(!body.contains("never expose this prompt"));
+        assert!(!body.contains("metrics-secret"));
     }
 }

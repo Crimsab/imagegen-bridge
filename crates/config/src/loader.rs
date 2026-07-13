@@ -434,6 +434,8 @@ public_base_url = "https://images.example.test/v1/"
         assert_eq!(resolved.config.runtime.global.max_concurrent, 2);
         assert_eq!(resolved.config.inputs.remote.allowed_ports, [8080, 8443]);
         assert_eq!(resolved.config.artifacts.public_base_url, None);
+        assert!(!resolved.config.server.metrics.enabled);
+        assert!(resolved.config.server.tracing.enabled);
         assert_eq!(
             resolved
                 .origin("runtime.default_timeout_ms")
