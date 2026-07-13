@@ -75,6 +75,6 @@ fn json_event(name: &'static str, value: &impl serde::Serialize) -> Event {
         Ok(event) => event,
         Err(_) => Event::default()
             .event("error")
-            .data("{\"error\":{\"code\":\"internal\",\"message\":\"event serialization failed\"}}"),
+            .data("{\"error\":{\"message\":\"event serialization failed\",\"type\":\"api_error\",\"param\":null,\"code\":\"internal_error\",\"imagegen_bridge\":{\"code\":\"internal\",\"retryable\":false}},\"request_id\":\"unavailable\"}"),
     }
 }

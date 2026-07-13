@@ -34,23 +34,39 @@ Errors never use a successful HTTP status:
 ```json
 {
   "error": {
-    "code": "invalid_request",
     "message": "request validation failed",
-    "retryable": false,
-    "details": {}
+    "type": "invalid_request_error",
+    "param": "prompt",
+    "code": "invalid_request",
+    "imagegen_bridge": {
+      "code": "invalid_request",
+      "retryable": false,
+      "details": { "field": "prompt" }
+    }
   },
   "request_id": "019f..."
 }
 ```
+
+The four standard fields under `error` are consumable by OpenAI clients.
+`error.code` is the compatibility discriminator; image safety blocks use
+`type=image_generation_user_error` and `code=moderation_blocked`. The
+`imagegen_bridge` extension always preserves the original bridge error code,
+retryability, safe provider/upstream IDs, and redaction-safe structured detail.
+The top-level request ID also appears in the `x-request-id` response header.
 
 Validation/input errors map to `400`/`422`, missing authentication to `401`,
 permission failures to `403`, conflicts to `409`, rate limits to `429`, capacity
 or readiness failures to `503`, deadlines to `504`, and unexpected bridge or
 upstream failures to `500`/`502`.
 
+The checked-in OpenAPI 3.1 document includes native and compatibility request,
+response, error, extension, multipart, provider, session, readiness, and SSE
+schemas with examples. It is generated from the Rust contract and verified for
+drift by CI and `imagegen-bridge schema --kind openapi --check FILE`.
+
 ## Provider pagination
 
 `GET /v1/providers?limit=20&cursor=...` accepts `1..=100`. Cursors are opaque and
 stable for the immutable provider registry. The response contains `items` and
 an optional `next_cursor`.
-

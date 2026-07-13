@@ -738,6 +738,11 @@ mod tests {
         let body = oversized.into_body().collect().await.unwrap().to_bytes();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["error"]["code"], "invalid_request");
+        assert_eq!(value["error"]["type"], "invalid_request_error");
+        assert!(value["error"]["param"].is_null());
+        assert_eq!(value["error"]["imagegen_bridge"]["code"], "invalid_request");
+        assert_eq!(value["error"]["imagegen_bridge"]["retryable"], false);
+        assert!(value["request_id"].is_string());
 
         let missing = test_router(None)
             .oneshot(Request::get("/missing").body(Body::empty()).unwrap())

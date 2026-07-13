@@ -1,68 +1,402 @@
 //! Deterministic `OpenAPI` 3.1 document derived from the native JSON Schema.
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
-/// Generates the current `OpenAPI` 3.1 document.
+/// Generates the current `OpenAPI` 3.1 document with compatibility extensions and examples.
 #[must_use]
 pub fn openapi_document() -> Value {
     let contract = imagegen_bridge_core::contract_schema();
     let mut contract = serde_json::to_value(contract).unwrap_or_else(|_| json!({}));
     rewrite_references(&mut contract);
-    let schemas = contract
+    let mut schemas = contract
         .get_mut("$defs")
         .and_then(Value::as_object_mut)
         .map(std::mem::take)
         .unwrap_or_default();
+    add_compatibility_schemas(&mut schemas);
+
     json!({
         "openapi": "3.1.0",
         "info": {
             "title": "Imagegen Bridge API",
             "version": env!("CARGO_PKG_VERSION"),
-            "description": "Provider-neutral image generation over Codex OAuth."
+            "description": "Provider-neutral image generation over Codex OAuth with native and OpenAI-familiar surfaces."
         },
         "servers": [{"url": "/"}],
+        "tags": [
+            {"name":"health","description":"Liveness and provider readiness"},
+            {"name":"images","description":"Native lossless image operations"},
+            {"name":"compatibility","description":"OpenAI-familiar Images API"},
+            {"name":"providers","description":"Provider discovery and capability negotiation"},
+            {"name":"sessions","description":"Persistent session lifecycle"}
+        ],
         "paths": {
-            "/health/live": {"get": {"operationId": "getLiveness", "responses": {"200": {"description": "Process is live"}}}},
-            "/health/ready": {"get": {"operationId": "getReadiness", "responses": {"200": {"description": "Providers ready"}, "503": {"description": "One or more providers not ready"}}}},
-            "/v1/providers": {"get": {"operationId": "listProviders", "parameters": [
-                {"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"maximum":100}},
-                {"name":"cursor","in":"query","schema":{"type":"string","maxLength":256}}
-            ], "responses": {"200": {"description": "Provider page"}}}},
-            "/v1/providers/{provider}/capabilities": {"get": {"operationId": "getProviderCapabilities", "parameters": [
-                {"name":"provider","in":"path","required":true,"schema":{"type":"string"}},
-                {"name":"model","in":"query","schema":{"type":"string"}}
-            ], "responses": {"200": {"description":"Capabilities","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ProviderCapabilities"}}}}}}},
-            "/v1/sessions/{key}": {
-                "get": {"operationId":"getSession","parameters":[{"name":"key","in":"path","required":true,"schema":{"type":"string"}},{"name":"provider","in":"query","schema":{"type":"string"}}],"responses":{"200":{"description":"Persistent session","content":{"application/json":{"schema":{"$ref":"#/components/schemas/SessionMetadata"}}}},"404":{"description":"Session not found"}}},
-                "delete": {"operationId":"deleteSession","parameters":[{"name":"key","in":"path","required":true,"schema":{"type":"string"}},{"name":"provider","in":"query","schema":{"type":"string"}}],"responses":{"204":{"description":"Session deleted"},"404":{"description":"Session not found"}}}
+            "/health/live": {
+                "get": {
+                    "operationId": "getLiveness",
+                    "tags": ["health"],
+                    "responses": {"200": json_response("Process is live", json!({"type":"object","required":["status"],"properties":{"status":{"const":"live"}}}), json!({"status":"live"}))}
+                }
             },
-            "/v1/images": {"post": image_operation("executeImage", "#/components/schemas/ImageRequest", "#/components/schemas/ImageResponse")},
-            "/v1/images/stream": {"post": image_operation("streamImage", "#/components/schemas/ImageRequest", "#/components/schemas/ProviderEvent")},
-            "/v1/images/generations": {"post": {"operationId":"generateImageCompatible","requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object"}}}},"responses":{"200":{"description":"OpenAI-familiar image response"}}}},
-            "/v1/images/edits": {"post": {"operationId":"editImageCompatible","requestBody":{"required":true,"content":{"multipart/form-data":{"schema":{"type":"object","required":["prompt","image"]}}}},"responses":{"200":{"description":"OpenAI-familiar image response"}}}}
+            "/health/ready": {
+                "get": {
+                    "operationId": "getReadiness",
+                    "tags": ["health"],
+                    "responses": {
+                        "200": readiness_response("Providers are ready"),
+                        "503": readiness_response("One or more providers are not ready")
+                    }
+                }
+            },
+            "/v1/providers": {
+                "get": {
+                    "operationId": "listProviders",
+                    "tags": ["providers"],
+                    "security": [{"bridgeBearer": []}],
+                    "parameters": [
+                        {"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"maximum":100,"default":20}},
+                        {"name":"cursor","in":"query","schema":{"type":"string","maxLength":256}}
+                    ],
+                    "responses": {
+                        "200": json_response("Provider page", json!({"$ref":"#/components/schemas/ProviderPage"}), json!({"items":[{"name":"codex-app-server","display_name":"Codex app-server","version":"0.1.0","experimental":false}]})),
+                        "400": error_response("Invalid provider cursor"),
+                        "401": error_response("Bridge authentication required")
+                    }
+                }
+            },
+            "/v1/providers/{provider}/capabilities": {
+                "get": {
+                    "operationId": "getProviderCapabilities",
+                    "tags": ["providers"],
+                    "security": [{"bridgeBearer": []}],
+                    "parameters": [
+                        {"name":"provider","in":"path","required":true,"schema":{"type":"string","example":"codex-app-server"}},
+                        {"name":"model","in":"query","schema":{"type":"string"}}
+                    ],
+                    "responses": {
+                        "200": json_response("Provider capabilities", json!({"$ref":"#/components/schemas/ProviderCapabilities"}), json!({"provider":"codex-app-server","model":"gpt-image-2","generation":true,"edits":true})),
+                        "400": error_response("Provider is unavailable or invalid"),
+                        "401": error_response("Bridge authentication required")
+                    }
+                }
+            },
+            "/v1/sessions/{key}": {
+                "get": {
+                    "operationId":"getSession",
+                    "tags":["sessions"],
+                    "security": [{"bridgeBearer": []}],
+                    "parameters": session_parameters(),
+                    "responses": {
+                        "200": json_response("Persistent session", json!({"$ref":"#/components/schemas/SessionMetadata"}), json!({"key":"gallery","thread_id":"019f-thread","reused":true})),
+                        "401": error_response("Bridge authentication required"),
+                        "404": error_response("Session not found")
+                    }
+                },
+                "delete": {
+                    "operationId":"deleteSession",
+                    "tags":["sessions"],
+                    "security": [{"bridgeBearer": []}],
+                    "parameters": session_parameters(),
+                    "responses": {
+                        "204":{"description":"Session deleted"},
+                        "401": error_response("Bridge authentication required"),
+                        "404": error_response("Session not found")
+                    }
+                }
+            },
+            "/v1/images": {
+                "post": native_image_operation("executeImage", false)
+            },
+            "/v1/images/stream": {
+                "post": native_image_operation("streamImage", true)
+            },
+            "/v1/images/generations": {
+                "post": compatible_generation_operation()
+            },
+            "/v1/images/edits": {
+                "post": compatible_edit_operation()
+            }
         },
         "components": {
-            "securitySchemes": {"bridgeBearer": {"type":"http","scheme":"bearer"}},
-            "schemas": schemas
+            "securitySchemes": {"bridgeBearer": {"type":"http","scheme":"bearer","description":"Optional bridge token, separate from provider OAuth."}},
+            "schemas": schemas,
+            "responses": {"ErrorResponse": error_response_component()}
         }
     })
 }
 
-fn image_operation(operation_id: &str, request: &str, response: &str) -> Value {
+fn native_image_operation(operation_id: &str, streaming: bool) -> Value {
+    let success = if streaming {
+        json!({
+            "description":"Bounded image progress stream",
+            "content":{"text/event-stream":{"schema":{"type":"string"},"example":"event: started\ndata: {\"type\":\"started\"}\n\nevent: completed\ndata: {\"type\":\"completed\",\"response\":{...}}\n\n"}}
+        })
+    } else {
+        json_response(
+            "Successful image operation",
+            json!({"$ref":"#/components/schemas/ImageResponse"}),
+            native_response_example(),
+        )
+    };
     json!({
         "operationId": operation_id,
+        "tags": ["images"],
         "security": [{"bridgeBearer": []}],
         "parameters": [{"name":"Idempotency-Key","in":"header","schema":{"type":"string","maxLength":512}}],
-        "requestBody": {"required":true,"content":{"application/json":{"schema":{"$ref":request}}}},
-        "responses": {
-            "200":{"description":"Successful image operation","content":{"application/json":{"schema":{"$ref":response}}}},
-            "400":{"description":"Invalid input"},
-            "401":{"description":"Bridge authentication required"},
-            "409":{"description":"Idempotency conflict"},
-            "422":{"description":"Validation or safety rejection"},
-            "429":{"description":"Rate limited"},
-            "503":{"description":"Overloaded"},
-            "504":{"description":"Deadline exceeded"}
+        "requestBody": {"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ImageRequest"},"example":native_request_example()}}},
+        "responses": common_image_responses(success)
+    })
+}
+
+fn compatible_generation_operation() -> Value {
+    json!({
+        "operationId":"generateImageCompatible",
+        "tags":["compatibility"],
+        "security": [{"bridgeBearer": []}],
+        "parameters": [{"name":"Idempotency-Key","in":"header","schema":{"type":"string","maxLength":512}}],
+        "requestBody":{"required":true,"content":{"application/json":{
+            "schema":{"$ref":"#/components/schemas/CompatibleGenerationRequest"},
+            "example":{
+                "model":"gpt-image-2",
+                "prompt":"A red origami fox on warm gray",
+                "n":1,
+                "size":"auto",
+                "quality":"auto",
+                "response_format":"b64_json",
+                "imagegen_bridge":{"provider":"codex-app-server","revised_prompt":"include","session":{"mode":"persistent","key":"gallery"}}
+            }
+        }}},
+        "responses": common_image_responses(json_response("OpenAI-familiar image response", json!({"$ref":"#/components/schemas/CompatibleImagesResponse"}), compatible_response_example()))
+    })
+}
+
+fn compatible_edit_operation() -> Value {
+    json!({
+        "operationId":"editImageCompatible",
+        "tags":["compatibility"],
+        "security": [{"bridgeBearer": []}],
+        "parameters": [{"name":"Idempotency-Key","in":"header","schema":{"type":"string","maxLength":512}}],
+        "requestBody":{"required":true,"content":{"multipart/form-data":{
+            "schema":{"$ref":"#/components/schemas/CompatibleEditRequest"},
+            "encoding":{"image":{"contentType":"image/png, image/jpeg, image/webp"},"mask":{"contentType":"image/png"}}
+        }}},
+        "responses": common_image_responses(json_response("OpenAI-familiar image response", json!({"$ref":"#/components/schemas/CompatibleImagesResponse"}), compatible_response_example()))
+    })
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn common_image_responses(success: Value) -> Value {
+    json!({
+        "200": success,
+        "400": error_response("Invalid input or unsupported capability"),
+        "401": error_response("Bridge authentication required"),
+        "403": error_response("Permission denied"),
+        "409": error_response("Idempotency conflict"),
+        "422": error_response("Validation or safety rejection"),
+        "429": error_response("Rate limited"),
+        "500": error_response("Internal bridge failure"),
+        "502": error_response("Upstream provider failure"),
+        "503": error_response("Bounded capacity exhausted"),
+        "504": error_response("Deadline exceeded")
+    })
+}
+
+fn error_response(description: &str) -> Value {
+    json!({"$ref":"#/components/responses/ErrorResponse","description":description})
+}
+
+fn error_response_component() -> Value {
+    json_response(
+        "OpenAI-compatible error with stable bridge details",
+        json!({"$ref":"#/components/schemas/OpenAIErrorEnvelope"}),
+        json!({
+            "error": {
+                "message": "request validation failed",
+                "type": "invalid_request_error",
+                "param": "prompt",
+                "code": "invalid_request",
+                "imagegen_bridge": {
+                    "code": "invalid_request",
+                    "retryable": false,
+                    "details": {"field":"prompt"}
+                }
+            },
+            "request_id": "019f0000-0000-7000-8000-000000000000"
+        }),
+    )
+}
+
+fn readiness_response(description: &str) -> Value {
+    json_response(
+        description,
+        json!({"$ref":"#/components/schemas/ReadinessResponse"}),
+        json!({"status":"ready","providers":[{"provider":"codex-app-server","status":"ready"}]}),
+    )
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn json_response(description: &str, schema: Value, example: Value) -> Value {
+    json!({"description":description,"content":{"application/json":{"schema":schema,"example":example}}})
+}
+
+fn session_parameters() -> Value {
+    json!([
+        {"name":"key","in":"path","required":true,"schema":{"type":"string","maxLength":256,"example":"gallery"}},
+        {"name":"provider","in":"query","schema":{"type":"string","example":"codex-app-server"}}
+    ])
+}
+
+fn native_request_example() -> Value {
+    json!({
+        "prompt":"A red origami fox on warm gray",
+        "operation":"generate",
+        "parameters":{"n":1,"size":"auto","quality":"auto","output_format":"png","background":"auto","moderation":"auto","partial_images":0},
+        "routing":{"provider":"codex-app-server"},
+        "session":{"mode":"persistent","key":"gallery"},
+        "output":{"response_format":"artifact","filename_prefix":"fox"},
+        "policies":{"compatibility":"strict","negative_prompt":"auto","revised_prompt":"include"}
+    })
+}
+
+fn native_response_example() -> Value {
+    json!({
+        "id":"019f0000-0000-7000-8000-000000000000",
+        "created":1_713_833_628,
+        "provider":"codex-app-server",
+        "model":"gpt-image-2",
+        "requested":{"n":1,"size":"auto","quality":"auto","output_format":"png","background":"auto","moderation":"auto","partial_images":0},
+        "effective":{"n":1,"size":"auto","quality":"auto","output_format":"png","background":"auto","moderation":"auto","partial_images":0},
+        "data":[{"type":"artifact","id":"019f-artifact","name":"fox-019f.png","format":"png","width":1024,"height":1024,"bytes":123_456,"sha256":"0000000000000000000000000000000000000000000000000000000000000000"}],
+        "revised_prompt":"A centered red origami fox on a warm gray background.",
+        "session":{"key":"gallery","thread_id":"019f-thread","reused":false},
+        "timings":{"queue_ms":0,"input_ms":0,"provider_ms":1000,"artifact_ms":10,"total_ms":1010}
+    })
+}
+
+fn compatible_response_example() -> Value {
+    json!({
+        "created":1_713_833_628,
+        "data":[{"b64_json":"...","revised_prompt":"A centered red origami fox on a warm gray background."}],
+        "imagegen_bridge":{
+            "id":"019f0000-0000-7000-8000-000000000000",
+            "provider":"codex-app-server",
+            "model":"gpt-image-2",
+            "effective":{"n":1,"size":"auto","quality":"auto","output_format":"png","background":"auto","moderation":"auto","partial_images":0},
+            "normalizations":[],
+            "session":{"key":"gallery","thread_id":"019f-thread","reused":false},
+            "timings":{"queue_ms":0,"input_ms":0,"provider_ms":1000,"artifact_ms":10,"total_ms":1010},
+            "warnings":[]
+        }
+    })
+}
+
+fn add_compatibility_schemas(schemas: &mut Map<String, Value>) {
+    schemas.insert("OpenAIErrorEnvelope".to_owned(), json!({
+        "type":"object","additionalProperties":false,"required":["error","request_id"],"properties":{
+            "error":{"$ref":"#/components/schemas/OpenAIError"},
+            "request_id":{"type":"string"}
+        }
+    }));
+    schemas.insert("OpenAIError".to_owned(), json!({
+        "type":"object","additionalProperties":false,"required":["message","type","param","code","imagegen_bridge"],"properties":{
+            "message":{"type":"string"},
+            "type":{"type":"string"},
+            "param":{"type":["string","null"]},
+            "code":{"type":"string"},
+            "imagegen_bridge":{"$ref":"#/components/schemas/BridgeErrorExtension"}
+        }
+    }));
+    schemas.insert("BridgeErrorExtension".to_owned(), json!({
+        "type":"object","additionalProperties":false,"required":["code","retryable"],"properties":{
+            "code":{"$ref":"#/components/schemas/ErrorCode"},
+            "retryable":{"type":"boolean"},
+            "provider":{"type":"string"},
+            "upstream_request_id":{"type":"string"},
+            "details":{"type":"object","additionalProperties":true}
+        }
+    }));
+    schemas.insert(
+        "ProviderPage".to_owned(),
+        json!({
+            "type":"object","additionalProperties":false,"required":["items"],"properties":{
+                "items":{"type":"array","items":{"$ref":"#/components/schemas/ProviderDescriptor"}},
+                "next_cursor":{"type":"string"}
+            }
+        }),
+    );
+    schemas.insert("ReadinessResponse".to_owned(), json!({
+        "type":"object","additionalProperties":false,"required":["status","providers"],"properties":{
+            "status":{"enum":["ready","not_ready"]},
+            "providers":{"type":"array","items":{"type":"object","required":["provider","status"],"properties":{"provider":{"type":"string"},"status":{"enum":["ready","not_ready"]},"error":{"$ref":"#/components/schemas/BridgeError"}}}}
+        }
+    }));
+    schemas.insert(
+        "CompatibleGenerationRequest".to_owned(),
+        compatible_generation_schema(),
+    );
+    schemas.insert(
+        "CompatibleExtensions".to_owned(),
+        compatible_extensions_schema(),
+    );
+    schemas.insert("CompatibleEditRequest".to_owned(), compatible_edit_schema());
+    schemas.insert(
+        "CompatibleImagesResponse".to_owned(),
+        compatible_response_schema(),
+    );
+}
+
+fn compatible_generation_schema() -> Value {
+    json!({
+        "type":"object","additionalProperties":false,"required":["prompt"],"properties":{
+            "prompt":{"type":"string"},"model":{"type":"string"},"n":{"type":"integer","minimum":1,"default":1},
+            "size":{"$ref":"#/components/schemas/ImageSize"},"quality":{"$ref":"#/components/schemas/Quality"},
+            "output_format":{"$ref":"#/components/schemas/OutputFormat"},"output_compression":{"type":"integer","minimum":0,"maximum":100},
+            "background":{"$ref":"#/components/schemas/Background"},"moderation":{"$ref":"#/components/schemas/Moderation"},
+            "response_format":{"enum":["b64_json","url"],"default":"b64_json"},"user":{"type":"string"},
+            "imagegen_bridge":{"$ref":"#/components/schemas/CompatibleExtensions"}
+        }
+    })
+}
+
+fn compatible_edit_schema() -> Value {
+    json!({
+        "type":"object","additionalProperties":false,"required":["prompt","image"],"properties":{
+            "prompt":{"type":"string"},"image":{"type":"array","items":{"type":"string","contentMediaType":"image/*"}},
+            "mask":{"type":"string","contentMediaType":"image/png"},"reference_image":{"type":"array","items":{"type":"string","contentMediaType":"image/*"}},
+            "model":{"type":"string"},"n":{"type":"integer","minimum":1},"size":{"$ref":"#/components/schemas/ImageSize"},
+            "quality":{"$ref":"#/components/schemas/Quality"},"output_format":{"$ref":"#/components/schemas/OutputFormat"},
+            "output_compression":{"type":"integer","minimum":0,"maximum":100},"background":{"$ref":"#/components/schemas/Background"},
+            "moderation":{"$ref":"#/components/schemas/Moderation"},"response_format":{"enum":["b64_json","url"]},"user":{"type":"string"},
+            "provider":{"type":"string"},"negative_prompt":{"type":"string"},"compatibility":{"$ref":"#/components/schemas/CompatibilityMode"},
+            "revised_prompt":{"$ref":"#/components/schemas/RevisedPromptPolicy"},"session_key":{"type":"string"}
+        }
+    })
+}
+
+fn compatible_response_schema() -> Value {
+    json!({
+        "type":"object","additionalProperties":false,"required":["created","data","imagegen_bridge"],"properties":{
+            "created":{"type":"integer"},
+            "data":{"type":"array","items":{"type":"object","properties":{"b64_json":{"type":"string"},"url":{"type":"string","format":"uri"},"revised_prompt":{"type":"string"}}}},
+            "usage":{"$ref":"#/components/schemas/Usage"},
+            "imagegen_bridge":{"type":"object","required":["id","provider","model","effective","normalizations","timings","warnings"],"properties":{
+                "id":{"type":"string"},"provider":{"type":"string"},"model":{"type":"string"},
+                "effective":{"$ref":"#/components/schemas/GenerationParameters"},"normalizations":{"type":"array","items":{"$ref":"#/components/schemas/Normalization"}},
+                "session":{"$ref":"#/components/schemas/SessionMetadata"},"timings":{"$ref":"#/components/schemas/Timings"},"warnings":{"type":"array","items":{"type":"string"}}
+            }}
+        }
+    })
+}
+
+fn compatible_extensions_schema() -> Value {
+    json!({
+        "type":"object","additionalProperties":false,"properties":{
+            "provider":{"type":"string"},"negative_prompt":{"type":"string"},
+            "compatibility":{"$ref":"#/components/schemas/CompatibilityMode"},"negative_prompt_mode":{"$ref":"#/components/schemas/NegativePromptMode"},
+            "revised_prompt":{"$ref":"#/components/schemas/RevisedPromptPolicy"},"aspect_ratio":{"$ref":"#/components/schemas/AspectRatio"},
+            "resolution":{"$ref":"#/components/schemas/Resolution"},"partial_images":{"type":"integer","minimum":0,"maximum":3},
+            "session":{"$ref":"#/components/schemas/SessionOptions"},"reference_images":{"type":"array","items":{"$ref":"#/components/schemas/ImageInput"}},
+            "filename_prefix":{"type":"string"}
         }
     })
 }
@@ -88,15 +422,57 @@ fn rewrite_references(value: &mut Value) {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
+
+    use std::collections::BTreeSet;
+
     use super::*;
 
     #[test]
-    fn document_contains_versioned_routes_and_resolvable_component_refs() {
+    fn document_contains_examples_extensions_and_resolvable_component_refs() {
         let document = openapi_document();
         assert_eq!(document["openapi"], "3.1.0");
         assert!(document["paths"]["/v1/images"].is_object());
         assert!(document["components"]["schemas"]["ImageRequest"].is_object());
-        let rendered = serde_json::to_string(&document).unwrap_or_default();
-        assert!(!rendered.contains("#/$defs/"));
+        assert!(
+            document["components"]["schemas"]["CompatibleGenerationRequest"]["properties"]
+                ["imagegen_bridge"]
+                .is_object()
+        );
+        assert!(
+            document["paths"]["/v1/images/generations"]["post"]["requestBody"]["content"]
+                ["application/json"]["example"]
+                .is_object()
+        );
+        assert!(document["components"]["responses"]["ErrorResponse"]["content"]
+            ["application/json"]["example"]["error"]["imagegen_bridge"]
+            .is_object());
+
+        let mut references = BTreeSet::new();
+        collect_references(&document, &mut references);
+        for reference in references {
+            let pointer = reference.strip_prefix('#').expect("local reference");
+            assert!(
+                document.pointer(pointer).is_some(),
+                "unresolved reference {reference}"
+            );
+        }
+    }
+
+    fn collect_references(value: &Value, references: &mut BTreeSet<String>) {
+        match value {
+            Value::Object(object) => {
+                if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
+                    references.insert(reference.to_owned());
+                }
+                object
+                    .values()
+                    .for_each(|value| collect_references(value, references));
+            }
+            Value::Array(values) => values
+                .iter()
+                .for_each(|value| collect_references(value, references)),
+            _ => {}
+        }
     }
 }

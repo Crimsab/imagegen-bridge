@@ -1,5 +1,33 @@
 {
   "components": {
+    "responses": {
+      "ErrorResponse": {
+        "content": {
+          "application/json": {
+            "example": {
+              "error": {
+                "code": "invalid_request",
+                "imagegen_bridge": {
+                  "code": "invalid_request",
+                  "details": {
+                    "field": "prompt"
+                  },
+                  "retryable": false
+                },
+                "message": "request validation failed",
+                "param": "prompt",
+                "type": "invalid_request_error"
+              },
+              "request_id": "019f0000-0000-7000-8000-000000000000"
+            },
+            "schema": {
+              "$ref": "#/components/schemas/OpenAIErrorEnvelope"
+            }
+          }
+        },
+        "description": "OpenAI-compatible error with stable bridge details"
+      }
+    },
     "schemas": {
       "AspectRatio": {
         "examples": [
@@ -73,6 +101,32 @@
         ],
         "type": "object"
       },
+      "BridgeErrorExtension": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ErrorCode"
+          },
+          "details": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "upstream_request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "retryable"
+        ],
+        "type": "object"
+      },
       "CompatibilityMode": {
         "description": "Compatibility policy used during provider negotiation.",
         "oneOf": [
@@ -92,6 +146,264 @@
             "type": "string"
           }
         ]
+      },
+      "CompatibleEditRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "background": {
+            "$ref": "#/components/schemas/Background"
+          },
+          "compatibility": {
+            "$ref": "#/components/schemas/CompatibilityMode"
+          },
+          "image": {
+            "items": {
+              "contentMediaType": "image/*",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "mask": {
+            "contentMediaType": "image/png",
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "moderation": {
+            "$ref": "#/components/schemas/Moderation"
+          },
+          "n": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "negative_prompt": {
+            "type": "string"
+          },
+          "output_compression": {
+            "maximum": 100,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "output_format": {
+            "$ref": "#/components/schemas/OutputFormat"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "quality": {
+            "$ref": "#/components/schemas/Quality"
+          },
+          "reference_image": {
+            "items": {
+              "contentMediaType": "image/*",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "response_format": {
+            "enum": [
+              "b64_json",
+              "url"
+            ]
+          },
+          "revised_prompt": {
+            "$ref": "#/components/schemas/RevisedPromptPolicy"
+          },
+          "session_key": {
+            "type": "string"
+          },
+          "size": {
+            "$ref": "#/components/schemas/ImageSize"
+          },
+          "user": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt",
+          "image"
+        ],
+        "type": "object"
+      },
+      "CompatibleExtensions": {
+        "additionalProperties": false,
+        "properties": {
+          "aspect_ratio": {
+            "$ref": "#/components/schemas/AspectRatio"
+          },
+          "compatibility": {
+            "$ref": "#/components/schemas/CompatibilityMode"
+          },
+          "filename_prefix": {
+            "type": "string"
+          },
+          "negative_prompt": {
+            "type": "string"
+          },
+          "negative_prompt_mode": {
+            "$ref": "#/components/schemas/NegativePromptMode"
+          },
+          "partial_images": {
+            "maximum": 3,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "reference_images": {
+            "items": {
+              "$ref": "#/components/schemas/ImageInput"
+            },
+            "type": "array"
+          },
+          "resolution": {
+            "$ref": "#/components/schemas/Resolution"
+          },
+          "revised_prompt": {
+            "$ref": "#/components/schemas/RevisedPromptPolicy"
+          },
+          "session": {
+            "$ref": "#/components/schemas/SessionOptions"
+          }
+        },
+        "type": "object"
+      },
+      "CompatibleGenerationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "background": {
+            "$ref": "#/components/schemas/Background"
+          },
+          "imagegen_bridge": {
+            "$ref": "#/components/schemas/CompatibleExtensions"
+          },
+          "model": {
+            "type": "string"
+          },
+          "moderation": {
+            "$ref": "#/components/schemas/Moderation"
+          },
+          "n": {
+            "default": 1,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "output_compression": {
+            "maximum": 100,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "output_format": {
+            "$ref": "#/components/schemas/OutputFormat"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "quality": {
+            "$ref": "#/components/schemas/Quality"
+          },
+          "response_format": {
+            "default": "b64_json",
+            "enum": [
+              "b64_json",
+              "url"
+            ]
+          },
+          "size": {
+            "$ref": "#/components/schemas/ImageSize"
+          },
+          "user": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      },
+      "CompatibleImagesResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "created": {
+            "type": "integer"
+          },
+          "data": {
+            "items": {
+              "properties": {
+                "b64_json": {
+                  "type": "string"
+                },
+                "revised_prompt": {
+                  "type": "string"
+                },
+                "url": {
+                  "format": "uri",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "imagegen_bridge": {
+            "properties": {
+              "effective": {
+                "$ref": "#/components/schemas/GenerationParameters"
+              },
+              "id": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "normalizations": {
+                "items": {
+                  "$ref": "#/components/schemas/Normalization"
+                },
+                "type": "array"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "session": {
+                "$ref": "#/components/schemas/SessionMetadata"
+              },
+              "timings": {
+                "$ref": "#/components/schemas/Timings"
+              },
+              "warnings": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "provider",
+              "model",
+              "effective",
+              "normalizations",
+              "timings",
+              "warnings"
+            ],
+            "type": "object"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/Usage"
+          }
+        },
+        "required": [
+          "created",
+          "data",
+          "imagegen_bridge"
+        ],
+        "type": "object"
       },
       "ErrorCode": {
         "description": "Stable machine-readable error classification.",
@@ -831,6 +1143,53 @@
         ],
         "type": "object"
       },
+      "OpenAIError": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "imagegen_bridge": {
+            "$ref": "#/components/schemas/BridgeErrorExtension"
+          },
+          "message": {
+            "type": "string"
+          },
+          "param": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message",
+          "type",
+          "param",
+          "code",
+          "imagegen_bridge"
+        ],
+        "type": "object"
+      },
+      "OpenAIErrorEnvelope": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/OpenAIError"
+          },
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "request_id"
+        ],
+        "type": "object"
+      },
       "OutputFormat": {
         "description": "Encoded output image format.",
         "oneOf": [
@@ -1128,6 +1487,24 @@
           }
         ]
       },
+      "ProviderPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ProviderDescriptor"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
       "Quality": {
         "description": "Requested generation quality.",
         "oneOf": [
@@ -1152,6 +1529,46 @@
             "type": "string"
           }
         ]
+      },
+      "ReadinessResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "providers": {
+            "items": {
+              "properties": {
+                "error": {
+                  "$ref": "#/components/schemas/BridgeError"
+                },
+                "provider": {
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "ready",
+                    "not_ready"
+                  ]
+                }
+              },
+              "required": [
+                "provider",
+                "status"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "not_ready"
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "providers"
+        ],
+        "type": "object"
       },
       "RequestPolicies": {
         "additionalProperties": false,
@@ -1572,13 +1989,14 @@
     },
     "securitySchemes": {
       "bridgeBearer": {
+        "description": "Optional bridge token, separate from provider OAuth.",
         "scheme": "bearer",
         "type": "http"
       }
     }
   },
   "info": {
-    "description": "Provider-neutral image generation over Codex OAuth.",
+    "description": "Provider-neutral image generation over Codex OAuth with native and OpenAI-familiar surfaces.",
     "title": "Imagegen Bridge API",
     "version": "0.1.0"
   },
@@ -1589,9 +2007,30 @@
         "operationId": "getLiveness",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "status": "live"
+                },
+                "schema": {
+                  "properties": {
+                    "status": {
+                      "const": "live"
+                    }
+                  },
+                  "required": [
+                    "status"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Process is live"
           }
-        }
+        },
+        "tags": [
+          "health"
+        ]
       }
     },
     "/health/ready": {
@@ -1599,12 +2038,47 @@
         "operationId": "getReadiness",
         "responses": {
           "200": {
-            "description": "Providers ready"
+            "content": {
+              "application/json": {
+                "example": {
+                  "providers": [
+                    {
+                      "provider": "codex-app-server",
+                      "status": "ready"
+                    }
+                  ],
+                  "status": "ready"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse"
+                }
+              }
+            },
+            "description": "Providers are ready"
           },
           "503": {
-            "description": "One or more providers not ready"
+            "content": {
+              "application/json": {
+                "example": {
+                  "providers": [
+                    {
+                      "provider": "codex-app-server",
+                      "status": "ready"
+                    }
+                  ],
+                  "status": "ready"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse"
+                }
+              }
+            },
+            "description": "One or more providers are not ready"
           }
-        }
+        },
+        "tags": [
+          "health"
+        ]
       }
     },
     "/v1/images": {
@@ -1623,6 +2097,35 @@
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {
+                "operation": "generate",
+                "output": {
+                  "filename_prefix": "fox",
+                  "response_format": "artifact"
+                },
+                "parameters": {
+                  "background": "auto",
+                  "moderation": "auto",
+                  "n": 1,
+                  "output_format": "png",
+                  "partial_images": 0,
+                  "quality": "auto",
+                  "size": "auto"
+                },
+                "policies": {
+                  "compatibility": "strict",
+                  "negative_prompt": "auto",
+                  "revised_prompt": "include"
+                },
+                "prompt": "A red origami fox on warm gray",
+                "routing": {
+                  "provider": "codex-app-server"
+                },
+                "session": {
+                  "key": "gallery",
+                  "mode": "persistent"
+                }
+              },
               "schema": {
                 "$ref": "#/components/schemas/ImageRequest"
               }
@@ -1634,6 +2137,55 @@
           "200": {
             "content": {
               "application/json": {
+                "example": {
+                  "created": 1713833628,
+                  "data": [
+                    {
+                      "bytes": 123456,
+                      "format": "png",
+                      "height": 1024,
+                      "id": "019f-artifact",
+                      "name": "fox-019f.png",
+                      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+                      "type": "artifact",
+                      "width": 1024
+                    }
+                  ],
+                  "effective": {
+                    "background": "auto",
+                    "moderation": "auto",
+                    "n": 1,
+                    "output_format": "png",
+                    "partial_images": 0,
+                    "quality": "auto",
+                    "size": "auto"
+                  },
+                  "id": "019f0000-0000-7000-8000-000000000000",
+                  "model": "gpt-image-2",
+                  "provider": "codex-app-server",
+                  "requested": {
+                    "background": "auto",
+                    "moderation": "auto",
+                    "n": 1,
+                    "output_format": "png",
+                    "partial_images": 0,
+                    "quality": "auto",
+                    "size": "auto"
+                  },
+                  "revised_prompt": "A centered red origami fox on a warm gray background.",
+                  "session": {
+                    "key": "gallery",
+                    "reused": false,
+                    "thread_id": "019f-thread"
+                  },
+                  "timings": {
+                    "artifact_ms": 10,
+                    "input_ms": 0,
+                    "provider_ms": 1000,
+                    "queue_ms": 0,
+                    "total_ms": 1010
+                  }
+                },
                 "schema": {
                   "$ref": "#/components/schemas/ImageResponse"
                 }
@@ -1642,24 +2194,43 @@
             "description": "Successful image operation"
           },
           "400": {
-            "description": "Invalid input"
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Invalid input or unsupported capability"
           },
           "401": {
+            "$ref": "#/components/responses/ErrorResponse",
             "description": "Bridge authentication required"
           },
+          "403": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Permission denied"
+          },
           "409": {
+            "$ref": "#/components/responses/ErrorResponse",
             "description": "Idempotency conflict"
           },
           "422": {
+            "$ref": "#/components/responses/ErrorResponse",
             "description": "Validation or safety rejection"
           },
           "429": {
+            "$ref": "#/components/responses/ErrorResponse",
             "description": "Rate limited"
           },
+          "500": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Internal bridge failure"
+          },
+          "502": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Upstream provider failure"
+          },
           "503": {
-            "description": "Overloaded"
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Bounded capacity exhausted"
           },
           "504": {
+            "$ref": "#/components/responses/ErrorResponse",
             "description": "Deadline exceeded"
           }
         },
@@ -1667,21 +2238,38 @@
           {
             "bridgeBearer": []
           }
+        ],
+        "tags": [
+          "images"
         ]
       }
     },
     "/v1/images/edits": {
       "post": {
         "operationId": "editImageCompatible",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "schema": {
+              "maxLength": 512,
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "multipart/form-data": {
+              "encoding": {
+                "image": {
+                  "contentType": "image/png, image/jpeg, image/webp"
+                },
+                "mask": {
+                  "contentType": "image/png"
+                }
+              },
               "schema": {
-                "required": [
-                  "prompt",
-                  "image"
-                ],
-                "type": "object"
+                "$ref": "#/components/schemas/CompatibleEditRequest"
               }
             }
           },
@@ -1689,19 +2277,137 @@
         },
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "created": 1713833628,
+                  "data": [
+                    {
+                      "b64_json": "...",
+                      "revised_prompt": "A centered red origami fox on a warm gray background."
+                    }
+                  ],
+                  "imagegen_bridge": {
+                    "effective": {
+                      "background": "auto",
+                      "moderation": "auto",
+                      "n": 1,
+                      "output_format": "png",
+                      "partial_images": 0,
+                      "quality": "auto",
+                      "size": "auto"
+                    },
+                    "id": "019f0000-0000-7000-8000-000000000000",
+                    "model": "gpt-image-2",
+                    "normalizations": [],
+                    "provider": "codex-app-server",
+                    "session": {
+                      "key": "gallery",
+                      "reused": false,
+                      "thread_id": "019f-thread"
+                    },
+                    "timings": {
+                      "artifact_ms": 10,
+                      "input_ms": 0,
+                      "provider_ms": 1000,
+                      "queue_ms": 0,
+                      "total_ms": 1010
+                    },
+                    "warnings": []
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibleImagesResponse"
+                }
+              }
+            },
             "description": "OpenAI-familiar image response"
+          },
+          "400": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Invalid input or unsupported capability"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Bridge authentication required"
+          },
+          "403": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Permission denied"
+          },
+          "409": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Idempotency conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Validation or safety rejection"
+          },
+          "429": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Rate limited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Internal bridge failure"
+          },
+          "502": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Upstream provider failure"
+          },
+          "503": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Bounded capacity exhausted"
+          },
+          "504": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Deadline exceeded"
           }
-        }
+        },
+        "security": [
+          {
+            "bridgeBearer": []
+          }
+        ],
+        "tags": [
+          "compatibility"
+        ]
       }
     },
     "/v1/images/generations": {
       "post": {
         "operationId": "generateImageCompatible",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "schema": {
+              "maxLength": 512,
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {
+                "imagegen_bridge": {
+                  "provider": "codex-app-server",
+                  "revised_prompt": "include",
+                  "session": {
+                    "key": "gallery",
+                    "mode": "persistent"
+                  }
+                },
+                "model": "gpt-image-2",
+                "n": 1,
+                "prompt": "A red origami fox on warm gray",
+                "quality": "auto",
+                "response_format": "b64_json",
+                "size": "auto"
+              },
               "schema": {
-                "type": "object"
+                "$ref": "#/components/schemas/CompatibleGenerationRequest"
               }
             }
           },
@@ -1709,9 +2415,101 @@
         },
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "created": 1713833628,
+                  "data": [
+                    {
+                      "b64_json": "...",
+                      "revised_prompt": "A centered red origami fox on a warm gray background."
+                    }
+                  ],
+                  "imagegen_bridge": {
+                    "effective": {
+                      "background": "auto",
+                      "moderation": "auto",
+                      "n": 1,
+                      "output_format": "png",
+                      "partial_images": 0,
+                      "quality": "auto",
+                      "size": "auto"
+                    },
+                    "id": "019f0000-0000-7000-8000-000000000000",
+                    "model": "gpt-image-2",
+                    "normalizations": [],
+                    "provider": "codex-app-server",
+                    "session": {
+                      "key": "gallery",
+                      "reused": false,
+                      "thread_id": "019f-thread"
+                    },
+                    "timings": {
+                      "artifact_ms": 10,
+                      "input_ms": 0,
+                      "provider_ms": 1000,
+                      "queue_ms": 0,
+                      "total_ms": 1010
+                    },
+                    "warnings": []
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibleImagesResponse"
+                }
+              }
+            },
             "description": "OpenAI-familiar image response"
+          },
+          "400": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Invalid input or unsupported capability"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Bridge authentication required"
+          },
+          "403": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Permission denied"
+          },
+          "409": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Idempotency conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Validation or safety rejection"
+          },
+          "429": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Rate limited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Internal bridge failure"
+          },
+          "502": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Upstream provider failure"
+          },
+          "503": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Bounded capacity exhausted"
+          },
+          "504": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Deadline exceeded"
           }
-        }
+        },
+        "security": [
+          {
+            "bridgeBearer": []
+          }
+        ],
+        "tags": [
+          "compatibility"
+        ]
       }
     },
     "/v1/images/stream": {
@@ -1730,6 +2528,35 @@
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {
+                "operation": "generate",
+                "output": {
+                  "filename_prefix": "fox",
+                  "response_format": "artifact"
+                },
+                "parameters": {
+                  "background": "auto",
+                  "moderation": "auto",
+                  "n": 1,
+                  "output_format": "png",
+                  "partial_images": 0,
+                  "quality": "auto",
+                  "size": "auto"
+                },
+                "policies": {
+                  "compatibility": "strict",
+                  "negative_prompt": "auto",
+                  "revised_prompt": "include"
+                },
+                "prompt": "A red origami fox on warm gray",
+                "routing": {
+                  "provider": "codex-app-server"
+                },
+                "session": {
+                  "key": "gallery",
+                  "mode": "persistent"
+                }
+              },
               "schema": {
                 "$ref": "#/components/schemas/ImageRequest"
               }
@@ -1740,33 +2567,53 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
+              "text/event-stream": {
+                "example": "event: started\ndata: {\"type\":\"started\"}\n\nevent: completed\ndata: {\"type\":\"completed\",\"response\":{...}}\n\n",
                 "schema": {
-                  "$ref": "#/components/schemas/ProviderEvent"
+                  "type": "string"
                 }
               }
             },
-            "description": "Successful image operation"
+            "description": "Bounded image progress stream"
           },
           "400": {
-            "description": "Invalid input"
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Invalid input or unsupported capability"
           },
           "401": {
+            "$ref": "#/components/responses/ErrorResponse",
             "description": "Bridge authentication required"
           },
+          "403": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Permission denied"
+          },
           "409": {
+            "$ref": "#/components/responses/ErrorResponse",
             "description": "Idempotency conflict"
           },
           "422": {
+            "$ref": "#/components/responses/ErrorResponse",
             "description": "Validation or safety rejection"
           },
           "429": {
+            "$ref": "#/components/responses/ErrorResponse",
             "description": "Rate limited"
           },
+          "500": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Internal bridge failure"
+          },
+          "502": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Upstream provider failure"
+          },
           "503": {
-            "description": "Overloaded"
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Bounded capacity exhausted"
           },
           "504": {
+            "$ref": "#/components/responses/ErrorResponse",
             "description": "Deadline exceeded"
           }
         },
@@ -1774,6 +2621,9 @@
           {
             "bridgeBearer": []
           }
+        ],
+        "tags": [
+          "images"
         ]
       }
     },
@@ -1785,6 +2635,7 @@
             "in": "query",
             "name": "limit",
             "schema": {
+              "default": 20,
               "maximum": 100,
               "minimum": 1,
               "type": "integer"
@@ -1801,9 +2652,42 @@
         ],
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "items": [
+                    {
+                      "display_name": "Codex app-server",
+                      "experimental": false,
+                      "name": "codex-app-server",
+                      "version": "0.1.0"
+                    }
+                  ]
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderPage"
+                }
+              }
+            },
             "description": "Provider page"
+          },
+          "400": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Invalid provider cursor"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Bridge authentication required"
           }
-        }
+        },
+        "security": [
+          {
+            "bridgeBearer": []
+          }
+        ],
+        "tags": [
+          "providers"
+        ]
       }
     },
     "/v1/providers/{provider}/capabilities": {
@@ -1815,6 +2699,7 @@
             "name": "provider",
             "required": true,
             "schema": {
+              "example": "codex-app-server",
               "type": "string"
             }
           },
@@ -1830,14 +2715,36 @@
           "200": {
             "content": {
               "application/json": {
+                "example": {
+                  "edits": true,
+                  "generation": true,
+                  "model": "gpt-image-2",
+                  "provider": "codex-app-server"
+                },
                 "schema": {
                   "$ref": "#/components/schemas/ProviderCapabilities"
                 }
               }
             },
-            "description": "Capabilities"
+            "description": "Provider capabilities"
+          },
+          "400": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Provider is unavailable or invalid"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Bridge authentication required"
           }
-        }
+        },
+        "security": [
+          {
+            "bridgeBearer": []
+          }
+        ],
+        "tags": [
+          "providers"
+        ]
       }
     },
     "/v1/sessions/{key}": {
@@ -1849,6 +2756,8 @@
             "name": "key",
             "required": true,
             "schema": {
+              "example": "gallery",
+              "maxLength": 256,
               "type": "string"
             }
           },
@@ -1856,6 +2765,7 @@
             "in": "query",
             "name": "provider",
             "schema": {
+              "example": "codex-app-server",
               "type": "string"
             }
           }
@@ -1864,10 +2774,23 @@
           "204": {
             "description": "Session deleted"
           },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Bridge authentication required"
+          },
           "404": {
+            "$ref": "#/components/responses/ErrorResponse",
             "description": "Session not found"
           }
-        }
+        },
+        "security": [
+          {
+            "bridgeBearer": []
+          }
+        ],
+        "tags": [
+          "sessions"
+        ]
       },
       "get": {
         "operationId": "getSession",
@@ -1877,6 +2800,8 @@
             "name": "key",
             "required": true,
             "schema": {
+              "example": "gallery",
+              "maxLength": 256,
               "type": "string"
             }
           },
@@ -1884,6 +2809,7 @@
             "in": "query",
             "name": "provider",
             "schema": {
+              "example": "codex-app-server",
               "type": "string"
             }
           }
@@ -1892,6 +2818,11 @@
           "200": {
             "content": {
               "application/json": {
+                "example": {
+                  "key": "gallery",
+                  "reused": true,
+                  "thread_id": "019f-thread"
+                },
                 "schema": {
                   "$ref": "#/components/schemas/SessionMetadata"
                 }
@@ -1899,16 +2830,51 @@
             },
             "description": "Persistent session"
           },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Bridge authentication required"
+          },
           "404": {
+            "$ref": "#/components/responses/ErrorResponse",
             "description": "Session not found"
           }
-        }
+        },
+        "security": [
+          {
+            "bridgeBearer": []
+          }
+        ],
+        "tags": [
+          "sessions"
+        ]
       }
     }
   },
   "servers": [
     {
       "url": "/"
+    }
+  ],
+  "tags": [
+    {
+      "description": "Liveness and provider readiness",
+      "name": "health"
+    },
+    {
+      "description": "Native lossless image operations",
+      "name": "images"
+    },
+    {
+      "description": "OpenAI-familiar Images API",
+      "name": "compatibility"
+    },
+    {
+      "description": "Provider discovery and capability negotiation",
+      "name": "providers"
+    },
+    {
+      "description": "Persistent session lifecycle",
+      "name": "sessions"
     }
   ]
 }
