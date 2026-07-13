@@ -41,6 +41,7 @@ pub fn negotiate_request(
     check_operation(request, capabilities)?;
     check_input_counts(request, capabilities)?;
     check_sessions(request, capabilities)?;
+    check_user_attribution(request, capabilities)?;
     negotiate_count(&mut effective_request, capabilities, &mut normalizations)?;
     negotiate_size(&mut effective_request, capabilities, &mut normalizations)?;
     negotiate_hints(&mut effective_request, capabilities, &mut normalizations)?;
@@ -67,6 +68,20 @@ pub fn negotiate_request(
         effective_request,
         normalizations,
     })
+}
+
+fn check_user_attribution(
+    request: &ImageRequest,
+    capabilities: &ProviderCapabilities,
+) -> Result<(), BridgeError> {
+    if request.user.is_none() || capabilities.user_attribution != SupportLevel::Unsupported {
+        return Ok(());
+    }
+    Err(unsupported(
+        capabilities,
+        "user",
+        "provider cannot consume the requested end-user attribution",
+    ))
 }
 
 fn check_model(
@@ -678,6 +693,7 @@ mod tests {
             moderation: BTreeSet::from([Moderation::Auto]),
             negative_prompt: SupportLevel::Emulated,
             revised_prompt: SupportLevel::Unsupported,
+            user_attribution: SupportLevel::Unsupported,
             reference_images: no_inputs(),
             edit_images: no_inputs(),
             masks: no_inputs(),
@@ -718,6 +734,19 @@ mod tests {
         assert_eq!(
             error.details.get("field"),
             Some(&serde_json::Value::String("routing.model".to_owned()))
+        );
+    }
+
+    #[test]
+    fn unsupported_user_attribution_is_never_silently_dropped() {
+        let mut request = ImageRequest::generate("test");
+        request.user = Some("opaque-caller".to_owned());
+        request.policies.compatibility = CompatibilityMode::BestEffort;
+        let error = negotiate_request(&request, &capabilities()).unwrap_err();
+        assert_eq!(error.code, ErrorCode::UnsupportedCapability);
+        assert_eq!(
+            error.details.get("field"),
+            Some(&serde_json::Value::String("user".to_owned()))
         );
     }
 

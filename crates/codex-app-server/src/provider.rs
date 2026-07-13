@@ -686,6 +686,7 @@ fn capabilities() -> ProviderCapabilities {
         moderation: BTreeSet::from([Moderation::Auto]),
         negative_prompt: SupportLevel::Emulated,
         revised_prompt: SupportLevel::Emulated,
+        user_attribution: SupportLevel::Unsupported,
         reference_images: references.clone(),
         edit_images: references,
         masks: no_input,

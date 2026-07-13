@@ -56,8 +56,10 @@ imagegen-bridge providers readiness --json
 Image-generation parameters covered by provider capabilities fail before
 provider work when strict and unsupported. `--compatibility normalize` or
 `best_effort` permits only the explicit fallbacks reported in
-`normalizations`. The native contract also accepts an opaque `--user` field,
-but the current Codex transports do not advertise or guarantee forwarding it.
+`normalizations`. The native contract also accepts an opaque `--user` field.
+Both current Codex transports reject it before provider work because neither
+upstream path proves that it consumes this attribution; the field is never
+silently discarded, including in `best_effort` mode.
 
 ## Sessions and server
 

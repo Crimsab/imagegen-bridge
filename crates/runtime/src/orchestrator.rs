@@ -775,6 +775,7 @@ mod tests {
             moderation: BTreeSet::from([Moderation::Auto]),
             negative_prompt: SupportLevel::Emulated,
             revised_prompt: SupportLevel::Native,
+            user_attribution: SupportLevel::Native,
             reference_images: unsupported_inputs.clone(),
             edit_images: unsupported_inputs.clone(),
             masks: unsupported_inputs,

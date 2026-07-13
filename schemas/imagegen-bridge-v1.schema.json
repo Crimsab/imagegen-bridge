@@ -1103,6 +1103,10 @@
         "sizes": {
           "description": "Supported size behavior.",
           "$ref": "#/$defs/SizeCapabilities"
+        },
+        "user_attribution": {
+          "description": "Opaque end-user attribution support.",
+          "$ref": "#/$defs/SupportLevel"
         }
       },
       "additionalProperties": false,
@@ -1122,6 +1126,7 @@
         "moderation",
         "negative_prompt",
         "revised_prompt",
+        "user_attribution",
         "reference_images",
         "edit_images",
         "masks",

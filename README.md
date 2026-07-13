@@ -113,7 +113,9 @@ imagegen-bridge providers readiness --json
 Requests default to strict compatibility. Unsupported combinations fail before
 generation. `--compatibility normalize` allows only transformations reported in
 the response's `normalizations` field. `--dry-run` validates and prints the
-request without starting Codex or opening output storage.
+request without starting Codex or opening output storage. The current Codex
+transports reject `--user` explicitly because upstream attribution support has
+not been proven; they never silently discard it.
 
 To use the experimental Responses provider, set
 `providers.codex_responses.enabled = true` in the TOML configuration, then

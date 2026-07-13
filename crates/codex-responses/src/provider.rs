@@ -528,6 +528,7 @@ fn capabilities(model: &str) -> Result<ProviderCapabilities, BridgeError> {
         moderation: BTreeSet::from([Moderation::Auto, Moderation::Low]),
         negative_prompt: SupportLevel::Emulated,
         revised_prompt: SupportLevel::Native,
+        user_attribution: SupportLevel::Unsupported,
         reference_images: references.clone(),
         edit_images: references,
         masks: InputCapabilities {

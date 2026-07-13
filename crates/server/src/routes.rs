@@ -669,6 +669,7 @@ mod tests {
                 moderation: [Moderation::Auto, Moderation::Low].into_iter().collect(),
                 negative_prompt: SupportLevel::Native,
                 revised_prompt: SupportLevel::Native,
+                user_attribution: SupportLevel::Native,
                 reference_images: inputs.clone(),
                 edit_images: inputs,
                 masks: InputCapabilities {

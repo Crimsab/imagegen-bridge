@@ -119,6 +119,8 @@ pub struct ProviderCapabilities {
     pub negative_prompt: SupportLevel,
     /// Revised-prompt availability.
     pub revised_prompt: SupportLevel,
+    /// Opaque end-user attribution support.
+    pub user_attribution: SupportLevel,
     /// Reference-image constraints.
     pub reference_images: InputCapabilities,
     /// Edit-image constraints.

@@ -211,6 +211,7 @@ export interface ProviderCapabilities {
   moderation: Moderation[];
   negative_prompt: SupportLevel;
   revised_prompt: SupportLevel;
+  user_attribution: SupportLevel;
   reference_images: InputCapabilities;
   edit_images: InputCapabilities;
   masks: InputCapabilities;

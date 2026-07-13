@@ -1339,6 +1339,10 @@
           "sizes": {
             "$ref": "#/components/schemas/SizeCapabilities",
             "description": "Supported size behavior."
+          },
+          "user_attribution": {
+            "$ref": "#/components/schemas/SupportLevel",
+            "description": "Opaque end-user attribution support."
           }
         },
         "required": [
@@ -1357,6 +1361,7 @@
           "moderation",
           "negative_prompt",
           "revised_prompt",
+          "user_attribution",
           "reference_images",
           "edit_images",
           "masks",
