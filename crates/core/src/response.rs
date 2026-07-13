@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de};
 
 use crate::{GenerationParameters, OutputFormat};
 
@@ -50,8 +50,7 @@ pub enum ImagePayload {
 }
 
 /// Metadata and payload for one generated image.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct GeneratedImage {
     /// Output payload or artifact reference.
     #[serde(flatten)]
@@ -66,6 +65,44 @@ pub struct GeneratedImage {
     pub bytes: u64,
     /// Lowercase hexadecimal SHA-256 digest.
     pub sha256: String,
+}
+
+impl<'de> Deserialize<'de> for GeneratedImage {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let mut fields = serde_json::Map::<String, serde_json::Value>::deserialize(deserializer)?;
+        let format = take_required(&mut fields, "format")?;
+        let width = take_required(&mut fields, "width")?;
+        let height = take_required(&mut fields, "height")?;
+        let bytes = take_required(&mut fields, "bytes")?;
+        let sha256 = take_required(&mut fields, "sha256")?;
+        let payload = serde_json::from_value(serde_json::Value::Object(fields))
+            .map_err(de::Error::custom)?;
+        Ok(Self {
+            payload,
+            format,
+            width,
+            height,
+            bytes,
+            sha256,
+        })
+    }
+}
+
+fn take_required<T, E>(
+    fields: &mut serde_json::Map<String, serde_json::Value>,
+    name: &'static str,
+) -> Result<T, E>
+where
+    T: serde::de::DeserializeOwned,
+    E: de::Error,
+{
+    let value = fields
+        .remove(name)
+        .ok_or_else(|| E::custom(format!("missing field `{name}`")))?;
+    serde_json::from_value(value).map_err(E::custom)
 }
 
 /// Optional provider usage accounting.
@@ -178,4 +215,33 @@ pub enum ProviderEvent {
         /// Normalized provider response before artifact publication.
         response: Box<ImageResponse>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    #[test]
+    fn generated_image_round_trips_and_rejects_unknown_fields() {
+        let image = GeneratedImage {
+            payload: ImagePayload::B64Json {
+                b64_json: "aW1hZ2U=".to_owned(),
+            },
+            format: OutputFormat::Png,
+            width: 1,
+            height: 1,
+            bytes: 5,
+            sha256: "0".repeat(64),
+        };
+        let encoded = serde_json::to_value(&image).unwrap();
+        assert_eq!(serde_json::from_value::<GeneratedImage>(encoded.clone()).unwrap(), image);
+
+        let mut unknown = encoded.as_object().unwrap().clone();
+        unknown.insert("unexpected".to_owned(), serde_json::json!(true));
+        assert!(
+            serde_json::from_value::<GeneratedImage>(serde_json::Value::Object(unknown)).is_err()
+        );
+    }
 }
