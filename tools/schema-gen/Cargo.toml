@@ -1,0 +1,21 @@
+[package]
+name = "imagegen-bridge-schema-gen"
+description = "Schema generator for Imagegen Bridge wire contracts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+imagegen-bridge-core = { path = "../../crates/core" }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "imagegen-bridge-schema-gen"
+path = "src/main.rs"
+

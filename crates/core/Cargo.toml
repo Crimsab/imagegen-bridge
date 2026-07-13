@@ -1,0 +1,16 @@
+[package]
+name = "imagegen-bridge-core"
+description = "Provider-neutral domain contract for Imagegen Bridge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/lib.rs"
+
