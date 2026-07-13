@@ -415,6 +415,14 @@ impl ImageProvider for AppServerImageProvider {
     }
 
     async fn check_ready(&self) -> Result<(), BridgeError> {
+        let account = self.rpc.request("account/read", json!({})).await?;
+        if account["account"].is_null() {
+            return Err(BridgeError::new(
+                ErrorCode::Authentication,
+                "Codex app-server requires authentication",
+            )
+            .with_provider("codex-app-server"));
+        }
         Ok(())
     }
 
@@ -703,5 +711,50 @@ mod tests {
         complete_turn(&mut server, "thread-1", "turn-2").await;
         let second = second.await.unwrap().unwrap();
         assert!(second.session.unwrap().reused);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires authenticated Codex OAuth and performs a real image generation"]
+    async fn live_codex_generates_a_verified_image() {
+        if std::env::var("IMAGEGEN_BRIDGE_LIVE_CODEX").as_deref() != Ok("1") {
+            return;
+        }
+        let process = Arc::new(
+            CodexProcess::spawn(crate::CodexProcessConfig {
+                rpc: RpcConfig {
+                    request_timeout: Duration::from_secs(30),
+                    ..RpcConfig::default()
+                },
+                ..crate::CodexProcessConfig::default()
+            })
+            .await
+            .unwrap(),
+        );
+        let provider = AppServerImageProvider::with_process(
+            Arc::clone(&process),
+            Arc::new(MemorySessionBindingStore::default()),
+            AppServerProviderConfig {
+                codex_model: None,
+                cwd: std::env::current_dir().unwrap(),
+                image_limits: ImageLimits::default(),
+            },
+        );
+        provider.check_ready().await.unwrap();
+        let response = provider
+            .execute(
+                ImageRequest::generate(
+                    "A single cobalt-blue circle centered on a plain white background",
+                ),
+                ProviderContext {
+                    request_id: "live-test".to_owned(),
+                    deadline: Instant::now() + Duration::from_secs(240),
+                    cancellation: CancellationToken::new(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.data.len(), 1);
+        assert!(response.data[0].bytes > 0);
+        provider.shutdown().await.unwrap();
     }
 }
