@@ -15,7 +15,7 @@ concurrency:
 jobs:
   rust:
     name: Rust contract
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, homelab-main, imagegen-bridge]
     timeout-minutes: 20
     env:
       RUSTFLAGS: -D warnings
@@ -50,7 +50,7 @@ jobs:
 
   python-sdk:
     name: Python SDK
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, homelab-main, imagegen-bridge]
     timeout-minutes: 15
     steps:
       - name: Check out repository
@@ -95,7 +95,7 @@ jobs:
 
   typescript-sdk:
     name: TypeScript SDK
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, homelab-main, imagegen-bridge]
     timeout-minutes: 15
     steps:
       - name: Check out repository
@@ -144,7 +144,7 @@ jobs:
 
   container:
     name: Hardened container
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, homelab-main, imagegen-bridge]
     timeout-minutes: 20
     steps:
       - name: Check out repository
