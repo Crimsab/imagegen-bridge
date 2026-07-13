@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "crates/artifacts",
   "crates/core",
   "crates/imagegen-bridge",
   "tools/schema-gen",
