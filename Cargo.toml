@@ -3,6 +3,7 @@ members = [
   "crates/artifacts",
   "crates/codex-app-server",
   "crates/codex-responses",
+  "crates/config",
   "crates/core",
   "crates/imagegen-bridge",
   "crates/runtime",

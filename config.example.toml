@@ -1,0 +1,97 @@
+version = 1
+default_provider = "codex-app-server"
+
+[runtime]
+default_timeout_ms = 300000
+cancellation_grace_ms = 1000
+shutdown_grace_ms = 10000
+
+[runtime.global]
+max_concurrent = 16
+max_queued = 64
+
+[runtime.provider_default]
+max_concurrent = 4
+max_queued = 16
+
+[runtime.request]
+max_prompt_bytes = 131072
+max_negative_prompt_bytes = 65536
+max_outputs = 16
+max_inputs = 16
+max_inline_encoded_bytes = 67108864
+max_edge = 16384
+max_timeout_ms = 1800000
+max_identifier_bytes = 256
+
+[runtime.idempotency]
+max_entries = 10000
+completed_ttl_secs = 86400
+in_flight_ttl_secs = 1860
+
+[inputs]
+local_roots = ["."]
+
+[inputs.remote]
+enabled = false
+allowed_hosts = []
+allowed_ports = [80, 443]
+allow_private_networks = false
+max_redirects = 3
+timeout_ms = 20000
+max_url_bytes = 8192
+
+[artifacts]
+root = "./data/artifacts"
+max_base64_chars = 134217728
+
+[artifacts.image]
+max_encoded_bytes = 33554432
+max_edge = 16384
+max_pixels = 67108864
+max_decode_alloc = 268435456
+
+[artifacts.remote_output]
+enabled = false
+allowed_hosts = []
+allowed_ports = [80, 443]
+allow_private_networks = false
+max_redirects = 3
+timeout_ms = 20000
+max_url_bytes = 8192
+
+[artifacts.retention]
+max_age_secs = 604800
+max_scan_entries = 100000
+
+[providers.codex_app_server]
+enabled = true
+executable = "codex"
+args = []
+session_database = "./data/state.sqlite3"
+rpc_max_message_bytes = 67108864
+rpc_timeout_ms = 60000
+notification_capacity = 32
+shutdown_timeout_ms = 5000
+restart_backoff_ms = 250
+
+[providers.codex_responses]
+# Private upstream: this remains explicit opt-in and experimental.
+enabled = false
+endpoint = "https://chatgpt.com/backend-api/codex/responses"
+responses_model = "gpt-5.5"
+image_model = "gpt-image-2"
+
+[providers.openai]
+enabled = false
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+organization_env = "OPENAI_ORG_ID"
+project_env = "OPENAI_PROJECT_ID"
+
+[server]
+bind = "127.0.0.1:8787"
+max_body_bytes = 83886080
+max_header_bytes = 32768
+max_connections = 256
+read_timeout_ms = 30000

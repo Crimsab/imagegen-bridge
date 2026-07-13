@@ -1,18 +1,26 @@
 [package]
-name = "imagegen-bridge"
-description = "Rust SDK facade for Imagegen Bridge"
+name = "imagegen-bridge-config"
+description = "Layered, provenance-aware configuration for Imagegen Bridge"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 
 [dependencies]
 imagegen-bridge-artifacts = { path = "../artifacts", version = "0.1.0" }
-imagegen-bridge-config = { path = "../config", version = "0.1.0" }
 imagegen-bridge-core = { path = "../core", version = "0.1.0" }
 imagegen-bridge-runtime = { path = "../runtime", version = "0.1.0" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_path_to_error = "0.1"
+toml = "0.9"
+url = "2"
+
+[dev-dependencies]
+tempfile = "3.27.0"
 
 [lints]
 workspace = true
