@@ -9,11 +9,12 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+imagegen-bridge-artifacts = { path = "../artifacts", version = "0.1.0" }
 imagegen-bridge-core = { path = "../core", version = "0.1.0" }
+imagegen-bridge-runtime = { path = "../runtime", version = "0.1.0" }
 
 [lints]
 workspace = true
 
 [lib]
 path = "src/lib.rs"
-

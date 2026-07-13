@@ -741,7 +741,9 @@ dependencies = [
 name = "imagegen-bridge"
 version = "0.1.0"
 dependencies = [
+ "imagegen-bridge-artifacts",
  "imagegen-bridge-core",
+ "imagegen-bridge-runtime",
 ]
 
 [[package]]
@@ -755,6 +757,7 @@ dependencies = [
  "imagegen-bridge-core",
  "imagesize",
  "reqwest",
+ "serde",
  "serde_json",
  "sha2",
  "tempfile",
@@ -816,11 +819,19 @@ name = "imagegen-bridge-runtime"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64",
+ "imagegen-bridge-artifacts",
  "imagegen-bridge-codex-app-server",
  "imagegen-bridge-core",
+ "serde",
+ "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "tokio-rusqlite",
+ "tokio-util",
+ "url",
+ "uuid",
 ]
 
 [[package]]
