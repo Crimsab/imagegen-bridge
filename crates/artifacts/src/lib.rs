@@ -2,8 +2,10 @@
 
 mod input;
 mod inspect;
+mod remote;
 mod store;
 
 pub use input::*;
 pub use inspect::*;
+pub use remote::*;
 pub use store::*;
