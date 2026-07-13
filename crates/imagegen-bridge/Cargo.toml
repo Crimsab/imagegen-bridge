@@ -10,14 +10,22 @@ repository.workspace = true
 
 [dependencies]
 imagegen-bridge-artifacts = { path = "../artifacts", version = "0.1.0" }
+imagegen-bridge-codex-app-server = { path = "../codex-app-server", version = "0.1.0", optional = true }
 imagegen-bridge-config = { path = "../config", version = "0.1.0" }
 imagegen-bridge-core = { path = "../core", version = "0.1.0" }
 imagegen-bridge-codex-responses = { path = "../codex-responses", version = "0.1.0", optional = true }
 imagegen-bridge-runtime = { path = "../runtime", version = "0.1.0" }
+tokio = { version = "1", features = ["fs"] }
+url = "2"
 
 [features]
-default = []
+default = ["codex-app-server"]
+codex-app-server = ["dep:imagegen-bridge-codex-app-server"]
 codex-responses = ["dep:imagegen-bridge-codex-responses"]
+
+[dev-dependencies]
+async-trait = "0.1"
+tempfile = "3.27.0"
 
 [lints]
 workspace = true

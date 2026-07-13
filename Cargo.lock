@@ -753,11 +753,16 @@ dependencies = [
 name = "imagegen-bridge"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "imagegen-bridge-artifacts",
+ "imagegen-bridge-codex-app-server",
  "imagegen-bridge-codex-responses",
  "imagegen-bridge-config",
  "imagegen-bridge-core",
  "imagegen-bridge-runtime",
+ "tempfile",
+ "tokio",
+ "url",
 ]
 
 [[package]]

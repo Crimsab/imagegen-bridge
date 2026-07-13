@@ -9,7 +9,9 @@ use std::{
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use imagegen_bridge_artifacts::{ImageLimits, inspect_image};
+use imagegen_bridge_artifacts::{
+    ArtifactStore, ImageLimits, InputLoader, RemoteImageFetcher, inspect_image,
+};
 use imagegen_bridge_core::{
     Background, BridgeError, ErrorCode, GeneratedImage, ImageOperation, ImagePayload,
     ImageProvider, ImageRequest, ImageResponse, InputCapabilities, Moderation, OutputFormat,
@@ -70,6 +72,50 @@ pub struct AppServerProviderConfig {
     pub image_limits: ImageLimits,
 }
 
+/// Secure input loading and bridge-owned staging for app-server references.
+#[derive(Clone)]
+pub struct AppServerReferenceInputs {
+    loader: Arc<InputLoader>,
+    remote_fetcher: Option<RemoteImageFetcher>,
+    staging_store: Arc<ArtifactStore>,
+    max_aggregate_bytes: u64,
+}
+
+impl std::fmt::Debug for AppServerReferenceInputs {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AppServerReferenceInputs")
+            .field("loader", &"[CAPABILITY ROOTS]")
+            .field("remote_fetcher", &self.remote_fetcher.is_some())
+            .field("staging_store", &"[BRIDGE-OWNED ROOT]")
+            .field("max_aggregate_bytes", &self.max_aggregate_bytes)
+            .finish()
+    }
+}
+
+impl AppServerReferenceInputs {
+    /// Creates a reference loader with a per-request aggregate decoded-byte bound.
+    pub fn new(
+        loader: Arc<InputLoader>,
+        remote_fetcher: Option<RemoteImageFetcher>,
+        staging_store: Arc<ArtifactStore>,
+        max_aggregate_bytes: u64,
+    ) -> Result<Self, BridgeError> {
+        if max_aggregate_bytes == 0 {
+            return Err(BridgeError::new(
+                ErrorCode::Configuration,
+                "app-server reference byte limit must be greater than zero",
+            ));
+        }
+        Ok(Self {
+            loader,
+            remote_fetcher,
+            staging_store,
+            max_aggregate_bytes,
+        })
+    }
+}
+
 /// Provider backed by one initialized app-server connection.
 pub struct AppServerImageProvider {
     fixed_rpc: Option<Arc<AppServerRpc>>,
@@ -77,6 +123,7 @@ pub struct AppServerImageProvider {
     sessions: Arc<dyn SessionBindingStore>,
     thread_locks: Mutex<HashMap<String, Weak<Mutex<()>>>>,
     config: AppServerProviderConfig,
+    reference_inputs: Option<AppServerReferenceInputs>,
 }
 
 impl std::fmt::Debug for AppServerImageProvider {
@@ -104,6 +151,25 @@ impl AppServerImageProvider {
             sessions,
             thread_locks: Mutex::new(HashMap::new()),
             config,
+            reference_inputs: None,
+        }
+    }
+
+    /// Creates a provider over an existing connection with secure references.
+    #[must_use]
+    pub fn new_with_inputs(
+        rpc: Arc<AppServerRpc>,
+        sessions: Arc<dyn SessionBindingStore>,
+        config: AppServerProviderConfig,
+        reference_inputs: AppServerReferenceInputs,
+    ) -> Self {
+        Self {
+            fixed_rpc: Some(rpc),
+            process: None,
+            sessions,
+            thread_locks: Mutex::new(HashMap::new()),
+            config,
+            reference_inputs: Some(reference_inputs),
         }
     }
 
@@ -120,6 +186,25 @@ impl AppServerImageProvider {
             sessions,
             thread_locks: Mutex::new(HashMap::new()),
             config,
+            reference_inputs: None,
+        }
+    }
+
+    /// Creates an owned provider with secure bridge-staged reference inputs.
+    #[must_use]
+    pub fn with_process_and_inputs(
+        process: Arc<CodexProcess>,
+        sessions: Arc<dyn SessionBindingStore>,
+        config: AppServerProviderConfig,
+        reference_inputs: AppServerReferenceInputs,
+    ) -> Self {
+        Self {
+            fixed_rpc: None,
+            process: Some(process),
+            sessions,
+            thread_locks: Mutex::new(HashMap::new()),
+            config,
+            reference_inputs: Some(reference_inputs),
         }
     }
 
@@ -310,7 +395,7 @@ impl AppServerImageProvider {
         request: &ImageRequest,
         context: &ProviderContext,
     ) -> Result<TurnImages, BridgeError> {
-        let paths = reference_paths(request)?;
+        let paths = self.reference_paths(request).await?;
         let mut input = vec![json!({
             "type": "text",
             "text": turn_prompt(&request.prompt, &paths),
@@ -382,6 +467,52 @@ impl AppServerImageProvider {
                 });
             }
         }
+    }
+
+    async fn reference_paths(&self, request: &ImageRequest) -> Result<Vec<PathBuf>, BridgeError> {
+        let inputs = request_images(request);
+        if inputs.is_empty() {
+            return Ok(Vec::new());
+        }
+        let materializer = self.reference_inputs.as_ref().ok_or_else(|| {
+            BridgeError::new(
+                ErrorCode::Input,
+                "app-server reference inputs require a configured secure staging store",
+            )
+        })?;
+        let mut total = 0_u64;
+        let mut paths = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            let loaded = match &input.source {
+                imagegen_bridge_core::ImageSource::Url { url } => {
+                    materializer
+                        .remote_fetcher
+                        .as_ref()
+                        .ok_or_else(|| {
+                            BridgeError::new(ErrorCode::Input, "remote image inputs are disabled")
+                        })?
+                        .fetch(url)
+                        .await?
+                }
+                _ => materializer.loader.load(&input)?,
+            };
+            total = total.checked_add(loaded.metadata.bytes).ok_or_else(|| {
+                BridgeError::new(ErrorCode::Input, "reference image bytes overflowed")
+            })?;
+            if total > materializer.max_aggregate_bytes {
+                return Err(BridgeError::new(
+                    ErrorCode::Input,
+                    "aggregate reference images exceed the configured byte limit",
+                ));
+            }
+            let stored = materializer.staging_store.publish(
+                &loaded.bytes,
+                input.filename.as_deref().or(Some("reference")),
+                Some(loaded.metadata.format),
+            )?;
+            paths.push(stored.path);
+        }
+        Ok(paths)
     }
 
     async fn interrupt(
@@ -526,25 +657,15 @@ fn capabilities() -> ProviderCapabilities {
     }
 }
 
-fn reference_paths(request: &ImageRequest) -> Result<Vec<PathBuf>, BridgeError> {
-    let inputs = match &request.operation {
+fn request_images(request: &ImageRequest) -> Vec<imagegen_bridge_core::ImageInput> {
+    match &request.operation {
         ImageOperation::Generate { reference_images } => reference_images.clone(),
         ImageOperation::Edit {
             images,
             reference_images,
             ..
         } => images.iter().chain(reference_images).cloned().collect(),
-    };
-    inputs
-        .into_iter()
-        .map(|input| match input.source {
-            imagegen_bridge_core::ImageSource::File { path } => Ok(path),
-            _ => Err(BridgeError::new(
-                ErrorCode::Input,
-                "app-server references must be materialized as local files",
-            )),
-        })
-        .collect()
+    }
 }
 
 fn turn_prompt(prompt: &str, paths: &[PathBuf]) -> String {
@@ -757,6 +878,75 @@ mod tests {
         complete_turn(&mut server, "thread-1", "turn-2").await;
         let second = second.await.unwrap().unwrap();
         assert!(second.session.unwrap().reused);
+    }
+
+    #[tokio::test]
+    async fn stages_inline_references_under_bridge_owned_storage() {
+        let (rpc, _server) = rpc_and_server().await;
+        let directory = tempfile::tempdir().unwrap();
+        let input_root = directory.path().join("inputs");
+        let staging_root = directory.path().join("staging");
+        fs::create_dir(&input_root).unwrap();
+        let limits = ImageLimits::default();
+        let reference_inputs = AppServerReferenceInputs::new(
+            Arc::new(InputLoader::new([input_root], limits).unwrap()),
+            None,
+            Arc::new(ArtifactStore::new(&staging_root, limits).unwrap()),
+            1024 * 1024,
+        )
+        .unwrap();
+        let provider = AppServerImageProvider::new_with_inputs(
+            rpc,
+            Arc::new(MemorySessionBindingStore::default()),
+            AppServerProviderConfig {
+                codex_model: None,
+                cwd: directory.path().to_owned(),
+                image_limits: limits,
+            },
+            reference_inputs,
+        );
+        let mut request = request();
+        request.operation = ImageOperation::Generate {
+            reference_images: vec![imagegen_bridge_core::ImageInput {
+                source: imagegen_bridge_core::ImageSource::Base64 {
+                    data: ONE_PIXEL_PNG.to_owned(),
+                },
+                media_type: Some("image/png".to_owned()),
+                filename: Some("visual reference.png".to_owned()),
+            }],
+        };
+
+        let paths = provider.reference_paths(&request).await.unwrap();
+        assert_eq!(paths.len(), 1);
+        assert!(paths[0].starts_with(staging_root.canonicalize().unwrap()));
+        assert!(paths[0].is_file());
+        assert!(!paths[0].to_string_lossy().contains("visual reference"));
+    }
+
+    #[tokio::test]
+    async fn rejects_references_when_secure_staging_is_not_configured() {
+        let (rpc, _server) = rpc_and_server().await;
+        let provider = AppServerImageProvider::new(
+            rpc,
+            Arc::new(MemorySessionBindingStore::default()),
+            AppServerProviderConfig {
+                codex_model: None,
+                cwd: PathBuf::from("/tmp"),
+                image_limits: ImageLimits::default(),
+            },
+        );
+        let mut request = request();
+        request.operation = ImageOperation::Generate {
+            reference_images: vec![imagegen_bridge_core::ImageInput {
+                source: imagegen_bridge_core::ImageSource::File {
+                    path: PathBuf::from("outside.png"),
+                },
+                media_type: None,
+                filename: None,
+            }],
+        };
+        let error = provider.reference_paths(&request).await.unwrap_err();
+        assert_eq!(error.code, ErrorCode::Input);
     }
 
     #[tokio::test]
