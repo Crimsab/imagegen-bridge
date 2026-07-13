@@ -48,9 +48,11 @@ async with AsyncImagegenBridgeClient(
     response = await client.images.generate(request)
 ```
 
-Use `client.images.stream(request)` for typed started/progress/partial/completed
-events. `BridgeAPIError` exposes HTTP status, standard error fields, stable
-bridge code, retryability, safe provider/upstream IDs, details, and request ID.
+Use `client.images.stream(request)` for typed lifecycle events. The client can
+decode progress and partial-image events, but the current server route forwards
+only start/completion/error. `BridgeAPIError` exposes HTTP status, standard
+error fields, stable bridge code, retryability, safe provider/upstream IDs,
+details, and request ID.
 
 ## TypeScript
 
@@ -75,7 +77,7 @@ const response = await client.images.generate({
 Pass `{ signal }` or `{ timeoutMs }` per request. Streaming is an
 `AsyncIterable<StreamEvent>` and cancels the HTTP body when iteration ends.
 
-## Contract verification and private packaging
+## Contract verification and packaging
 
 Python and TypeScript tests launch the same Rust black-box server in
 `tools/sdk-mock-server`. It consumes fixtures from `fixtures/sdk`, and the
@@ -83,5 +85,5 @@ fixture server itself deserializes request, response, capability, and session
 fixtures with the Rust domain types. This catches drift in either direction.
 
 CI validates Rust docs/types, Python Ruff+mypy+pytest+wheel/sdist, TypeScript
-Biome+strict TypeScript+Bun tests+Node smoke test+package contents. No crate,
-wheel, npm package, binary, or image is published during private development.
+Biome+strict TypeScript+Bun tests+Node smoke test+package contents. Packages are
+built and inspected in CI, but none are published yet.

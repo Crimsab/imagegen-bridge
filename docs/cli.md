@@ -5,7 +5,7 @@ configuration, provider registry, runtime limits, and artifact verification as
 the Rust facade and HTTP server. It never requires an `OPENAI_API_KEY` for the
 Codex providers; they inherit the existing Codex OAuth login.
 
-Build the private-development binary with:
+Build the binary from a local checkout with:
 
 ```sh
 cargo build --release -p imagegen-bridge-cli
@@ -53,9 +53,11 @@ imagegen-bridge providers capabilities --json
 imagegen-bridge providers readiness --json
 ```
 
-Unsupported strict parameters fail before provider work. They are never
-silently discarded. `--compatibility normalize` or `best_effort` permits only
-the explicit fallbacks reported in `normalizations`.
+Image-generation parameters covered by provider capabilities fail before
+provider work when strict and unsupported. `--compatibility normalize` or
+`best_effort` permits only the explicit fallbacks reported in
+`normalizations`. The native contract also accepts an opaque `--user` field,
+but the current Codex transports do not advertise or guarantee forwarding it.
 
 ## Sessions and server
 

@@ -29,12 +29,11 @@ docker compose up --build -d
 docker compose ps
 ```
 
-The included lab Compose file joins the external `homelab_network`, binds the
-API to host loopback by default, drops every Linux capability, blocks privilege
-escalation, limits PIDs, mounts the root filesystem read-only, and uses bounded
-tmpfs mounts. Change the network deliberately for a non-lab deployment. Do not
-bind the API publicly without bridge bearer authentication and a trusted TLS
-reverse proxy.
+The included Compose file binds the API to host loopback by default, drops every
+Linux capability, blocks privilege escalation, limits PIDs, mounts the root
+filesystem read-only, and uses bounded tmpfs mounts. It uses Compose's default
+project network. Do not bind the API publicly without bridge bearer
+authentication and a trusted TLS reverse proxy.
 
 The default layout is:
 

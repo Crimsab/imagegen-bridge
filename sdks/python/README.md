@@ -1,7 +1,7 @@
 # Imagegen Bridge Python SDK
 
-Typed sync and async clients for the normalized Imagegen Bridge HTTP API.
-Package publication is intentionally disabled while the repository is private.
+Typed sync and async clients for the normalized Imagegen Bridge HTTP API. The
+package is not published yet; build it from this repository.
 
 ```python
 from imagegen_bridge import AsyncImagegenBridgeClient, ImageRequest

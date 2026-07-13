@@ -13,6 +13,7 @@ network clients. Version 1 evolves additively; breaking wire changes use `/v2`.
 | `GET` | `/v1/providers` | Cursor-paginated provider inventory | `200` |
 | `GET` | `/v1/providers/{name}/capabilities` | Dynamic model capabilities | `200` |
 | `POST` | `/v1/images` | Lossless normalized generation/edit request | `200` |
+| `POST` | `/v1/images/stream` | Bounded native SSE lifecycle | `200` |
 | `POST` | `/v1/images/generations` | OpenAI-familiar generation compatibility | `200` |
 | `POST` | `/v1/images/edits` | Multipart edit compatibility | `200` |
 | `GET` | `/v1/openapi.json` | Checked OpenAPI 3.1 contract | `200` |
@@ -20,6 +21,11 @@ network clients. Version 1 evolves additively; breaking wire changes use `/v2`.
 Native generation accepts the versioned `ImageRequest` schema and returns
 `ImageResponse`. `Idempotency-Key` may be supplied for POST requests. The bridge
 returns an `x-request-id` response header for every request.
+
+The current SSE handler emits `started`, then `completed` or `error`, with
+heartbeat comments and disconnect cancellation. Although the wire contract and
+SDKs define progress/partial-image events, provider partial payloads are not yet
+forwarded by this server path.
 
 ## Authentication
 

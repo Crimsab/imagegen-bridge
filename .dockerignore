@@ -1,0 +1,17 @@
+.git
+target
+artifacts
+data
+coverage
+dist
+build
+node_modules
+sdks
+live-test-output
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*

@@ -83,6 +83,7 @@ responses_model = "gpt-5.5"
 image_model = "gpt-image-2"
 
 [providers.openai]
+# Reserved configuration surface. The official API-key provider is not registered yet.
 enabled = false
 base_url = "https://api.openai.com/v1"
 api_key_env = "OPENAI_API_KEY"
