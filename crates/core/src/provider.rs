@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     BridgeError, ImageRequest, ImageResponse, ProviderCapabilities, ProviderDescriptor,
-    ProviderEvent,
+    ProviderEvent, SessionMetadata,
 };
 
 /// Stream returned by providers that expose incremental progress.
@@ -56,6 +56,22 @@ pub trait ImageProvider: Send + Sync {
 
     /// Performs a non-generating auth/readiness check.
     async fn check_ready(&self) -> Result<(), BridgeError>;
+
+    /// Looks up caller-visible persistent session metadata when supported.
+    async fn get_session(&self, _key: &str) -> Result<SessionMetadata, BridgeError> {
+        Err(BridgeError::new(
+            crate::ErrorCode::UnsupportedCapability,
+            "provider does not expose persistent sessions",
+        ))
+    }
+
+    /// Deletes a persistent session binding when supported.
+    async fn delete_session(&self, _key: &str) -> Result<(), BridgeError> {
+        Err(BridgeError::new(
+            crate::ErrorCode::UnsupportedCapability,
+            "provider does not expose persistent sessions",
+        ))
+    }
 
     /// Releases provider resources during graceful shutdown.
     async fn shutdown(&self) -> Result<(), BridgeError> {

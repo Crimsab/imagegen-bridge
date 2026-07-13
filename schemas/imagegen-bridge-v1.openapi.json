@@ -1,0 +1,1914 @@
+{
+  "components": {
+    "schemas": {
+      "AspectRatio": {
+        "examples": [
+          "1:1",
+          "3:2",
+          "16:9"
+        ],
+        "pattern": "^[1-9][0-9]*:[1-9][0-9]*$",
+        "type": "string"
+      },
+      "Background": {
+        "description": "Requested background behavior.",
+        "oneOf": [
+          {
+            "const": "auto",
+            "description": "Wire value `auto`.",
+            "type": "string"
+          },
+          {
+            "const": "opaque",
+            "description": "Wire value `opaque`.",
+            "type": "string"
+          },
+          {
+            "const": "transparent",
+            "description": "Wire value `transparent`.",
+            "type": "string"
+          }
+        ]
+      },
+      "BridgeError": {
+        "additionalProperties": false,
+        "description": "Public, redaction-safe error returned by the bridge.",
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ErrorCode",
+            "description": "Stable machine-readable code."
+          },
+          "details": {
+            "additionalProperties": true,
+            "description": "Structured, redaction-safe diagnostic values.",
+            "type": "object"
+          },
+          "message": {
+            "description": "Human-readable message safe to show to a client.",
+            "type": "string"
+          },
+          "provider": {
+            "description": "Optional provider name, never a credential or account identifier.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "retryable": {
+            "description": "Whether retrying later may succeed without changing the request.",
+            "type": "boolean"
+          },
+          "upstream_request_id": {
+            "description": "Safe provider correlation ID when one exists.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "retryable"
+        ],
+        "type": "object"
+      },
+      "CompatibilityMode": {
+        "description": "Compatibility policy used during provider negotiation.",
+        "oneOf": [
+          {
+            "const": "strict",
+            "description": "Wire value `strict`.",
+            "type": "string"
+          },
+          {
+            "const": "normalize",
+            "description": "Wire value `normalize`.",
+            "type": "string"
+          },
+          {
+            "const": "best_effort",
+            "description": "Wire value `best_effort`.",
+            "type": "string"
+          }
+        ]
+      },
+      "ErrorCode": {
+        "description": "Stable machine-readable error classification.",
+        "oneOf": [
+          {
+            "const": "invalid_request",
+            "description": "A request failed intrinsic validation.",
+            "type": "string"
+          },
+          {
+            "const": "unsupported_capability",
+            "description": "The selected provider cannot honor the request.",
+            "type": "string"
+          },
+          {
+            "const": "configuration",
+            "description": "Configuration is absent or invalid.",
+            "type": "string"
+          },
+          {
+            "const": "authentication",
+            "description": "Provider authentication is absent, expired, or rejected.",
+            "type": "string"
+          },
+          {
+            "const": "permission_denied",
+            "description": "The caller is authenticated but not entitled to the operation.",
+            "type": "string"
+          },
+          {
+            "const": "safety_rejected",
+            "description": "A safety system rejected the request.",
+            "type": "string"
+          },
+          {
+            "const": "rate_limited",
+            "description": "A provider or bridge rate limit was reached.",
+            "type": "string"
+          },
+          {
+            "const": "overloaded",
+            "description": "Admission control rejected the request because capacity is exhausted.",
+            "type": "string"
+          },
+          {
+            "const": "timeout",
+            "description": "The operation exceeded its deadline.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "The caller or runtime cancelled the operation.",
+            "type": "string"
+          },
+          {
+            "const": "upstream",
+            "description": "An upstream provider returned an invalid or unsuccessful response.",
+            "type": "string"
+          },
+          {
+            "const": "protocol",
+            "description": "The upstream protocol no longer matches the supported schema.",
+            "type": "string"
+          },
+          {
+            "const": "input",
+            "description": "An input could not be loaded or validated.",
+            "type": "string"
+          },
+          {
+            "const": "artifact",
+            "description": "A generated artifact could not be verified or published.",
+            "type": "string"
+          },
+          {
+            "const": "session",
+            "description": "A requested session does not exist or cannot be accessed.",
+            "type": "string"
+          },
+          {
+            "const": "idempotency_conflict",
+            "description": "An idempotency key conflicts with a different request.",
+            "type": "string"
+          },
+          {
+            "const": "internal",
+            "description": "An unexpected internal failure occurred.",
+            "type": "string"
+          }
+        ]
+      },
+      "GeneratedImage": {
+        "description": "Metadata and payload for one generated image.",
+        "oneOf": [
+          {
+            "description": "Base64 JSON response data.",
+            "properties": {
+              "b64_json": {
+                "description": "Base64-encoded bytes.",
+                "type": "string"
+              },
+              "type": {
+                "const": "b64_json",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "b64_json"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Provider-hosted or bridge-hosted URL.",
+            "properties": {
+              "type": {
+                "const": "url",
+                "type": "string"
+              },
+              "url": {
+                "description": "Output URL.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "url"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Bridge-owned artifact identifier.",
+            "properties": {
+              "id": {
+                "description": "Opaque artifact ID.",
+                "type": "string"
+              },
+              "name": {
+                "description": "Optional client-safe relative name.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "const": "artifact",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "No body was requested.",
+            "properties": {
+              "type": {
+                "const": "metadata",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "bytes": {
+            "description": "Verified encoded byte length.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "format": {
+            "$ref": "#/components/schemas/OutputFormat",
+            "description": "Verified output format."
+          },
+          "height": {
+            "description": "Verified height in pixels.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sha256": {
+            "description": "Lowercase hexadecimal SHA-256 digest.",
+            "type": "string"
+          },
+          "width": {
+            "description": "Verified width in pixels.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "format",
+          "width",
+          "height",
+          "bytes",
+          "sha256"
+        ],
+        "type": "object",
+        "unevaluatedProperties": false
+      },
+      "GenerationParameters": {
+        "additionalProperties": false,
+        "description": "Image-generation parameters shared across providers.",
+        "properties": {
+          "aspect_ratio": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AspectRatio"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional aspect-ratio hint."
+          },
+          "background": {
+            "$ref": "#/components/schemas/Background",
+            "default": "auto",
+            "description": "Requested background behavior."
+          },
+          "moderation": {
+            "$ref": "#/components/schemas/Moderation",
+            "default": "auto",
+            "description": "Requested moderation behavior."
+          },
+          "n": {
+            "default": 1,
+            "description": "Number of requested output images.",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "output_compression": {
+            "description": "Compression from 0 to 100 for JPEG or WebP.",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "output_format": {
+            "$ref": "#/components/schemas/OutputFormat",
+            "default": "png",
+            "description": "Requested encoded image format."
+          },
+          "partial_images": {
+            "default": 0,
+            "description": "Requested number of partial progress images.",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "quality": {
+            "$ref": "#/components/schemas/Quality",
+            "default": "auto",
+            "description": "Requested quality."
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Resolution"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional coarse resolution hint."
+          },
+          "size": {
+            "$ref": "#/components/schemas/ImageSize",
+            "default": "auto",
+            "description": "Automatic or explicit output size."
+          }
+        },
+        "type": "object"
+      },
+      "ImageInput": {
+        "description": "One image input plus optional metadata.",
+        "oneOf": [
+          {
+            "description": "Path resolved under configured allowed roots.",
+            "properties": {
+              "path": {
+                "description": "Local filesystem path.",
+                "type": "string"
+              },
+              "type": {
+                "const": "file",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "path"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Remote HTTP(S) URL, only when remote loading is enabled.",
+            "properties": {
+              "type": {
+                "const": "url",
+                "type": "string"
+              },
+              "url": {
+                "description": "Remote URL.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "url"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "RFC 2397 data URL.",
+            "properties": {
+              "data_url": {
+                "description": "Complete data URL.",
+                "type": "string"
+              },
+              "type": {
+                "const": "data_url",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "data_url"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Base64-encoded image body.",
+            "properties": {
+              "data": {
+                "description": "Encoded body without a data URL prefix.",
+                "type": "string"
+              },
+              "type": {
+                "const": "base64",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "data"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "filename": {
+            "description": "Optional safe logical filename.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "media_type": {
+            "description": "Optional expected media type.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object",
+        "unevaluatedProperties": false
+      },
+      "ImageRequest": {
+        "description": "A complete provider-neutral image request.",
+        "oneOf": [
+          {
+            "description": "Generate an image, optionally using reference images.",
+            "properties": {
+              "operation": {
+                "const": "generate",
+                "type": "string"
+              },
+              "reference_images": {
+                "description": "Images used as visual references.",
+                "items": {
+                  "$ref": "#/components/schemas/ImageInput"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "operation"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Edit one or more source images with an optional mask and references.",
+            "properties": {
+              "images": {
+                "description": "Source images to edit.",
+                "items": {
+                  "$ref": "#/components/schemas/ImageInput"
+                },
+                "type": "array"
+              },
+              "mask": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ImageInput"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Optional edit mask."
+              },
+              "operation": {
+                "const": "edit",
+                "type": "string"
+              },
+              "reference_images": {
+                "description": "Additional visual references.",
+                "items": {
+                  "$ref": "#/components/schemas/ImageInput"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "operation",
+              "images"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "idempotency_key": {
+            "description": "Optional client idempotency key.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "negative_prompt": {
+            "description": "Optional negative prompt interpreted according to bridge policy.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "output": {
+            "$ref": "#/components/schemas/OutputOptions",
+            "default": {
+              "response_format": "b64_json"
+            },
+            "description": "Output delivery and artifact controls."
+          },
+          "parameters": {
+            "$ref": "#/components/schemas/GenerationParameters",
+            "default": {
+              "background": "auto",
+              "moderation": "auto",
+              "n": 1,
+              "output_format": "png",
+              "partial_images": 0,
+              "quality": "auto",
+              "size": "auto"
+            },
+            "description": "Image-generation parameters."
+          },
+          "policies": {
+            "$ref": "#/components/schemas/RequestPolicies",
+            "default": {
+              "compatibility": "strict",
+              "negative_prompt": "auto",
+              "revised_prompt": "include"
+            },
+            "description": "Fallback and compatibility policies."
+          },
+          "prompt": {
+            "description": "Positive prompt passed to image generation.",
+            "type": "string"
+          },
+          "routing": {
+            "$ref": "#/components/schemas/RoutingOptions",
+            "default": {},
+            "description": "Provider and model routing controls."
+          },
+          "session": {
+            "$ref": "#/components/schemas/SessionOptions",
+            "default": {
+              "mode": "isolated"
+            },
+            "description": "Session behavior for providers that support conversations."
+          },
+          "timeout_ms": {
+            "description": "Optional request deadline in milliseconds.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "user": {
+            "description": "Optional opaque end-user identifier forwarded only by configured providers.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "default": "1",
+            "description": "Contract version. Currently `1`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      },
+      "ImageResponse": {
+        "additionalProperties": false,
+        "description": "Complete normalized response.",
+        "properties": {
+          "created": {
+            "description": "Unix timestamp at completion.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "data": {
+            "description": "Generated images.",
+            "items": {
+              "$ref": "#/components/schemas/GeneratedImage"
+            },
+            "type": "array"
+          },
+          "effective": {
+            "$ref": "#/components/schemas/GenerationParameters",
+            "description": "Effective generation parameters."
+          },
+          "id": {
+            "description": "Stable bridge request ID.",
+            "type": "string"
+          },
+          "model": {
+            "description": "Effective provider model.",
+            "type": "string"
+          },
+          "normalizations": {
+            "description": "Explicit normalizations and fallbacks.",
+            "items": {
+              "$ref": "#/components/schemas/Normalization"
+            },
+            "type": "array"
+          },
+          "provider": {
+            "description": "Provider that executed the request.",
+            "type": "string"
+          },
+          "requested": {
+            "$ref": "#/components/schemas/GenerationParameters",
+            "description": "Requested generation parameters."
+          },
+          "revised_prompt": {
+            "description": "Revised prompt when available and permitted by policy.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Session/thread metadata."
+          },
+          "timings": {
+            "$ref": "#/components/schemas/Timings",
+            "description": "Request stage timings."
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Usage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Provider usage accounting."
+          },
+          "warnings": {
+            "description": "Stable warning codes.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "created",
+          "provider",
+          "model",
+          "requested",
+          "effective",
+          "data",
+          "timings"
+        ],
+        "type": "object"
+      },
+      "ImageSize": {
+        "examples": [
+          "auto",
+          "1024x1024",
+          "1536x1024"
+        ],
+        "pattern": "^(auto|[1-9][0-9]*x[1-9][0-9]*)$",
+        "type": "string"
+      },
+      "InputCapabilities": {
+        "additionalProperties": false,
+        "description": "Input-image constraints.",
+        "properties": {
+          "max_bytes_each": {
+            "description": "Maximum decoded bytes per input.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_bytes_total": {
+            "description": "Maximum decoded bytes across all inputs.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_count": {
+            "description": "Maximum number of inputs.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "support": {
+            "$ref": "#/components/schemas/SupportLevel",
+            "description": "Support level for the input class."
+          }
+        },
+        "required": [
+          "support",
+          "max_count",
+          "max_bytes_each",
+          "max_bytes_total"
+        ],
+        "type": "object"
+      },
+      "Moderation": {
+        "description": "Provider moderation strictness where configurable.",
+        "oneOf": [
+          {
+            "const": "auto",
+            "description": "Wire value `auto`.",
+            "type": "string"
+          },
+          {
+            "const": "low",
+            "description": "Wire value `low`.",
+            "type": "string"
+          }
+        ]
+      },
+      "NegativePromptMode": {
+        "description": "Handling policy for a negative prompt.",
+        "oneOf": [
+          {
+            "const": "auto",
+            "description": "Wire value `auto`.",
+            "type": "string"
+          },
+          {
+            "const": "native",
+            "description": "Wire value `native`.",
+            "type": "string"
+          },
+          {
+            "const": "merge",
+            "description": "Wire value `merge`.",
+            "type": "string"
+          },
+          {
+            "const": "reject",
+            "description": "Wire value `reject`.",
+            "type": "string"
+          }
+        ]
+      },
+      "Normalization": {
+        "additionalProperties": false,
+        "description": "One explicit normalization or fallback applied to a request.",
+        "properties": {
+          "effective": {
+            "description": "Safe serialized effective value."
+          },
+          "field": {
+            "description": "JSON-style field path.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Stable normalization reason.",
+            "type": "string"
+          },
+          "requested": {
+            "description": "Safe serialized requested value."
+          }
+        },
+        "required": [
+          "field",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "OutputFormat": {
+        "description": "Encoded output image format.",
+        "oneOf": [
+          {
+            "const": "png",
+            "description": "Wire value `png`.",
+            "type": "string"
+          },
+          {
+            "const": "jpeg",
+            "description": "Wire value `jpeg`.",
+            "type": "string"
+          },
+          {
+            "const": "webp",
+            "description": "Wire value `webp`.",
+            "type": "string"
+          }
+        ]
+      },
+      "OutputOptions": {
+        "additionalProperties": false,
+        "description": "Output delivery controls.",
+        "properties": {
+          "filename_prefix": {
+            "description": "Optional logical artifact filename prefix.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "response_format": {
+            "$ref": "#/components/schemas/ResponseFormat",
+            "default": "b64_json",
+            "description": "Response payload representation."
+          }
+        },
+        "type": "object"
+      },
+      "ProviderCapabilities": {
+        "additionalProperties": false,
+        "description": "Complete capability declaration for one provider/model pair.",
+        "properties": {
+          "aspect_ratio": {
+            "$ref": "#/components/schemas/SupportLevel",
+            "description": "Aspect-ratio hint support."
+          },
+          "backgrounds": {
+            "description": "Supported backgrounds.",
+            "items": {
+              "$ref": "#/components/schemas/Background"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "count": {
+            "$ref": "#/components/schemas/U8Range",
+            "description": "Supported output count range."
+          },
+          "edit_images": {
+            "$ref": "#/components/schemas/InputCapabilities",
+            "description": "Edit-image constraints."
+          },
+          "edits": {
+            "description": "Whether edits are supported.",
+            "type": "boolean"
+          },
+          "experimental": {
+            "description": "Whether this adapter targets an unstable/private upstream interface.",
+            "type": "boolean"
+          },
+          "explicit_threads": {
+            "description": "Whether explicit upstream thread IDs are supported.",
+            "type": "boolean"
+          },
+          "generation": {
+            "description": "Whether generation is supported.",
+            "type": "boolean"
+          },
+          "implementation_version": {
+            "description": "Provider implementation version.",
+            "type": "string"
+          },
+          "masks": {
+            "$ref": "#/components/schemas/InputCapabilities",
+            "description": "Mask constraints."
+          },
+          "model": {
+            "description": "Model for which these capabilities apply.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "moderation": {
+            "description": "Supported moderation values.",
+            "items": {
+              "$ref": "#/components/schemas/Moderation"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "negative_prompt": {
+            "$ref": "#/components/schemas/SupportLevel",
+            "description": "Negative prompt support."
+          },
+          "output_formats": {
+            "description": "Supported output encodings.",
+            "items": {
+              "$ref": "#/components/schemas/OutputFormat"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "partial_images": {
+            "$ref": "#/components/schemas/U8Range",
+            "description": "Supported partial image count."
+          },
+          "persistent_sessions": {
+            "description": "Whether provider-backed persistent sessions are supported.",
+            "type": "boolean"
+          },
+          "provider": {
+            "description": "Stable provider name.",
+            "type": "string"
+          },
+          "qualities": {
+            "description": "Supported qualities.",
+            "items": {
+              "$ref": "#/components/schemas/Quality"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "reference_images": {
+            "$ref": "#/components/schemas/InputCapabilities",
+            "description": "Reference-image constraints."
+          },
+          "resolution": {
+            "$ref": "#/components/schemas/SupportLevel",
+            "description": "Coarse resolution hint support."
+          },
+          "revised_prompt": {
+            "$ref": "#/components/schemas/SupportLevel",
+            "description": "Revised-prompt availability."
+          },
+          "sizes": {
+            "$ref": "#/components/schemas/SizeCapabilities",
+            "description": "Supported size behavior."
+          }
+        },
+        "required": [
+          "provider",
+          "implementation_version",
+          "experimental",
+          "generation",
+          "edits",
+          "count",
+          "sizes",
+          "aspect_ratio",
+          "resolution",
+          "qualities",
+          "output_formats",
+          "backgrounds",
+          "moderation",
+          "negative_prompt",
+          "revised_prompt",
+          "reference_images",
+          "edit_images",
+          "masks",
+          "partial_images",
+          "persistent_sessions",
+          "explicit_threads"
+        ],
+        "type": "object"
+      },
+      "ProviderDescriptor": {
+        "additionalProperties": false,
+        "description": "Provider identity shown in discovery endpoints.",
+        "properties": {
+          "display_name": {
+            "description": "Human-readable provider title.",
+            "type": "string"
+          },
+          "experimental": {
+            "description": "Whether the adapter is experimental.",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "Stable registry name.",
+            "type": "string"
+          },
+          "version": {
+            "description": "Provider implementation version.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "display_name",
+          "version",
+          "experimental"
+        ],
+        "type": "object"
+      },
+      "ProviderEvent": {
+        "description": "Incremental provider progress.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "description": "Provider accepted the operation.",
+            "properties": {
+              "type": {
+                "const": "started",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Optional textual progress that contains no prompt or credential data.",
+            "properties": {
+              "stage": {
+                "description": "Provider-safe stage label.",
+                "type": "string"
+              },
+              "type": {
+                "const": "progress",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "stage"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A bounded partial image payload.",
+            "properties": {
+              "b64_json": {
+                "description": "Base64-encoded partial bytes.",
+                "type": "string"
+              },
+              "index": {
+                "description": "Zero-based output index.",
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "partial_index": {
+                "description": "Zero-based partial image index.",
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": {
+                "const": "partial_image",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "index",
+              "partial_index",
+              "b64_json"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Provider operation completed.",
+            "properties": {
+              "response": {
+                "$ref": "#/components/schemas/ImageResponse",
+                "description": "Normalized provider response before artifact publication."
+              },
+              "type": {
+                "const": "completed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "response"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "Quality": {
+        "description": "Requested generation quality.",
+        "oneOf": [
+          {
+            "const": "auto",
+            "description": "Wire value `auto`.",
+            "type": "string"
+          },
+          {
+            "const": "low",
+            "description": "Wire value `low`.",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "description": "Wire value `medium`.",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "description": "Wire value `high`.",
+            "type": "string"
+          }
+        ]
+      },
+      "RequestPolicies": {
+        "additionalProperties": false,
+        "description": "Explicit fallback and visibility controls.",
+        "properties": {
+          "compatibility": {
+            "$ref": "#/components/schemas/CompatibilityMode",
+            "default": "strict",
+            "description": "Provider capability compatibility behavior."
+          },
+          "negative_prompt": {
+            "$ref": "#/components/schemas/NegativePromptMode",
+            "default": "auto",
+            "description": "Negative-prompt handling behavior."
+          },
+          "revised_prompt": {
+            "$ref": "#/components/schemas/RevisedPromptPolicy",
+            "default": "include",
+            "description": "Revised-prompt visibility and requirement behavior."
+          }
+        },
+        "type": "object"
+      },
+      "Resolution": {
+        "description": "Coarse output resolution hint.",
+        "oneOf": [
+          {
+            "const": "1k",
+            "description": "Wire value `1k`.",
+            "type": "string"
+          },
+          {
+            "const": "2k",
+            "description": "Wire value `2k`.",
+            "type": "string"
+          },
+          {
+            "const": "4k",
+            "description": "Wire value `4k`.",
+            "type": "string"
+          }
+        ]
+      },
+      "ResponseFormat": {
+        "description": "Desired output payload representation.",
+        "oneOf": [
+          {
+            "const": "b64_json",
+            "description": "Wire value `b64_json`.",
+            "type": "string"
+          },
+          {
+            "const": "url",
+            "description": "Wire value `url`.",
+            "type": "string"
+          },
+          {
+            "const": "artifact",
+            "description": "Wire value `artifact`.",
+            "type": "string"
+          },
+          {
+            "const": "metadata",
+            "description": "Wire value `metadata`.",
+            "type": "string"
+          }
+        ]
+      },
+      "RevisedPromptPolicy": {
+        "description": "Visibility and requirement policy for an upstream revised prompt.",
+        "oneOf": [
+          {
+            "const": "include",
+            "description": "Wire value `include`.",
+            "type": "string"
+          },
+          {
+            "const": "omit",
+            "description": "Wire value `omit`.",
+            "type": "string"
+          },
+          {
+            "const": "require",
+            "description": "Wire value `require`.",
+            "type": "string"
+          }
+        ]
+      },
+      "RoutingOptions": {
+        "additionalProperties": false,
+        "description": "Provider selection controls.",
+        "properties": {
+          "model": {
+            "description": "Explicit provider model, or the provider default when absent.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider": {
+            "description": "Explicit provider name, or the configured default when absent.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "SessionMetadata": {
+        "additionalProperties": false,
+        "description": "Session information returned after a request.",
+        "properties": {
+          "key": {
+            "description": "Caller-visible session key when persistent mode was used.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reused": {
+            "description": "Whether an existing thread was reused.",
+            "type": "boolean"
+          },
+          "thread_id": {
+            "description": "Upstream thread ID when policy allows returning it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "reused"
+        ],
+        "type": "object"
+      },
+      "SessionMode": {
+        "description": "Codex conversation behavior for a request.",
+        "oneOf": [
+          {
+            "const": "isolated",
+            "description": "Wire value `isolated`.",
+            "type": "string"
+          },
+          {
+            "const": "persistent",
+            "description": "Wire value `persistent`.",
+            "type": "string"
+          },
+          {
+            "const": "thread",
+            "description": "Wire value `thread`.",
+            "type": "string"
+          }
+        ]
+      },
+      "SessionOptions": {
+        "additionalProperties": false,
+        "description": "Conversation/session controls.",
+        "properties": {
+          "key": {
+            "description": "Caller-selected durable binding key for persistent mode.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode": {
+            "$ref": "#/components/schemas/SessionMode",
+            "default": "isolated",
+            "description": "Isolated, persistent-key, or explicit-thread mode."
+          },
+          "thread_id": {
+            "description": "Existing provider thread ID for explicit-thread mode.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "SizeCapabilities": {
+        "additionalProperties": false,
+        "description": "Explicit-size constraints for a provider or model.",
+        "properties": {
+          "allowed": {
+            "description": "Fixed accepted sizes. Empty when generic constraints apply.",
+            "items": {
+              "$ref": "#/components/schemas/ImageSize"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "arbitrary": {
+            "description": "Whether arbitrary explicit dimensions are accepted.",
+            "type": "boolean"
+          },
+          "auto": {
+            "description": "Whether `auto` is accepted.",
+            "type": "boolean"
+          },
+          "edge_multiple": {
+            "description": "Required edge multiple for arbitrary dimensions.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "max_aspect_ratio": {
+            "description": "Maximum long-edge to short-edge ratio.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "max_edge": {
+            "description": "Maximum edge for arbitrary dimensions.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "max_pixels": {
+            "description": "Maximum total pixels for arbitrary dimensions.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "min_edge": {
+            "description": "Minimum edge for arbitrary dimensions.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "min_pixels": {
+            "description": "Minimum total pixels for arbitrary dimensions.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "auto",
+          "arbitrary"
+        ],
+        "type": "object"
+      },
+      "SupportLevel": {
+        "description": "Degree to which a provider supports a semantic feature.",
+        "oneOf": [
+          {
+            "const": "native",
+            "description": "The provider handles the feature natively.",
+            "type": "string"
+          },
+          {
+            "const": "emulated",
+            "description": "The bridge can emulate the feature with a reported transformation.",
+            "type": "string"
+          },
+          {
+            "const": "unsupported",
+            "description": "The feature is unavailable.",
+            "type": "string"
+          }
+        ]
+      },
+      "Timings": {
+        "additionalProperties": false,
+        "description": "Stage timings in milliseconds.",
+        "properties": {
+          "artifact_ms": {
+            "default": 0,
+            "description": "Time spent validating/publishing output.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "input_ms": {
+            "default": 0,
+            "description": "Time spent loading and validating inputs.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "provider_ms": {
+            "default": 0,
+            "description": "Time spent in the provider.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "queue_ms": {
+            "default": 0,
+            "description": "Time waiting for admission.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total_ms": {
+            "default": 0,
+            "description": "Total request time.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "U8Range": {
+        "additionalProperties": false,
+        "description": "Inclusive range for a small integer parameter.",
+        "properties": {
+          "max": {
+            "description": "Inclusive maximum.",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "min": {
+            "description": "Inclusive minimum.",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "min",
+          "max"
+        ],
+        "type": "object"
+      },
+      "Usage": {
+        "additionalProperties": false,
+        "description": "Optional provider usage accounting.",
+        "properties": {
+          "input_tokens": {
+            "description": "Input tokens reported by the provider.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "output_tokens": {
+            "description": "Output tokens reported by the provider.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "provider": {
+            "additionalProperties": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "description": "Provider-specific safe numeric counters.",
+            "type": "object"
+          },
+          "total_tokens": {
+            "description": "Total tokens reported by the provider.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ValidationIssue": {
+        "additionalProperties": false,
+        "description": "One intrinsic validation issue.",
+        "properties": {
+          "code": {
+            "description": "Stable issue code.",
+            "type": "string"
+          },
+          "field": {
+            "description": "JSON-style field path.",
+            "type": "string"
+          },
+          "message": {
+            "description": "Human-readable redaction-safe explanation.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field",
+          "code",
+          "message"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bridgeBearer": {
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "Provider-neutral image generation over Codex OAuth.",
+    "title": "Imagegen Bridge API",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/health/live": {
+      "get": {
+        "operationId": "getLiveness",
+        "responses": {
+          "200": {
+            "description": "Process is live"
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "operationId": "getReadiness",
+        "responses": {
+          "200": {
+            "description": "Providers ready"
+          },
+          "503": {
+            "description": "One or more providers not ready"
+          }
+        }
+      }
+    },
+    "/v1/images": {
+      "post": {
+        "operationId": "executeImage",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "schema": {
+              "maxLength": 512,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageResponse"
+                }
+              }
+            },
+            "description": "Successful image operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Bridge authentication required"
+          },
+          "409": {
+            "description": "Idempotency conflict"
+          },
+          "422": {
+            "description": "Validation or safety rejection"
+          },
+          "429": {
+            "description": "Rate limited"
+          },
+          "503": {
+            "description": "Overloaded"
+          },
+          "504": {
+            "description": "Deadline exceeded"
+          }
+        },
+        "security": [
+          {
+            "bridgeBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/images/edits": {
+      "post": {
+        "operationId": "editImageCompatible",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "required": [
+                  "prompt",
+                  "image"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OpenAI-familiar image response"
+          }
+        }
+      }
+    },
+    "/v1/images/generations": {
+      "post": {
+        "operationId": "generateImageCompatible",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OpenAI-familiar image response"
+          }
+        }
+      }
+    },
+    "/v1/images/stream": {
+      "post": {
+        "operationId": "streamImage",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "schema": {
+              "maxLength": 512,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderEvent"
+                }
+              }
+            },
+            "description": "Successful image operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Bridge authentication required"
+          },
+          "409": {
+            "description": "Idempotency conflict"
+          },
+          "422": {
+            "description": "Validation or safety rejection"
+          },
+          "429": {
+            "description": "Rate limited"
+          },
+          "503": {
+            "description": "Overloaded"
+          },
+          "504": {
+            "description": "Deadline exceeded"
+          }
+        },
+        "security": [
+          {
+            "bridgeBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/providers": {
+      "get": {
+        "operationId": "listProviders",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Provider page"
+          }
+        }
+      }
+    },
+    "/v1/providers/{provider}/capabilities": {
+      "get": {
+        "operationId": "getProviderCapabilities",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "model",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderCapabilities"
+                }
+              }
+            },
+            "description": "Capabilities"
+          }
+        }
+      }
+    },
+    "/v1/sessions/{key}": {
+      "delete": {
+        "operationId": "deleteSession",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "provider",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Session deleted"
+          },
+          "404": {
+            "description": "Session not found"
+          }
+        }
+      },
+      "get": {
+        "operationId": "getSession",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "provider",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionMetadata"
+                }
+              }
+            },
+            "description": "Persistent session"
+          },
+          "404": {
+            "description": "Session not found"
+          }
+        }
+      }
+    }
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ]
+}

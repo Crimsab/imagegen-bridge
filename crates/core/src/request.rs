@@ -3,16 +3,29 @@
 use std::path::PathBuf;
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 
 use crate::{
     AspectRatio, Background, CompatibilityMode, ImageSize, Moderation, NegativePromptMode,
     OutputFormat, Quality, Resolution, ResponseFormat, RevisedPromptPolicy, SessionMode,
 };
 
+const COMMON_REQUEST_FIELDS: &[&str] = &[
+    "version",
+    "prompt",
+    "negative_prompt",
+    "parameters",
+    "routing",
+    "session",
+    "output",
+    "policies",
+    "idempotency_key",
+    "timeout_ms",
+    "user",
+];
+
 /// A complete provider-neutral image request.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct ImageRequest {
     /// Contract version. Currently `1`.
     #[serde(default = "default_contract_version")]
@@ -49,6 +62,115 @@ pub struct ImageRequest {
     /// Optional opaque end-user identifier forwarded only by configured providers.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for ImageRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let mut object = serde_json::Map::<String, serde_json::Value>::deserialize(deserializer)?;
+        for field in object.keys() {
+            if field != "operation"
+                && field != "reference_images"
+                && field != "images"
+                && field != "mask"
+                && !COMMON_REQUEST_FIELDS.contains(&field.as_str())
+            {
+                return Err(de::Error::unknown_field(
+                    field,
+                    &[
+                        "version",
+                        "prompt",
+                        "negative_prompt",
+                        "operation",
+                        "reference_images",
+                        "images",
+                        "mask",
+                        "parameters",
+                        "routing",
+                        "session",
+                        "output",
+                        "policies",
+                        "idempotency_key",
+                        "timeout_ms",
+                        "user",
+                    ],
+                ));
+            }
+        }
+
+        let operation_tag = object
+            .remove("operation")
+            .ok_or_else(|| de::Error::missing_field("operation"))?;
+        let operation_name = operation_tag
+            .as_str()
+            .ok_or_else(|| de::Error::custom("operation must be a string"))?;
+        let operation_fields: &[&str] = match operation_name {
+            "generate" => &["reference_images"],
+            "edit" => &["images", "mask", "reference_images"],
+            _ => {
+                return Err(de::Error::unknown_variant(
+                    operation_name,
+                    &["generate", "edit"],
+                ));
+            }
+        };
+        for forbidden in ["images", "mask", "reference_images"] {
+            if object.contains_key(forbidden) && !operation_fields.contains(&forbidden) {
+                return Err(de::Error::custom(format!(
+                    "field '{forbidden}' is invalid for operation '{operation_name}'"
+                )));
+            }
+        }
+        let mut operation = serde_json::Map::new();
+        operation.insert("operation".to_owned(), operation_tag);
+        for field in operation_fields {
+            if let Some(value) = object.remove(*field) {
+                operation.insert((*field).to_owned(), value);
+            }
+        }
+        let operation = serde_json::from_value(serde_json::Value::Object(operation))
+            .map_err(de::Error::custom)?;
+        let fields: RequestFields =
+            serde_json::from_value(serde_json::Value::Object(object)).map_err(de::Error::custom)?;
+        Ok(Self {
+            version: fields.version,
+            prompt: fields.prompt,
+            negative_prompt: fields.negative_prompt,
+            operation,
+            parameters: fields.parameters,
+            routing: fields.routing,
+            session: fields.session,
+            output: fields.output,
+            policies: fields.policies,
+            idempotency_key: fields.idempotency_key,
+            timeout_ms: fields.timeout_ms,
+            user: fields.user,
+        })
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RequestFields {
+    #[serde(default = "default_contract_version")]
+    version: String,
+    prompt: String,
+    negative_prompt: Option<String>,
+    #[serde(default)]
+    parameters: GenerationParameters,
+    #[serde(default)]
+    routing: RoutingOptions,
+    #[serde(default)]
+    session: SessionOptions,
+    #[serde(default)]
+    output: OutputOptions,
+    #[serde(default)]
+    policies: RequestPolicies,
+    idempotency_key: Option<String>,
+    timeout_ms: Option<u64>,
+    user: Option<String>,
 }
 
 impl ImageRequest {
@@ -198,6 +320,38 @@ impl Default for GenerationParameters {
             moderation: Moderation::default(),
             partial_images: 0,
         }
+    }
+}
+
+#[cfg(test)]
+mod serde_tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    #[test]
+    fn image_request_round_trips_with_flattened_operation() {
+        let request = ImageRequest::generate("test");
+        let encoded = serde_json::to_value(&request).unwrap();
+        assert_eq!(encoded["operation"], "generate");
+        let decoded: ImageRequest = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn image_request_rejects_unknown_and_operation_specific_fields() {
+        let unknown = serde_json::json!({
+            "prompt": "test",
+            "operation": "generate",
+            "surprise": true
+        });
+        assert!(serde_json::from_value::<ImageRequest>(unknown).is_err());
+        let inconsistent = serde_json::json!({
+            "prompt": "test",
+            "operation": "generate",
+            "images": []
+        });
+        assert!(serde_json::from_value::<ImageRequest>(inconsistent).is_err());
     }
 }
 

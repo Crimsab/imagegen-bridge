@@ -1,0 +1,37 @@
+[package]
+name = "imagegen-bridge-server"
+description = "Bounded native and OpenAI-compatible HTTP service for Imagegen Bridge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+axum = { version = "0.8.8", features = ["json", "multipart", "tokio"] }
+base64 = "0.22"
+imagegen-bridge-config = { path = "../config", version = "0.1.0" }
+imagegen-bridge-core = { path = "../core", version = "0.1.0" }
+imagegen-bridge-runtime = { path = "../runtime", version = "0.1.0" }
+secrecy = "0.10.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+subtle = "2.6"
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tokio-stream = "0.1"
+tower = { version = "0.5", features = ["limit", "util"] }
+uuid = { version = "1", features = ["v7"] }
+
+[dev-dependencies]
+async-trait = "0.1"
+http-body-util = "0.1"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/lib.rs"

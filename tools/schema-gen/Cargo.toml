@@ -11,6 +11,7 @@ publish = false
 
 [dependencies]
 imagegen-bridge-core = { path = "../../crates/core" }
+imagegen-bridge-server = { path = "../../crates/server" }
 serde_json = "1"
 
 [lints]

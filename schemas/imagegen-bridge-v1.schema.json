@@ -745,8 +745,7 @@
       ],
       "required": [
         "prompt"
-      ],
-      "unevaluatedProperties": false
+      ]
     },
     "ImageResponse": {
       "description": "Complete normalized response.",

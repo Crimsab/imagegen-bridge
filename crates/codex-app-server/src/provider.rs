@@ -600,6 +600,28 @@ impl ImageProvider for AppServerImageProvider {
         Ok(())
     }
 
+    async fn get_session(&self, key: &str) -> Result<SessionMetadata, BridgeError> {
+        let thread_id = self.sessions.get(key).await?.ok_or_else(|| {
+            BridgeError::new(ErrorCode::Session, "persistent session was not found")
+                .with_provider("codex-app-server")
+        })?;
+        Ok(SessionMetadata {
+            key: Some(key.to_owned()),
+            thread_id: Some(thread_id),
+            reused: true,
+        })
+    }
+
+    async fn delete_session(&self, key: &str) -> Result<(), BridgeError> {
+        if self.sessions.get(key).await?.is_none() {
+            return Err(
+                BridgeError::new(ErrorCode::Session, "persistent session was not found")
+                    .with_provider("codex-app-server"),
+            );
+        }
+        self.sessions.delete(key).await
+    }
+
     async fn shutdown(&self) -> Result<(), BridgeError> {
         if let Some(process) = &self.process {
             process.shutdown().await?;
@@ -947,6 +969,30 @@ mod tests {
         };
         let error = provider.reference_paths(&request).await.unwrap_err();
         assert_eq!(error.code, ErrorCode::Input);
+    }
+
+    #[tokio::test]
+    async fn session_lifecycle_is_visible_without_exposing_other_state() {
+        let (rpc, _server) = rpc_and_server().await;
+        let sessions = Arc::new(MemorySessionBindingStore::default());
+        sessions.put("gallery", "thread-1").await.unwrap();
+        let provider = AppServerImageProvider::new(
+            rpc,
+            sessions,
+            AppServerProviderConfig {
+                codex_model: None,
+                cwd: PathBuf::from("/tmp"),
+                image_limits: ImageLimits::default(),
+            },
+        );
+        let session = provider.get_session("gallery").await.unwrap();
+        assert_eq!(session.key.as_deref(), Some("gallery"));
+        assert_eq!(session.thread_id.as_deref(), Some("thread-1"));
+        provider.delete_session("gallery").await.unwrap();
+        assert_eq!(
+            provider.get_session("gallery").await.unwrap_err().code,
+            ErrorCode::Session
+        );
     }
 
     #[tokio::test]
