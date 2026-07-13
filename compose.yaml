@@ -1,0 +1,46 @@
+services:
+  imagegen-bridge:
+    image: imagegen-bridge:0.1.0
+    build:
+      context: .
+      args:
+        IMAGE_VERSION: 0.1.0
+        CODEX_VERSION: 0.144.0
+    restart: unless-stopped
+    environment:
+      TZ: Europe/Rome
+      IMAGEGEN_BRIDGE_BEARER_TOKEN: ${IMAGEGEN_BRIDGE_BEARER_TOKEN:?set a bridge bearer token}
+    ports:
+      - "${IMAGEGEN_BRIDGE_LISTEN_HOST:-127.0.0.1}:${IMAGEGEN_BRIDGE_PORT:-8787}:8787"
+    volumes:
+      - ./deploy/imagegen-bridge.container.toml:/config/imagegen-bridge.toml:ro
+      - ${IMAGEGEN_BRIDGE_CODEX_HOME:?set a dedicated writable Codex home}:/codex-home
+      - ${IMAGEGEN_BRIDGE_WORKSPACE:-./deploy/workspace}:/workspace:ro
+      - imagegen_bridge_state:/data/state
+      - imagegen_bridge_artifacts:/data/artifacts
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=1777
+      - /home/imagegen:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=0700
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    stop_grace_period: 45s
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8787/health/live"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks:
+      - homelab_network
+
+volumes:
+  imagegen_bridge_state:
+  imagegen_bridge_artifacts:
+
+networks:
+  homelab_network:
+    external: true

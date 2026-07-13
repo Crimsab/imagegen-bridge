@@ -141,3 +141,14 @@ jobs:
       - name: Validate package contents
         working-directory: sdks/typescript
         run: bun pm pack --dry-run --quiet
+
+  container:
+    name: Hardened container
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Build and smoke-test non-root image
+        run: ./tests/container-smoke.sh

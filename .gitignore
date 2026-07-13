@@ -25,6 +25,7 @@
 /sdks/typescript/dist/
 /sdks/typescript/package/
 /sdks/typescript/*.tgz
+/deploy/codex-home/
 __pycache__/
 *.py[cod]
 .DS_Store

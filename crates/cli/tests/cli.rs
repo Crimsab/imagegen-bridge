@@ -52,6 +52,23 @@ fn config_check_is_non_mutating_and_machine_readable() {
 }
 
 #[test]
+fn checked_in_container_profile_remains_valid() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    cargo_bin_cmd!("imagegen-bridge")
+        .current_dir(&root)
+        .args([
+            "--config",
+            "deploy/imagegen-bridge.container.toml",
+            "config",
+            "check",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"valid\":true"));
+}
+
+#[test]
 fn generation_dry_run_prints_complete_normalized_request() {
     let output = cargo_bin_cmd!("imagegen-bridge")
         .args([

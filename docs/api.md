@@ -36,6 +36,9 @@ emits newline-delimited JSON to stderr at INFO level. Image-operation events
 contain only the generated request ID, a registered provider name, stable error
 code, and retryability; prompts, negative prompts, session keys, account IDs,
 paths, image bodies, upstream bodies, and authentication data are never fields.
+There is intentionally no supported content-logging switch. A future diagnostic
+mode that exposes prompts or image content would require an explicit dangerous
+configuration name, warnings, isolation, and separate security review.
 
 `server.metrics.enabled` defaults to `false`. When enabled, `GET /metrics`
 exports in-process Prometheus text metrics for request outcomes, operation,

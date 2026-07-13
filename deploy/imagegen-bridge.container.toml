@@ -1,0 +1,38 @@
+version = 1
+default_provider = "codex-app-server"
+
+[inputs]
+local_roots = ["/workspace"]
+
+[inputs.remote]
+enabled = false
+
+[artifacts]
+root = "/data/artifacts"
+
+[providers.codex_app_server]
+enabled = true
+executable = "/usr/local/bin/codex"
+args = []
+cwd = "/workspace"
+session_database = "/data/state/sessions.sqlite3"
+
+[providers.codex_responses]
+enabled = false
+
+[providers.openai]
+enabled = false
+
+[server]
+bind = "0.0.0.0:8787"
+bearer_token_env = "IMAGEGEN_BRIDGE_BEARER_TOKEN"
+max_body_bytes = 83886080
+max_header_bytes = 32768
+max_connections = 256
+read_timeout_ms = 30000
+
+[server.metrics]
+enabled = true
+
+[server.tracing]
+enabled = true
