@@ -1140,6 +1140,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "imagegen-bridge-sdk-mock-server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "bytes",
+ "imagegen-bridge-core",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
 name = "imagegen-bridge-server"
 version = "0.1.0"
 dependencies = [

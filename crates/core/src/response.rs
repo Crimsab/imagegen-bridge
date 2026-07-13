@@ -78,8 +78,8 @@ impl<'de> Deserialize<'de> for GeneratedImage {
         let height = take_required(&mut fields, "height")?;
         let bytes = take_required(&mut fields, "bytes")?;
         let sha256 = take_required(&mut fields, "sha256")?;
-        let payload = serde_json::from_value(serde_json::Value::Object(fields))
-            .map_err(de::Error::custom)?;
+        let payload =
+            serde_json::from_value(serde_json::Value::Object(fields)).map_err(de::Error::custom)?;
         Ok(Self {
             payload,
             format,
@@ -236,7 +236,10 @@ mod tests {
             sha256: "0".repeat(64),
         };
         let encoded = serde_json::to_value(&image).unwrap();
-        assert_eq!(serde_json::from_value::<GeneratedImage>(encoded.clone()).unwrap(), image);
+        assert_eq!(
+            serde_json::from_value::<GeneratedImage>(encoded.clone()).unwrap(),
+            image
+        );
 
         let mut unknown = encoded.as_object().unwrap().clone();
         unknown.insert("unexpected".to_owned(), serde_json::json!(true));

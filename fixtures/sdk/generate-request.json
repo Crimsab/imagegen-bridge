@@ -1,0 +1,40 @@
+{
+  "version": "1",
+  "prompt": "a tiny bridge fixture",
+  "negative_prompt": "blur",
+  "operation": "generate",
+  "reference_images": [],
+  "parameters": {
+    "n": 1,
+    "size": "1024x1024",
+    "aspect_ratio": null,
+    "resolution": null,
+    "quality": "medium",
+    "output_format": "png",
+    "output_compression": null,
+    "background": "opaque",
+    "moderation": "auto",
+    "partial_images": 1
+  },
+  "routing": {
+    "provider": "codex-app-server",
+    "model": null
+  },
+  "session": {
+    "mode": "persistent",
+    "key": "sdk-fixture",
+    "thread_id": null
+  },
+  "output": {
+    "response_format": "b64_json",
+    "filename_prefix": null
+  },
+  "policies": {
+    "compatibility": "normalize",
+    "negative_prompt": "merge",
+    "revised_prompt": "include"
+  },
+  "idempotency_key": "sdk-fixture",
+  "timeout_ms": 30000,
+  "user": "fixture-user"
+}

@@ -1,0 +1,65 @@
+{
+  "id": "img_fixture_01",
+  "created": 1783960000,
+  "provider": "codex-app-server",
+  "model": "gpt-5.5",
+  "requested": {
+    "n": 1,
+    "size": "1024x1024",
+    "quality": "medium",
+    "output_format": "png",
+    "background": "opaque",
+    "moderation": "auto",
+    "partial_images": 1
+  },
+  "effective": {
+    "n": 1,
+    "size": "1024x1024",
+    "quality": "medium",
+    "output_format": "png",
+    "background": "opaque",
+    "moderation": "auto",
+    "partial_images": 0
+  },
+  "normalizations": [
+    {
+      "field": "parameters.partial_images",
+      "requested": 1,
+      "effective": 0,
+      "reason": "provider_unsupported"
+    }
+  ],
+  "data": [
+    {
+      "type": "b64_json",
+      "b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAHnOcQAAAAABJRU5ErkJggg==",
+      "format": "png",
+      "width": 1,
+      "height": 1,
+      "bytes": 70,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ],
+  "revised_prompt": "a tiny bridge fixture, crisp",
+  "usage": {
+    "input_tokens": 12,
+    "output_tokens": 34,
+    "total_tokens": 46,
+    "provider": {
+      "images": 1
+    }
+  },
+  "session": {
+    "key": "sdk-fixture",
+    "thread_id": "thread_fixture_01",
+    "reused": true
+  },
+  "timings": {
+    "queue_ms": 1,
+    "input_ms": 2,
+    "provider_ms": 30,
+    "artifact_ms": 3,
+    "total_ms": 36
+  },
+  "warnings": []
+}

@@ -1,0 +1,18 @@
+{
+  "error": {
+    "message": "fixture rate limit",
+    "type": "rate_limit_error",
+    "param": null,
+    "code": "rate_limit_exceeded",
+    "imagegen_bridge": {
+      "code": "rate_limited",
+      "retryable": true,
+      "provider": "codex-app-server",
+      "upstream_request_id": "upstream_fixture_01",
+      "details": {
+        "retry_after_ms": 1000
+      }
+    }
+  },
+  "request_id": "request_fixture_error"
+}

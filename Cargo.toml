@@ -10,6 +10,7 @@ members = [
   "crates/runtime",
   "crates/server",
   "tools/schema-gen",
+  "tools/sdk-mock-server",
 ]
 resolver = "3"
 

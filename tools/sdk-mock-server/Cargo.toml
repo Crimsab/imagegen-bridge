@@ -1,0 +1,28 @@
+[package]
+name = "imagegen-bridge-sdk-mock-server"
+description = "Shared black-box HTTP fixture server for Imagegen Bridge SDK conformance"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+axum = "0.8"
+bytes = "1"
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal"] }
+tokio-stream = "0.1"
+
+[dev-dependencies]
+imagegen-bridge-core = { path = "../../crates/core" }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "imagegen-bridge-sdk-mock-server"
+path = "src/main.rs"
+doc = false
