@@ -4,6 +4,7 @@ members = [
   "crates/codex-app-server",
   "crates/core",
   "crates/imagegen-bridge",
+  "crates/runtime",
   "tools/schema-gen",
 ]
 resolver = "3"
