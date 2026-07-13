@@ -168,8 +168,8 @@ async fn execute_or_preview(
     tokio::pin!(operation);
     let result = tokio::select! {
         result = &mut operation => result,
-        signal = tokio::signal::ctrl_c() => {
-            signal.map_err(|_| internal("could not listen for interrupt signal"))?;
+        signal = shutdown_signal() => {
+            signal.map_err(|_| internal("could not listen for termination signal"))?;
             cancellation.cancel();
             operation.await
         }
@@ -338,13 +338,29 @@ async fn serve_command(
         router(state, &resolved.config.server),
         resolved.config.server.clone(),
         async {
-            let _ = tokio::signal::ctrl_c().await;
+            let _ = shutdown_signal().await;
         },
     )
     .await
     .map_err(|_| internal("HTTP server failed"));
     let shutdown = application.shutdown().await;
     result.and(shutdown)
+}
+
+#[cfg(unix)]
+async fn shutdown_signal() -> io::Result<()> {
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => result,
+        signal = terminate.recv() => signal.ok_or_else(|| {
+            io::Error::other("SIGTERM listener closed before receiving a signal")
+        }),
+    }
+}
+
+#[cfg(not(unix))]
+async fn shutdown_signal() -> io::Result<()> {
+    tokio::signal::ctrl_c().await
 }
 
 async fn providers(
