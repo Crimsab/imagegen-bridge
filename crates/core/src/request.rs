@@ -264,6 +264,7 @@ pub enum ImageSource {
 
 /// One image input plus optional metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct ImageInput {
     /// Source from which bytes will be loaded.
     #[serde(flatten)]

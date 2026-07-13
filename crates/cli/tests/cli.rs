@@ -274,17 +274,20 @@ bind = "{address}"
     let mut response = None;
     for _ in 0..100 {
         if let Ok(mut stream) = std::net::TcpStream::connect(address) {
-            stream
+            let written = stream
                 .write_all(
                     b"GET /health/live HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
                 )
-                .expect("write health request");
+                .is_ok();
             let mut body = String::new();
-            stream
-                .read_to_string(&mut body)
-                .expect("read health response");
-            response = Some(body);
-            break;
+            if written
+                && stream.read_to_string(&mut body).is_ok()
+                && body.contains("200 OK")
+                && body.contains("\"status\":\"live\"")
+            {
+                response = Some(body);
+                break;
+            }
         }
         std::thread::sleep(Duration::from_millis(25));
     }

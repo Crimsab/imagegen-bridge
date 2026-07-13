@@ -51,6 +51,7 @@ pub enum ImagePayload {
 
 /// Metadata and payload for one generated image.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct GeneratedImage {
     /// Output payload or artifact reference.
     #[serde(flatten)]
