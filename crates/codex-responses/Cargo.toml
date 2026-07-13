@@ -1,0 +1,35 @@
+[package]
+name = "imagegen-bridge-codex-responses"
+description = "Experimental Codex OAuth Responses image provider"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+async-trait = "0.1"
+base64 = "0.22"
+bytes = "1"
+dirs = "6"
+futures-util = "0.3"
+imagegen-bridge-artifacts = { path = "../artifacts", version = "0.1.0" }
+imagegen-bridge-core = { path = "../core", version = "0.1.0" }
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "stream"] }
+secrecy = "0.10.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["fs", "sync", "time"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread"] }
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/lib.rs"
+
