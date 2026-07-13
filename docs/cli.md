@@ -9,8 +9,49 @@ Build the binary from a local checkout with:
 
 ```sh
 cargo build --release -p imagegen-bridge-cli
-./target/release/imagegen-bridge auth-doctor
+./target/release/imagegen-bridge setup
+./target/release/imagegen-bridge doctor
 ```
+
+## Guided setup and diagnostics
+
+`setup` is idempotent and safe to rerun. It detects the Codex executable and
+ChatGPT OAuth login, chooses XDG-compatible config/state/data locations,
+previews all changes, writes configuration atomically, protects the state
+directory, and initializes the session database. It does not copy OAuth tokens.
+
+```sh
+imagegen-bridge setup --dry-run
+imagegen-bridge setup
+imagegen-bridge setup --yes --non-interactive --json
+imagegen-bridge setup \
+  --config ./bridge.toml \
+  --state-root ./data/state \
+  --output-root ./data/artifacts \
+  --yes --non-interactive
+```
+
+Interactive mutations require confirmation. Machine output modes never prompt;
+use `--yes` to apply their displayed plan. A missing or incomplete installation
+can be repaired by rerunning the same command. No paid request occurs unless
+`--live-probe` is present, and that probe requires a separate confirmation (or
+an explicit `--yes`).
+
+`doctor` checks the bridge version, config file and schema, Codex version,
+protected OAuth file, storage permissions, SQLite migration version, configured
+port, provider readiness, and capability discovery:
+
+```sh
+imagegen-bridge doctor
+imagegen-bridge doctor --provider codex-responses --json
+imagegen-bridge doctor --live-probe
+imagegen-bridge doctor --live-probe --yes --non-interactive --json
+```
+
+The normal doctor path is non-generating. The live probe produces exactly one
+image, verifies it through the ordinary runtime, returns dimensions/format and
+elapsed time, and does not retain image bytes because it requests metadata
+output.
 
 ## Generation and editing
 
@@ -19,14 +60,14 @@ JSON request or ergonomic flags:
 
 ```sh
 imagegen-bridge generate \
-  --prompt "A red origami fox on warm gray" \
+  "A red origami fox on warm gray" \
   --quality auto \
   --size auto \
   --response-format artifact \
   --filename-prefix fox
 
 imagegen-bridge edit \
-  --prompt "Change the jacket to blue" \
+  "Change the jacket to blue" \
   --image ./portrait.png \
   --reference ./palette.png \
   --response-format artifact
@@ -34,6 +75,7 @@ imagegen-bridge edit \
 imagegen-bridge generate --request request.json --json
 imagegen-bridge generate --request - --json < request.json
 imagegen-bridge generate --prompt - --dry-run --json < prompt.txt
+imagegen-bridge generate "a red-haired woman" --dry-run --json
 ```
 
 `--request` is lossless and exclusive: it cannot be mixed with prompt, input,
@@ -97,6 +139,10 @@ Configuration precedence is:
 ```text
 defaults < --config TOML < IMAGEGEN_BRIDGE__* environment < --set/--unset
 ```
+
+When `--config` is omitted, the CLI checks `./imagegen-bridge.toml` first and
+then the XDG user configuration (`$XDG_CONFIG_HOME/imagegen-bridge/config.toml`,
+falling back to `~/.config/imagegen-bridge/config.toml`).
 
 ```sh
 imagegen-bridge config check --json

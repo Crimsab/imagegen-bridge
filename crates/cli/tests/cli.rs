@@ -104,6 +104,19 @@ fn generation_dry_run_prints_complete_normalized_request() {
 }
 
 #[test]
+fn generation_accepts_a_natural_positional_prompt() {
+    let output = cargo_bin_cmd!("imagegen-bridge")
+        .args(["generate", "a red-haired woman", "--dry-run", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output).expect("JSON output");
+    assert_eq!(value["prompt"], "a red-haired woman");
+}
+
+#[test]
 fn request_file_is_lossless_and_exclusive() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let request = directory.path().join("request.json");
@@ -134,7 +147,7 @@ fn request_file_is_lossless_and_exclusive() {
         ])
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("cannot be combined"));
+        .stderr(predicate::str::contains("cannot be used"));
 }
 
 #[test]
@@ -216,6 +229,170 @@ fn generated_schemas_match_checked_in_contracts() {
         .assert()
         .success()
         .stdout(predicate::str::contains("\"current\":true"));
+}
+
+#[test]
+fn setup_dry_run_is_machine_readable_and_does_not_mutate() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let config = directory.path().join("config/bridge.toml");
+    let state = directory.path().join("state");
+    let artifacts = directory.path().join("artifacts");
+    let output = cargo_bin_cmd!("imagegen-bridge")
+        .env("CODEX_HOME", directory.path().join("missing-codex-home"))
+        .args([
+            "--config",
+            config.to_str().expect("UTF-8 config"),
+            "setup",
+            "--state-root",
+            state.to_str().expect("UTF-8 state"),
+            "--output-root",
+            artifacts.to_str().expect("UTF-8 artifacts"),
+            "--dry-run",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let plan: Value = serde_json::from_slice(&output).expect("setup plan JSON");
+    assert_eq!(plan["oauth_ready"], false);
+    assert_eq!(plan["changes"].as_array().expect("changes").len(), 4);
+    assert!(!config.exists());
+    assert!(!state.exists());
+    assert!(!artifacts.exists());
+}
+
+#[test]
+fn setup_non_interactive_refuses_unconfirmed_changes() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let config = directory.path().join("config.toml");
+    cargo_bin_cmd!("imagegen-bridge")
+        .env("CODEX_HOME", directory.path().join("missing-codex-home"))
+        .args([
+            "--config",
+            config.to_str().expect("UTF-8 config"),
+            "setup",
+            "--non-interactive",
+            "--json",
+        ])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("\"changes\""))
+        .stderr(predicate::str::contains("confirmation is required"));
+    assert!(!config.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn setup_repairs_once_then_doctor_passes_without_a_paid_probe() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let codex = directory.path().join("codex");
+    std::fs::write(
+        &codex,
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf '%s\n' 'codex-cli test'
+  exit 0
+fi
+while IFS= read -r LINE; do
+  case "$LINE" in
+    *'"method":"initialize"'*) printf '%s\n' '{"id":1,"result":{}}' ;;
+    *'"method":"account/read"'*) printf '%s\n' '{"id":2,"result":{"account":{"type":"chatgpt"}}}' ;;
+  esac
+done
+"#,
+    )
+    .expect("write fake codex");
+    std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o700))
+        .expect("codex permissions");
+    let codex_home = directory.path().join("codex-home");
+    std::fs::create_dir(&codex_home).expect("Codex home");
+    let auth = codex_home.join("auth.json");
+    std::fs::write(
+        &auth,
+        r#"{"auth_mode":"chatgpt","tokens":{"access_token":"test-token","account_id":"test-account"}}"#,
+    )
+    .expect("write auth fixture");
+    std::fs::set_permissions(&auth, std::fs::Permissions::from_mode(0o600))
+        .expect("auth permissions");
+
+    let config = directory.path().join("config/bridge.toml");
+    let state = directory.path().join("state");
+    let artifacts = directory.path().join("artifacts");
+    let path = format!(
+        "{}:{}",
+        directory.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let arguments = [
+        "--config",
+        config.to_str().expect("UTF-8 config"),
+        "setup",
+        "--state-root",
+        state.to_str().expect("UTF-8 state"),
+        "--output-root",
+        artifacts.to_str().expect("UTF-8 artifacts"),
+        "--yes",
+        "--non-interactive",
+        "--json",
+    ];
+    let first = cargo_bin_cmd!("imagegen-bridge")
+        .env("CODEX_HOME", &codex_home)
+        .env("PATH", &path)
+        .args(arguments)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let first: Value = serde_json::from_slice(&first).expect("first setup result");
+    assert_eq!(first["complete"], true);
+    assert_eq!(first["changed"], true);
+    assert_eq!(
+        first["applied_changes"].as_array().expect("changes").len(),
+        4
+    );
+
+    let second = cargo_bin_cmd!("imagegen-bridge")
+        .env("CODEX_HOME", &codex_home)
+        .env("PATH", &path)
+        .args(arguments)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let second: Value = serde_json::from_slice(&second).expect("second setup result");
+    assert_eq!(second["changed"], false);
+    assert_eq!(second["applied_changes"], serde_json::json!([]));
+
+    let doctor = cargo_bin_cmd!("imagegen-bridge")
+        .env("CODEX_HOME", &codex_home)
+        .env("PATH", &path)
+        .args([
+            "--config",
+            config.to_str().expect("UTF-8 config"),
+            "doctor",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let doctor: Value = serde_json::from_slice(&doctor).expect("doctor result");
+    assert_eq!(doctor["ok"], true);
+    assert_eq!(doctor["summary"]["failed"], 0);
+    assert!(
+        doctor["checks"]
+            .as_array()
+            .expect("checks")
+            .iter()
+            .any(|check| { check["name"] == "live_probe" && check["status"] == "skip" })
+    );
 }
 
 #[cfg(unix)]

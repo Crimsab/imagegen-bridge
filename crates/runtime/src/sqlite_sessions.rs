@@ -5,9 +5,71 @@ use std::path::Path;
 use async_trait::async_trait;
 use imagegen_bridge_codex_app_server::SessionBindingStore;
 use imagegen_bridge_core::{BridgeError, ErrorCode};
-use tokio_rusqlite::{Connection, params};
+use serde::{Deserialize, Serialize};
+use tokio_rusqlite::{Connection, params, rusqlite::OpenFlags};
 
 const MAX_IDENTIFIER_BYTES: usize = 512;
+const CURRENT_SCHEMA_VERSION: u32 = 1;
+
+/// Read-only status of the durable session database schema.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionSchemaStatus {
+    /// Whether the database file and migration table exist.
+    pub initialized: bool,
+    /// Highest applied migration when initialized.
+    pub version: Option<u32>,
+    /// Schema version required by this binary.
+    pub current_version: u32,
+}
+
+/// Inspects the session database without creating or migrating it.
+pub async fn inspect_sqlite_session_schema(
+    path: impl AsRef<Path>,
+) -> Result<SessionSchemaStatus, BridgeError> {
+    let path = path.as_ref();
+    let metadata = match tokio::fs::symlink_metadata(path).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(SessionSchemaStatus {
+                initialized: false,
+                version: None,
+                current_version: CURRENT_SCHEMA_VERSION,
+            });
+        }
+        Err(_) => return Err(session_error("could not inspect session database")),
+    };
+    if !metadata.file_type().is_file() {
+        return Err(session_error("session database must be a regular file"));
+    }
+    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .await
+        .map_err(|_| session_error("could not open session database read-only"))?;
+    let version = connection
+        .call(|connection| {
+            let table_exists: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations')",
+                [],
+                |row| row.get(0),
+            )?;
+            if !table_exists {
+                return Ok(None);
+            }
+            connection.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get::<_, Option<u32>>(0)
+            })
+        })
+        .await
+        .map_err(|_| session_error("could not inspect session database schema"))?;
+    connection
+        .close()
+        .await
+        .map_err(|_| session_error("could not close session database"))?;
+    Ok(SessionSchemaStatus {
+        initialized: version.is_some(),
+        version,
+        current_version: CURRENT_SCHEMA_VERSION,
+    })
+}
 
 /// `SQLite`-backed provider session bindings.
 #[derive(Debug)]
@@ -143,6 +205,26 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
+
+    #[tokio::test]
+    async fn schema_inspection_is_read_only_and_reports_migration_version() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("sessions.sqlite3");
+        let missing = inspect_sqlite_session_schema(&path).await.unwrap();
+        assert!(!missing.initialized);
+        assert!(!path.exists());
+
+        SqliteSessionBindingStore::open(&path, "codex-app-server")
+            .await
+            .unwrap()
+            .close()
+            .await
+            .unwrap();
+        let initialized = inspect_sqlite_session_schema(&path).await.unwrap();
+        assert!(initialized.initialized);
+        assert_eq!(initialized.version, Some(CURRENT_SCHEMA_VERSION));
+        assert_eq!(initialized.current_version, CURRENT_SCHEMA_VERSION);
+    }
 
     #[tokio::test]
     async fn binding_survives_database_reopen() {

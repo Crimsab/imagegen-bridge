@@ -20,6 +20,14 @@ impl Output {
         }
     }
 
+    pub(crate) const fn is_human(&self) -> bool {
+        matches!(self.mode, OutputMode::Human)
+    }
+
+    pub(crate) const fn is_machine(&self) -> bool {
+        !self.is_human()
+    }
+
     pub(crate) fn value(&self, value: &impl Serialize) -> Result<(), BridgeError> {
         let mut stdout = io::stdout().lock();
         match self.mode {

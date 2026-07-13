@@ -26,7 +26,9 @@ use crate::{
         ArtifactCommand, Cli, Command, ConfigCommand, EditArgs, GenerateArgs, ImageArgs,
         ProviderCommand, SchemaArgs, SchemaKind, SessionCommand,
     },
+    doctor,
     output::Output,
+    setup,
 };
 
 pub(crate) async fn run(cli: Cli, output: &Output) -> Result<(), BridgeError> {
@@ -39,8 +41,17 @@ pub(crate) async fn run(cli: Cli, output: &Output) -> Result<(), BridgeError> {
         Command::Schema(args) => return schema(args, output),
         _ => {}
     }
-    let resolved = resolve_config(&cli)?;
+    if let Command::Setup(args) = &cli.command {
+        if !cli.set.is_empty() || !cli.unset.is_empty() {
+            return Err(invalid(
+                "setup does not accept --set/--unset; use --state-root, --output-root, or edit the generated config",
+            ));
+        }
+        return setup::run(cli.config.as_deref(), args, output).await;
+    }
+    let (resolved, config_path) = resolve_config(&cli)?;
     match cli.command {
+        Command::Doctor(args) => doctor::run(config_path.as_deref(), resolved, &args, output).await,
         Command::Generate(args) => generate(args, &resolved, output).await,
         Command::Edit(args) => edit(args, &resolved, output).await,
         Command::Serve(args) => serve_command(args.bind, resolved, output).await,
@@ -49,15 +60,14 @@ pub(crate) async fn run(cli: Cli, output: &Output) -> Result<(), BridgeError> {
         Command::Config(args) => config(args.command, &resolved, output),
         Command::Artifacts(args) => artifacts(args.command, &resolved, output),
         Command::AuthDoctor(args) => auth_doctor(args.provider, resolved, output).await,
-        Command::Completions(_) | Command::Man(_) | Command::Schema(_) => unreachable!(),
+        Command::Setup(_) | Command::Completions(_) | Command::Man(_) | Command::Schema(_) => {
+            unreachable!()
+        }
     }
 }
 
-fn resolve_config(cli: &Cli) -> Result<ResolvedConfig, BridgeError> {
-    let file = cli.config.clone().or_else(|| {
-        let default = PathBuf::from("imagegen-bridge.toml");
-        default.exists().then_some(default)
-    });
+fn resolve_config(cli: &Cli) -> Result<(ResolvedConfig, Option<PathBuf>), BridgeError> {
+    let file = setup::command_config_path(cli.config.as_deref())?;
     let mut overrides = Vec::with_capacity(cli.set.len() + cli.unset.len());
     for operation in &cli.set {
         let (key, value) = operation.split_once('=').ok_or_else(|| {
@@ -69,7 +79,9 @@ fn resolve_config(cli: &Cli) -> Result<ResolvedConfig, BridgeError> {
         overrides.push(ConfigOverride::set(key, value));
     }
     overrides.extend(cli.unset.iter().cloned().map(ConfigOverride::unset));
-    ConfigLoader::default().resolve(file.as_deref(), &overrides)
+    ConfigLoader::default()
+        .resolve(file.as_deref(), &overrides)
+        .map(|resolved| (resolved, file))
 }
 
 async fn generate(
@@ -79,7 +91,7 @@ async fn generate(
 ) -> Result<(), BridgeError> {
     let request = if let Some(path) = args.request.as_deref() {
         ensure_request_only(
-            args.prompt.is_some() || !args.references.is_empty(),
+            args.prompt.is_some() || args.prompt_text.is_some() || !args.references.is_empty(),
             &args.image,
         )?;
         read_request(path, resolved.config.server.max_body_bytes).await?
@@ -87,6 +99,7 @@ async fn generate(
         let prompt = read_prompt(
             args.prompt
                 .as_deref()
+                .or(args.prompt_text.as_deref())
                 .ok_or_else(|| invalid("prompt is required"))?,
             resolved.config.runtime.request.max_prompt_bytes,
         )
@@ -109,6 +122,7 @@ async fn edit(
     let request = if let Some(path) = args.request.as_deref() {
         ensure_request_only(
             args.prompt.is_some()
+                || args.prompt_text.is_some()
                 || !args.images.is_empty()
                 || args.mask.is_some()
                 || !args.references.is_empty(),
@@ -119,6 +133,7 @@ async fn edit(
         let prompt = read_prompt(
             args.prompt
                 .as_deref()
+                .or(args.prompt_text.as_deref())
                 .ok_or_else(|| invalid("prompt is required"))?,
             resolved.config.runtime.request.max_prompt_bytes,
         )

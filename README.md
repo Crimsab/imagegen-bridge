@@ -15,9 +15,9 @@ The project has two Codex transports:
   notice.
 
 The repository is pre-release. Build it from source; no crates, Python wheels,
-npm packages, binaries, or container images are published yet.
-There is currently no setup wizard or web dashboard; configuration and usage
-are through TOML, the CLI, or the HTTP/SDK interfaces.
+npm packages, binaries, or container images are published yet. A guided setup
+and deep diagnostic command are included. The embedded dashboard is not
+implemented yet.
 
 ## What is implemented
 
@@ -54,11 +54,11 @@ Requirements:
 - An existing Codex OAuth login (`codex login`) for live generation.
 
 ```sh
-git clone https://github.com/Crimsab/imagegen-bridge.git
+git clone git@github.com:Crimsab/imagegen-bridge.git
 cd imagegen-bridge
 cargo build --locked --release -p imagegen-bridge-cli
-cp config.example.toml imagegen-bridge.toml
-./target/release/imagegen-bridge auth-doctor
+./target/release/imagegen-bridge setup
+./target/release/imagegen-bridge doctor
 ```
 
 You can also install the local checkout into Cargo's binary directory:
@@ -67,8 +67,14 @@ You can also install the local checkout into Cargo's binary directory:
 cargo install --locked --path crates/cli
 ```
 
-`auth-doctor` checks authentication without generating an image. It does not
-perform a paid/live image request.
+`setup` detects Codex and ChatGPT OAuth, previews every filesystem change,
+writes a user configuration atomically, creates private state and artifact
+directories, and applies the SQLite schema idempotently. It never generates an
+image unless `--live-probe` is explicitly requested and confirmed. Use
+`setup --dry-run --json` to inspect the plan or `setup --yes --non-interactive`
+for automation. `doctor` checks the executable/version, configuration, OAuth,
+permissions, database schema, listener availability, provider readiness, and
+dynamic capabilities. `doctor --live-probe` adds one confirmed paid generation.
 
 ## CLI usage
 
@@ -76,7 +82,7 @@ Generate an artifact using the default app-server provider:
 
 ```sh
 imagegen-bridge generate \
-  --prompt "A red paper fox on a charcoal background" \
+  "A red paper fox on a charcoal background" \
   --response-format artifact \
   --filename-prefix paper-fox
 ```
@@ -85,7 +91,7 @@ Edit an image or add visual references:
 
 ```sh
 imagegen-bridge edit \
-  --prompt "Change the jacket to dark blue" \
+  "Change the jacket to dark blue" \
   --image ./portrait.png \
   --reference ./palette.png \
   --response-format artifact
@@ -95,12 +101,12 @@ Use a persistent app-server thread:
 
 ```sh
 imagegen-bridge generate \
-  --prompt "Create the first character sheet" \
+  "Create the first character sheet" \
   --session-key character-design \
   --response-format artifact
 
 imagegen-bridge generate \
-  --prompt "Keep the character and show a side view" \
+  "Keep the character and show a side view" \
   --session-key character-design \
   --response-format artifact
 ```
@@ -142,7 +148,7 @@ select it explicitly:
 imagegen-bridge generate \
   --provider codex-responses \
   --model gpt-image-1.5 \
-  --prompt "A translucent red glass sculpture" \
+  "A translucent red glass sculpture" \
   --background transparent \
   --format png \
   --response-format artifact
@@ -227,9 +233,11 @@ Nested environment keys use double underscores, for example:
 export IMAGEGEN_BRIDGE__RUNTIME__GLOBAL__MAX_CONCURRENT=8
 ```
 
-Unknown configuration keys fail validation. `config show` and `config origins`
-report effective settings and provenance without resolving credential values.
-Start from [config.example.toml](config.example.toml).
+Without `--config`, commands prefer `./imagegen-bridge.toml`, then the user
+configuration created under `XDG_CONFIG_HOME` (or `~/.config`). Unknown keys
+fail validation. `config show` and `config origins` report effective settings
+and provenance without resolving credential values. Start with `setup`, or use
+[config.example.toml](config.example.toml) for a hand-managed deployment.
 
 ## Container
 

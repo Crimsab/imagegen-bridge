@@ -2,7 +2,9 @@
 
 mod args;
 mod commands;
+mod doctor;
 mod output;
+mod setup;
 
 use clap::Parser as _;
 

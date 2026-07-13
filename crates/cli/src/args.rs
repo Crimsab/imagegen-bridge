@@ -18,7 +18,7 @@ use imagegen_bridge::core::{
     propagate_version = true
 )]
 pub(crate) struct Cli {
-    /// TOML configuration file. If omitted, ./imagegen-bridge.toml is used when present.
+    /// TOML file; otherwise use ./imagegen-bridge.toml, then the XDG user config.
     #[arg(
         long,
         global = true,
@@ -76,6 +76,10 @@ pub(crate) enum OutputMode {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
+    /// Configure a local Codex OAuth installation safely and idempotently.
+    Setup(SetupArgs),
+    /// Run complete installation, storage, provider, and optional live checks.
+    Doctor(DoctorArgs),
     /// Generate one or more images.
     Generate(GenerateArgs),
     /// Edit one or more source images.
@@ -101,13 +105,56 @@ pub(crate) enum Command {
 }
 
 #[derive(Debug, Args)]
+pub(crate) struct SetupArgs {
+    /// Directory containing bridge runtime state and the session database.
+    #[arg(long, value_name = "DIR")]
+    pub state_root: Option<PathBuf>,
+    /// Directory used for generated bridge-owned artifacts.
+    #[arg(long, value_name = "DIR")]
+    pub output_root: Option<PathBuf>,
+    /// Apply the displayed plan without interactive confirmation.
+    #[arg(long)]
+    pub yes: bool,
+    /// Never prompt; changes require --yes and missing choices fail safely.
+    #[arg(long, visible_alias = "no-input")]
+    pub non_interactive: bool,
+    /// Print the complete plan without writing files or starting providers.
+    #[arg(long, short = 'n')]
+    pub dry_run: bool,
+    /// After setup, perform one explicitly confirmed paid OAuth generation.
+    #[arg(long)]
+    pub live_probe: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct DoctorArgs {
+    /// Limit provider readiness and capability checks to one provider.
+    #[arg(long)]
+    pub provider: Option<String>,
+    /// Perform one explicitly confirmed paid OAuth generation.
+    #[arg(long)]
+    pub live_probe: bool,
+    /// Confirm the explicitly requested live probe without prompting.
+    #[arg(long)]
+    pub yes: bool,
+    /// Never prompt; a requested live probe then requires --yes.
+    #[arg(long, visible_alias = "no-input")]
+    pub non_interactive: bool,
+}
+
+#[derive(Debug, Args)]
+#[group(id = "generate_prompt", required = true, multiple = false)]
 pub(crate) struct GenerateArgs {
     /// Complete native request JSON file, or `-` for stdin.
-    #[arg(long, value_name = "FILE")]
+    #[arg(long, value_name = "FILE", group = "generate_prompt")]
     pub request: Option<PathBuf>,
 
-    /// Prompt text, or `-` to read it from stdin.
-    #[arg(long, short, required_unless_present = "request", value_name = "TEXT")]
+    /// Prompt text. This positional form is the preferred interactive syntax.
+    #[arg(value_name = "PROMPT", group = "generate_prompt")]
+    pub prompt_text: Option<String>,
+
+    /// Prompt text, or `-` to read it from stdin; retained for scripts.
+    #[arg(long, short, value_name = "TEXT", group = "generate_prompt")]
     pub prompt: Option<String>,
 
     /// Local image used as a visual reference. Repeatable.
@@ -123,13 +170,18 @@ pub(crate) struct GenerateArgs {
 }
 
 #[derive(Debug, Args)]
+#[group(id = "edit_prompt", required = true, multiple = false)]
 pub(crate) struct EditArgs {
     /// Complete native request JSON file, or `-` for stdin.
-    #[arg(long, value_name = "FILE")]
+    #[arg(long, value_name = "FILE", group = "edit_prompt")]
     pub request: Option<PathBuf>,
 
-    /// Prompt text, or `-` to read it from stdin.
-    #[arg(long, short, required_unless_present = "request", value_name = "TEXT")]
+    /// Prompt text. This positional form is the preferred interactive syntax.
+    #[arg(value_name = "PROMPT", group = "edit_prompt")]
+    pub prompt_text: Option<String>,
+
+    /// Prompt text, or `-` to read it from stdin; retained for scripts.
+    #[arg(long, short, value_name = "TEXT", group = "edit_prompt")]
     pub prompt: Option<String>,
 
     /// Source image to edit. Repeatable.
