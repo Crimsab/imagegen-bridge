@@ -2,6 +2,7 @@
 
 mod capabilities;
 mod error;
+mod negotiation;
 mod parameters;
 mod provider;
 mod request;
@@ -11,6 +12,7 @@ mod validation;
 
 pub use capabilities::*;
 pub use error::*;
+pub use negotiation::*;
 pub use parameters::*;
 pub use provider::*;
 pub use request::*;

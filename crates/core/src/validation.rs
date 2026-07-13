@@ -136,6 +136,26 @@ pub fn validation_issues(request: &ImageRequest, limits: RequestLimits) -> Vec<V
             "an image edge exceeds the configured generic limit",
         );
     }
+    if !request.parameters.size.is_auto()
+        && (request.parameters.aspect_ratio.is_some() || request.parameters.resolution.is_some())
+    {
+        issue(
+            "parameters.size",
+            "ambiguous",
+            "explicit size cannot be combined with aspect_ratio or resolution hints",
+        );
+    }
+    if request
+        .parameters
+        .output_compression
+        .is_some_and(|value| value > 100)
+    {
+        issue(
+            "parameters.output_compression",
+            "out_of_range",
+            "output compression must be between 0 and 100",
+        );
+    }
     if request.parameters.output_compression.is_some()
         && !matches!(
             request.parameters.output_format,

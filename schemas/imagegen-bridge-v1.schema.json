@@ -998,6 +998,10 @@
       "description": "Complete capability declaration for one provider/model pair.",
       "type": "object",
       "properties": {
+        "aspect_ratio": {
+          "description": "Aspect-ratio hint support.",
+          "$ref": "#/$defs/SupportLevel"
+        },
         "backgrounds": {
           "description": "Supported backgrounds.",
           "type": "array",
@@ -1089,6 +1093,10 @@
           "description": "Reference-image constraints.",
           "$ref": "#/$defs/InputCapabilities"
         },
+        "resolution": {
+          "description": "Coarse resolution hint support.",
+          "$ref": "#/$defs/SupportLevel"
+        },
         "revised_prompt": {
           "description": "Revised-prompt availability.",
           "$ref": "#/$defs/SupportLevel"
@@ -1107,6 +1115,8 @@
         "edits",
         "count",
         "sizes",
+        "aspect_ratio",
+        "resolution",
         "qualities",
         "output_formats",
         "backgrounds",

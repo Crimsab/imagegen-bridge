@@ -103,6 +103,10 @@ pub struct ProviderCapabilities {
     pub count: U8Range,
     /// Supported size behavior.
     pub sizes: SizeCapabilities,
+    /// Aspect-ratio hint support.
+    pub aspect_ratio: SupportLevel,
+    /// Coarse resolution hint support.
+    pub resolution: SupportLevel,
     /// Supported qualities.
     pub qualities: BTreeSet<Quality>,
     /// Supported output encodings.
