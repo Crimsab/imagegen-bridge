@@ -1,0 +1,27 @@
+[package]
+name = "imagegen-bridge-codex-app-server"
+description = "Codex app-server provider for Imagegen Bridge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+futures-util = { version = "0.3", features = ["sink"] }
+imagegen-bridge-core = { path = "../core", version = "0.1.0" }
+parking_lot = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["codec", "rt"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/lib.rs"

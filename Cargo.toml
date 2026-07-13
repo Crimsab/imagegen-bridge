@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/artifacts",
+  "crates/codex-app-server",
   "crates/core",
   "crates/imagegen-bridge",
   "tools/schema-gen",
