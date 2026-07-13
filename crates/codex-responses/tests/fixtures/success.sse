@@ -1,0 +1,13 @@
+: heartbeat
+
+data: {"type":"response.image_generation_call.partial_image","partial_image_b64":"partial"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"type":"image_generation_call","result":"final","revised_prompt":"revised"}}
+
+data: {"type":"future.unknown_event","opaque":{"ignored":true}}
+
+data: {"type":"response.completed","response":{"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}}
+
+data: [DONE]
+

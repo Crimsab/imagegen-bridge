@@ -6,6 +6,8 @@ use imagegen_bridge_core::{BridgeError, ErrorCode};
 /// Limits applied before JSON or base64 parsing.
 #[derive(Debug, Clone, Copy)]
 pub struct SseLimits {
+    /// Maximum aggregate bytes received across the complete response stream.
+    pub max_stream_bytes: usize,
     /// Maximum bytes in one physical SSE line.
     pub max_line_bytes: usize,
     /// Maximum decoded events in one response.
@@ -17,6 +19,7 @@ pub struct SseLimits {
 impl Default for SseLimits {
     fn default() -> Self {
         Self {
+            max_stream_bytes: 256 * 1024 * 1024,
             max_line_bytes: 128 * 1024 * 1024,
             max_events: 10_000,
             max_event_bytes: 128 * 1024 * 1024,
@@ -30,6 +33,7 @@ pub struct SseDecoder {
     buffer: BytesMut,
     data: String,
     events: usize,
+    stream_bytes: usize,
     limits: SseLimits,
 }
 
@@ -41,12 +45,20 @@ impl SseDecoder {
             buffer: BytesMut::new(),
             data: String::new(),
             events: 0,
+            stream_bytes: 0,
             limits,
         }
     }
 
     /// Pushes a network chunk and returns every completed event data payload.
     pub fn push(&mut self, chunk: &[u8]) -> Result<Vec<String>, BridgeError> {
+        self.stream_bytes = self
+            .stream_bytes
+            .checked_add(chunk.len())
+            .ok_or_else(|| sse_error("SSE stream byte count overflowed"))?;
+        if self.stream_bytes > self.limits.max_stream_bytes {
+            return Err(sse_error("SSE stream exceeds the configured limit"));
+        }
         if self.buffer.len().saturating_add(chunk.len()) > self.limits.max_line_bytes {
             return Err(sse_error("SSE line exceeds the configured limit"));
         }
@@ -145,5 +157,15 @@ mod tests {
             ..SseLimits::default()
         });
         assert!(decoder.push(b"123456789").is_err());
+    }
+
+    #[test]
+    fn rejects_aggregate_stream_growth_across_small_chunks() {
+        let mut decoder = SseDecoder::new(SseLimits {
+            max_stream_bytes: 12,
+            ..SseLimits::default()
+        });
+        assert!(decoder.push(b": ping\n").unwrap().is_empty());
+        assert!(decoder.push(b": pong").is_err());
     }
 }

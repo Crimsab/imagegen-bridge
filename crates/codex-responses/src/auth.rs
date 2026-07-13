@@ -38,9 +38,18 @@ pub trait CodexCredentialSource: Send + Sync {
 }
 
 /// Reads the Codex CLI `auth.json` file without persisting another token copy.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CodexAuthFile {
     path: PathBuf,
+}
+
+impl std::fmt::Debug for CodexAuthFile {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CodexAuthFile")
+            .field("path", &"[REDACTED PATH]")
+            .finish()
+    }
 }
 
 impl CodexAuthFile {
@@ -69,7 +78,7 @@ impl CodexAuthFile {
 #[async_trait]
 impl CodexCredentialSource for CodexAuthFile {
     async fn load(&self) -> Result<CodexOAuthCredentials, BridgeError> {
-        let metadata = tokio::fs::metadata(&self.path)
+        let metadata = tokio::fs::symlink_metadata(&self.path)
             .await
             .map_err(|_| auth_error("Codex OAuth credentials were not found"))?;
         if !metadata.is_file() || metadata.len() > MAX_AUTH_FILE_BYTES {
@@ -174,5 +183,23 @@ mod tests {
         let error = CodexAuthFile::new(path).load().await.unwrap_err();
         assert_eq!(error.code, ErrorCode::Authentication);
         assert!(!format!("{error:?}").contains("secret"));
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn rejects_symlinked_auth_files_and_redacts_configured_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target.json");
+        let link = directory.path().join("auth-secret-name.json");
+        tokio::fs::write(
+            &target,
+            br#"{"auth_mode":"chatgpt","tokens":{"access_token":"secret"}}"#,
+        )
+        .await
+        .unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let source = CodexAuthFile::new(link);
+        assert!(source.load().await.is_err());
+        assert!(!format!("{source:?}").contains("auth-secret-name"));
     }
 }

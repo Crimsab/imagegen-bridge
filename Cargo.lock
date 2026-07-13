@@ -754,6 +754,7 @@ name = "imagegen-bridge"
 version = "0.1.0"
 dependencies = [
  "imagegen-bridge-artifacts",
+ "imagegen-bridge-codex-responses",
  "imagegen-bridge-config",
  "imagegen-bridge-core",
  "imagegen-bridge-runtime",

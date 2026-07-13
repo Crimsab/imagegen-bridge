@@ -23,7 +23,10 @@ use reqwest::{Client, StatusCode, Url, header};
 use secrecy::ExposeSecret as _;
 use serde_json::{Value, json};
 
-use crate::{CodexCredentialSource, SseDecoder, SseLimits};
+use crate::{
+    CodexCredentialSource, SseDecoder, SseLimits,
+    events::{CallResult, EventState, merge_usage, process_event},
+};
 
 const DEFAULT_ENDPOINT: &str = "https://chatgpt.com/backend-api/codex/responses";
 const DEFAULT_RESPONSES_MODEL: &str = "gpt-5.5";
@@ -462,138 +465,12 @@ fn image_data_url(image: &LoadedImage) -> String {
     format!("data:{media_type};base64,{}", STANDARD.encode(&image.bytes))
 }
 
-#[derive(Default)]
-struct EventState {
-    final_image: Option<String>,
-    partial_image: Option<String>,
-    revised_prompt: Option<String>,
-    usage: Usage,
-    failure: Option<BridgeError>,
-}
-
-impl EventState {
-    fn finish(self) -> Result<CallResult, BridgeError> {
-        if let Some(error) = self.failure {
-            return Err(error);
-        }
-        let b64_json = self
-            .final_image
-            .or(self.partial_image)
-            .ok_or_else(|| protocol_error("Codex Responses stream completed without image data"))?;
-        Ok(CallResult {
-            b64_json,
-            revised_prompt: self.revised_prompt,
-            usage: self.usage,
-        })
-    }
-}
-
-struct CallResult {
-    b64_json: String,
-    revised_prompt: Option<String>,
-    usage: Usage,
-}
-
-fn process_event(
-    data: &str,
-    state: &mut EventState,
-    maximum_base64: usize,
-) -> Result<(), BridgeError> {
-    if data.trim() == "[DONE]" || data.trim().is_empty() {
-        return Ok(());
-    }
-    let event: Value = serde_json::from_str(data)
-        .map_err(|_| protocol_error("Codex Responses sent malformed JSON event"))?;
-    match event["type"].as_str().unwrap_or_default() {
-        "response.output_item.done" => {
-            if event["item"]["type"] == "image_generation_call" {
-                capture_image_item(&event["item"], state, maximum_base64)?;
-            }
-        }
-        "response.image_generation_call.partial_image" => {
-            if let Some(partial) = event["partial_image_b64"].as_str() {
-                check_base64_size(partial, maximum_base64)?;
-                state.partial_image = Some(partial.to_owned());
-            }
-        }
-        "response.completed" => {
-            if state.final_image.is_none()
-                && let Some(output) = event["response"]["output"].as_array()
-            {
-                for item in output {
-                    if item["type"] == "image_generation_call" {
-                        capture_image_item(item, state, maximum_base64)?;
-                    }
-                }
-            }
-            capture_usage(&event["response"]["usage"], &mut state.usage);
-        }
-        "response.failed" | "error" => {
-            let code = event["error"]["code"]
-                .as_str()
-                .or_else(|| event["code"].as_str())
-                .unwrap_or("upstream_failure");
-            state.failure = Some(
-                BridgeError::new(ErrorCode::Upstream, "Codex Responses reported a failure")
-                    .with_provider("codex-responses")
-                    .with_detail("upstream_code", code),
-            );
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
-fn capture_image_item(
-    item: &Value,
-    state: &mut EventState,
-    maximum_base64: usize,
-) -> Result<(), BridgeError> {
-    if let Some(result) = item["result"].as_str().filter(|value| !value.is_empty()) {
-        check_base64_size(result, maximum_base64)?;
-        state.final_image = Some(result.to_owned());
-    }
-    if let Some(revised) = item["revised_prompt"]
-        .as_str()
-        .filter(|value| !value.is_empty())
-    {
-        state.revised_prompt = Some(revised.to_owned());
-    }
-    Ok(())
-}
-
-fn check_base64_size(value: &str, maximum: usize) -> Result<(), BridgeError> {
-    if value.len() > maximum {
-        return Err(protocol_error(
-            "Codex image base64 exceeds the configured limit",
-        ));
-    }
-    Ok(())
-}
-
-fn capture_usage(value: &Value, usage: &mut Usage) {
-    usage.input_tokens = value["input_tokens"].as_u64();
-    usage.output_tokens = value["output_tokens"].as_u64();
-    usage.total_tokens = value["total_tokens"].as_u64();
-}
-
-fn merge_usage(total: &mut Usage, additional: &Usage) {
-    total.input_tokens = add_optional(total.input_tokens, additional.input_tokens);
-    total.output_tokens = add_optional(total.output_tokens, additional.output_tokens);
-    total.total_tokens = add_optional(total.total_tokens, additional.total_tokens);
-}
-
-fn add_optional(left: Option<u64>, right: Option<u64>) -> Option<u64> {
-    match (left, right) {
-        (None, None) => None,
-        (left, right) => Some(left.unwrap_or(0).saturating_add(right.unwrap_or(0))),
-    }
-}
-
 fn status_error(status: StatusCode) -> BridgeError {
     let (code, retryable) = match status {
         StatusCode::UNAUTHORIZED => (ErrorCode::Authentication, false),
         StatusCode::FORBIDDEN => (ErrorCode::PermissionDenied, false),
+        StatusCode::REQUEST_TIMEOUT => (ErrorCode::Timeout, false),
+        StatusCode::PAYLOAD_TOO_LARGE => (ErrorCode::Input, false),
         StatusCode::TOO_MANY_REQUESTS => (ErrorCode::RateLimited, true),
         status if status.is_server_error() => (ErrorCode::Upstream, true),
         _ => (ErrorCode::Upstream, false),
@@ -614,8 +491,12 @@ fn http_transport_error(error: &reqwest::Error) -> BridgeError {
         ErrorCode::Upstream
     };
     BridgeError::new(code, "Codex Responses transport failed")
-        .retryable(true)
+        // A transport failure after sending a paid generation request has an
+        // ambiguous outcome. Callers may explicitly retry with idempotency,
+        // but the provider must not advertise a blind retry as safe.
+        .retryable(false)
         .with_provider("codex-responses")
+        .with_detail("outcome", "unknown")
 }
 
 fn protocol_error(message: &str) -> BridgeError {
@@ -629,7 +510,9 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use imagegen_bridge_core::{CompatibilityMode, GenerationParameters, RequestPolicies};
+    use imagegen_bridge_core::{
+        CompatibilityMode, GenerationParameters, ImageInput, RequestPolicies,
+    };
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
     const ONE_PIXEL_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
@@ -654,58 +537,65 @@ mod tests {
         CodexResponsesProvider::new(Arc::new(FakeCredentials), config).unwrap()
     }
 
-    async fn mock_responses_server() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+    async fn mock_responses_server(
+        calls: usize,
+    ) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let handle = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut request = Vec::new();
-            let mut buffer = [0_u8; 4096];
-            let header_end = loop {
-                let read = stream.read(&mut buffer).await.unwrap();
-                assert_ne!(read, 0, "request ended before the headers completed");
-                request.extend_from_slice(&buffer[..read]);
-                if let Some(position) = request.windows(4).position(|value| value == b"\r\n\r\n") {
-                    break position + 4;
+            for _ in 0..calls {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 4096];
+                let header_end = loop {
+                    let read = stream.read(&mut buffer).await.unwrap();
+                    assert_ne!(read, 0, "request ended before the headers completed");
+                    request.extend_from_slice(&buffer[..read]);
+                    if let Some(position) =
+                        request.windows(4).position(|value| value == b"\r\n\r\n")
+                    {
+                        break position + 4;
+                    }
+                };
+                let headers = std::str::from_utf8(&request[..header_end]).unwrap();
+                assert!(headers.starts_with("POST /responses HTTP/1.1\r\n"));
+                assert!(headers.contains("authorization: Bearer token\r\n"));
+                assert!(headers.contains("chatgpt-account-id: account\r\n"));
+                assert!(headers.contains("originator: imagegen-bridge\r\n"));
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length: ")
+                            .map(str::to_owned)
+                    })
+                    .unwrap()
+                    .parse::<usize>()
+                    .unwrap();
+                while request.len() - header_end < content_length {
+                    let read = stream.read(&mut buffer).await.unwrap();
+                    assert_ne!(read, 0, "request ended before the body completed");
+                    request.extend_from_slice(&buffer[..read]);
                 }
-            };
-            let headers = std::str::from_utf8(&request[..header_end]).unwrap();
-            assert!(headers.starts_with("POST /responses HTTP/1.1\r\n"));
-            assert!(headers.contains("authorization: Bearer token\r\n"));
-            assert!(headers.contains("chatgpt-account-id: account\r\n"));
-            assert!(headers.contains("originator: imagegen-bridge\r\n"));
-            let content_length = headers
-                .lines()
-                .find_map(|line| {
-                    line.to_ascii_lowercase()
-                        .strip_prefix("content-length: ")
-                        .map(str::to_owned)
-                })
-                .unwrap()
-                .parse::<usize>()
-                .unwrap();
-            while request.len() - header_end < content_length {
-                let read = stream.read(&mut buffer).await.unwrap();
-                assert_ne!(read, 0, "request ended before the body completed");
-                request.extend_from_slice(&buffer[..read]);
-            }
-            let body: Value =
-                serde_json::from_slice(&request[header_end..header_end + content_length]).unwrap();
-            assert_eq!(body["stream"], true);
-            assert_eq!(body["store"], false);
-            assert_eq!(body["tools"][0]["type"], "image_generation");
+                let body: Value =
+                    serde_json::from_slice(&request[header_end..header_end + content_length])
+                        .unwrap();
+                assert_eq!(body["stream"], true);
+                assert_eq!(body["store"], false);
+                assert_eq!(body["tools"][0]["type"], "image_generation");
 
-            let events = format!(
-                "data: {{\"type\":\"response.output_item.done\",\"item\":{{\"type\":\"image_generation_call\",\"result\":\"{ONE_PIXEL_PNG}\",\"revised_prompt\":\"revised test prompt\"}}}}\n\ndata: {{\"type\":\"response.completed\",\"response\":{{\"usage\":{{\"input_tokens\":2,\"output_tokens\":3,\"total_tokens\":5}}}}}}\n\ndata: [DONE]\n\n"
-            );
-            let response_headers = format!(
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                events.len()
-            );
-            stream.write_all(response_headers.as_bytes()).await.unwrap();
-            for chunk in events.as_bytes().chunks(17) {
-                stream.write_all(chunk).await.unwrap();
-                tokio::task::yield_now().await;
+                let events = format!(
+                    "data: {{\"type\":\"response.output_item.done\",\"item\":{{\"type\":\"image_generation_call\",\"result\":\"{ONE_PIXEL_PNG}\",\"revised_prompt\":\"revised test prompt\"}}}}\n\ndata: {{\"type\":\"response.completed\",\"response\":{{\"usage\":{{\"input_tokens\":2,\"output_tokens\":3,\"total_tokens\":5}}}}}}\n\ndata: [DONE]\n\n"
+                );
+                let response_headers = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    events.len()
+                );
+                stream.write_all(response_headers.as_bytes()).await.unwrap();
+                for chunk in events.as_bytes().chunks(17) {
+                    stream.write_all(chunk).await.unwrap();
+                    tokio::task::yield_now().await;
+                }
             }
         });
         (address, handle)
@@ -726,6 +616,9 @@ mod tests {
             ..GenerationParameters::default()
         };
         let body = provider.request_body(&request, &[json!({"type":"input_text","text":"test"})]);
+        let expected: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/advanced-request.json")).unwrap();
+        assert_eq!(body, expected);
         let tool = &body["tools"][0];
         assert_eq!(tool["model"], "gpt-image-2");
         assert_eq!(tool["size"], "1536x1024");
@@ -737,26 +630,18 @@ mod tests {
     }
 
     #[test]
-    fn final_image_wins_over_partial_and_usage_is_extracted() {
+    fn golden_sse_fixture_handles_heartbeats_unknown_fields_and_event_names() {
+        let fixture = include_bytes!("../tests/fixtures/success.sse");
+        let mut decoder = SseDecoder::new(SseLimits::default());
         let mut state = EventState::default();
-        process_event(
-            r#"{"type":"response.image_generation_call.partial_image","partial_image_b64":"partial"}"#,
-            &mut state,
-            100,
-        )
-        .unwrap();
-        process_event(
-            r#"{"type":"response.output_item.done","item":{"type":"image_generation_call","result":"final","revised_prompt":"revised"}}"#,
-            &mut state,
-            100,
-        )
-        .unwrap();
-        process_event(
-            r#"{"type":"response.completed","response":{"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}}"#,
-            &mut state,
-            100,
-        )
-        .unwrap();
+        for chunk in fixture.chunks(11) {
+            for event in decoder.push(chunk).unwrap() {
+                process_event(&event, &mut state, 100).unwrap();
+            }
+        }
+        for event in decoder.finish().unwrap() {
+            process_event(&event, &mut state, 100).unwrap();
+        }
         let result = state.finish().unwrap();
         assert_eq!(result.b64_json, "final");
         assert_eq!(result.revised_prompt.as_deref(), Some("revised"));
@@ -778,7 +663,7 @@ mod tests {
 
     #[tokio::test]
     async fn sends_oauth_headers_and_consumes_fragmented_sse_without_mime_header() {
-        let (address, server) = mock_responses_server().await;
+        let (address, server) = mock_responses_server(1).await;
         let loader =
             Arc::new(InputLoader::new(Vec::<PathBuf>::new(), ImageLimits::default()).unwrap());
         let mut config = CodexResponsesConfig::production(loader).unwrap();
@@ -806,6 +691,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn generates_requested_count_and_aggregates_usage() {
+        let (address, server) = mock_responses_server(2).await;
+        let loader =
+            Arc::new(InputLoader::new(Vec::<PathBuf>::new(), ImageLimits::default()).unwrap());
+        let mut config = CodexResponsesConfig::production(loader).unwrap();
+        config.endpoint = Url::parse(&format!("http://{address}/responses")).unwrap();
+        let provider = CodexResponsesProvider::new(Arc::new(FakeCredentials), config).unwrap();
+        let mut request = ImageRequest::generate("two test images");
+        request.parameters.n = 2;
+        let response = provider
+            .execute(
+                request,
+                ProviderContext {
+                    request_id: "mock-request-two".to_owned(),
+                    deadline: Instant::now() + std::time::Duration::from_secs(10),
+                    cancellation: tokio_util::sync::CancellationToken::new(),
+                },
+            )
+            .await
+            .unwrap();
+        server.await.unwrap();
+        assert_eq!(response.data.len(), 2);
+        assert_eq!(response.usage.unwrap().total_tokens, Some(10));
+    }
+
+    #[tokio::test]
     #[ignore = "uses the private Codex endpoint and performs a real OAuth image generation"]
     async fn live_codex_responses_generates_a_verified_image() {
         if std::env::var("IMAGEGEN_BRIDGE_LIVE_CODEX_RESPONSES").as_deref() != Ok("1") {
@@ -822,7 +733,20 @@ mod tests {
         let mut request = ImageRequest::generate(
             "A single vermilion triangle centered on a plain cream background",
         );
+        request.operation = ImageOperation::Generate {
+            reference_images: vec![ImageInput {
+                source: ImageSource::Base64 {
+                    data: ONE_PIXEL_PNG.to_owned(),
+                },
+                media_type: Some("image/png".to_owned()),
+                filename: Some("reference.png".to_owned()),
+            }],
+        };
+        request.parameters.size = "1024x1024".parse().unwrap();
         request.parameters.quality = Quality::Medium;
+        request.parameters.output_format = OutputFormat::Png;
+        request.parameters.background = Background::Opaque;
+        request.parameters.partial_images = 1;
         let response = provider
             .execute(
                 request,
