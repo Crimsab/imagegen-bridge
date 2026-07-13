@@ -60,6 +60,7 @@ pub struct AppServerRpc {
     pending: Arc<ParkingMutex<HashMap<u64, PendingSender>>>,
     notifications: broadcast::Sender<RpcNotification>,
     closed: watch::Receiver<Option<BridgeError>>,
+    closed_sender: watch::Sender<Option<BridgeError>>,
     next_id: AtomicU64,
     config: RpcConfig,
 }
@@ -96,13 +97,14 @@ impl AppServerRpc {
             config.max_message_bytes,
             Arc::clone(&pending),
             notifications.clone(),
-            closed_sender,
+            closed_sender.clone(),
         ));
         let rpc = Arc::new(Self {
             writer: Mutex::new(Box::new(writer)),
             pending,
             notifications,
             closed,
+            closed_sender,
             next_id: AtomicU64::new(1),
             config,
         });
@@ -130,6 +132,12 @@ impl AppServerRpc {
     #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<RpcNotification> {
         self.notifications.subscribe()
+    }
+
+    /// Returns whether the read or write side has failed permanently.
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.closed.borrow().is_some()
     }
 
     /// Sends a request using the default timeout.
@@ -191,14 +199,17 @@ impl AppServerRpc {
 
     async fn write(&self, rendered: &[u8]) -> Result<(), BridgeError> {
         let mut writer = self.writer.lock().await;
-        writer
-            .write_all(rendered)
-            .await
-            .map_err(|_| protocol_error("could not write to app-server"))?;
-        writer
-            .flush()
-            .await
-            .map_err(|_| protocol_error("could not flush app-server input"))
+        if let Err(_error) = writer.write_all(rendered).await {
+            let error = protocol_error("could not write to app-server");
+            fail_connection(error.clone(), &self.pending, &self.closed_sender);
+            return Err(error);
+        }
+        if let Err(_error) = writer.flush().await {
+            let error = protocol_error("could not flush app-server input");
+            fail_connection(error.clone(), &self.pending, &self.closed_sender);
+            return Err(error);
+        }
+        Ok(())
     }
 }
 
@@ -275,13 +286,20 @@ fn dispatch_message(
 }
 
 fn rpc_response_error(value: &Value) -> BridgeError {
-    let message = value
-        .get("message")
-        .and_then(Value::as_str)
-        .unwrap_or("app-server request failed");
-    BridgeError::new(ErrorCode::Upstream, message)
-        .with_provider("codex-app-server")
-        .with_detail("rpc_code", value.get("code"))
+    let mut error = BridgeError::new(ErrorCode::Upstream, "Codex app-server request failed")
+        .with_provider("codex-app-server");
+    if let Some(code) = value.get("code").and_then(Value::as_i64) {
+        error = error.with_detail("rpc_code", code);
+    } else if let Some(code) = value.get("code").and_then(Value::as_str).filter(|code| {
+        !code.is_empty()
+            && code.len() <= 64
+            && code
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    }) {
+        error = error.with_detail("rpc_code", code);
+    }
+    error
 }
 
 fn fail_connection(
@@ -388,5 +406,44 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.code, ErrorCode::Protocol);
+    }
+
+    #[tokio::test]
+    async fn connection_close_fails_pending_callers_and_marks_rpc_closed() {
+        let (rpc, mut server) = initialized_connection().await;
+        let pending = tokio::spawn({
+            let rpc = Arc::clone(&rpc);
+            async move { rpc.request("pending", json!({})).await }
+        });
+        let request: Value = serde_json::from_str(&server.next().await.unwrap().unwrap()).unwrap();
+        assert_eq!(request["method"], "pending");
+        drop(server);
+        let error = pending.await.unwrap().unwrap_err();
+        assert_eq!(error.code, ErrorCode::Protocol);
+        assert!(rpc.is_closed());
+    }
+
+    #[tokio::test]
+    async fn upstream_error_messages_are_not_reflected_to_clients() {
+        let (rpc, mut server) = initialized_connection().await;
+        let request = tokio::spawn({
+            let rpc = Arc::clone(&rpc);
+            async move { rpc.request("fails", json!({})).await }
+        });
+        let incoming: Value = serde_json::from_str(&server.next().await.unwrap().unwrap()).unwrap();
+        server
+            .send(
+                json!({
+                    "id": incoming["id"],
+                    "error": {"code": "invalid_request", "message": "secret prompt and /private/path"}
+                })
+                .to_string(),
+            )
+            .await
+            .unwrap();
+        let error = request.await.unwrap().unwrap_err();
+        assert!(!error.message.contains("secret"));
+        assert!(!error.message.contains("/private"));
+        assert_eq!(error.details["rpc_code"], "invalid_request");
     }
 }

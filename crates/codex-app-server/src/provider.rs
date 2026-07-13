@@ -3,7 +3,7 @@
 use std::{
     collections::{BTreeSet, HashMap},
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, Weak},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -72,10 +72,10 @@ pub struct AppServerProviderConfig {
 
 /// Provider backed by one initialized app-server connection.
 pub struct AppServerImageProvider {
-    rpc: Arc<AppServerRpc>,
+    fixed_rpc: Option<Arc<AppServerRpc>>,
     process: Option<Arc<CodexProcess>>,
     sessions: Arc<dyn SessionBindingStore>,
-    thread_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    thread_locks: Mutex<HashMap<String, Weak<Mutex<()>>>>,
     config: AppServerProviderConfig,
 }
 
@@ -83,7 +83,7 @@ impl std::fmt::Debug for AppServerImageProvider {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("AppServerImageProvider")
-            .field("rpc", &self.rpc)
+            .field("has_fixed_rpc", &self.fixed_rpc.is_some())
             .field("has_process", &self.process.is_some())
             .field("config", &self.config)
             .finish_non_exhaustive()
@@ -99,7 +99,7 @@ impl AppServerImageProvider {
         config: AppServerProviderConfig,
     ) -> Self {
         Self {
-            rpc,
+            fixed_rpc: Some(rpc),
             process: None,
             sessions,
             thread_locks: Mutex::new(HashMap::new()),
@@ -114,9 +114,8 @@ impl AppServerImageProvider {
         sessions: Arc<dyn SessionBindingStore>,
         config: AppServerProviderConfig,
     ) -> Self {
-        let rpc = process.rpc();
         Self {
-            rpc,
+            fixed_rpc: None,
             process: Some(process),
             sessions,
             thread_locks: Mutex::new(HashMap::new()),
@@ -132,6 +131,7 @@ impl AppServerImageProvider {
         validate_request(&request, RequestLimits::default())?;
         let negotiated = negotiate_request(&request, &capabilities())?;
         let request = negotiated.effective_request;
+        let rpc = self.connection().await?;
         let lock_key = request
             .session
             .key
@@ -140,19 +140,36 @@ impl AppServerImageProvider {
             .unwrap_or_else(|| context.request_id.clone());
         let thread_lock = {
             let mut locks = self.thread_locks.lock().await;
-            Arc::clone(
-                locks
-                    .entry(lock_key)
-                    .or_insert_with(|| Arc::new(Mutex::new(()))),
-            )
+            locks.retain(|_, lock| lock.strong_count() > 0);
+            if let Some(lock) = locks.get(&lock_key).and_then(Weak::upgrade) {
+                lock
+            } else {
+                let lock = Arc::new(Mutex::new(()));
+                locks.insert(lock_key, Arc::downgrade(&lock));
+                lock
+            }
         };
-        let _guard = thread_lock.lock().await;
+        let remaining = context.deadline.saturating_duration_since(Instant::now());
+        let _guard = tokio::select! {
+            guard = thread_lock.lock_owned() => guard,
+            () = context.cancellation.cancelled() => {
+                return Err(BridgeError::new(
+                    ErrorCode::Cancelled,
+                    "request was cancelled while waiting for the session",
+                ));
+            }
+            () = tokio::time::sleep(remaining) => {
+                return Err(BridgeError::new(
+                    ErrorCode::Timeout,
+                    "request timed out while waiting for the session",
+                ).retryable(true));
+            }
+        };
         let started = Instant::now();
-        let (thread_id, reused) = self.resolve_thread(&request, &context).await?;
-        let result = self.run_turn(&thread_id, &request, &context).await;
+        let (thread_id, reused) = self.resolve_thread(&rpc, &request, &context).await?;
+        let result = self.run_turn(&rpc, &thread_id, &request, &context).await;
         if request.session.mode == SessionMode::Isolated {
-            let _ = self
-                .rpc
+            let _ = rpc
                 .request_until(
                     "thread/archive",
                     json!({"threadId": thread_id}),
@@ -195,22 +212,39 @@ impl AppServerImageProvider {
         })
     }
 
+    async fn connection(&self) -> Result<Arc<AppServerRpc>, BridgeError> {
+        if let Some(process) = &self.process {
+            process.rpc().await
+        } else {
+            self.fixed_rpc.clone().ok_or_else(|| {
+                BridgeError::new(
+                    ErrorCode::Internal,
+                    "app-server provider has no connection source",
+                )
+            })
+        }
+    }
+
     async fn resolve_thread(
         &self,
+        rpc: &AppServerRpc,
         request: &ImageRequest,
         context: &ProviderContext,
     ) -> Result<(String, bool), BridgeError> {
         match request.session.mode {
-            SessionMode::Isolated => self.start_thread(true, context).await.map(|id| (id, false)),
+            SessionMode::Isolated => self
+                .start_thread(rpc, true, context)
+                .await
+                .map(|id| (id, false)),
             SessionMode::Persistent => {
                 let key = request.session.key.as_deref().ok_or_else(|| {
                     BridgeError::new(ErrorCode::Session, "persistent session key is missing")
                 })?;
                 if let Some(thread_id) = self.sessions.get(key).await? {
-                    self.resume_thread(&thread_id, context).await?;
+                    self.resume_thread(rpc, &thread_id, context).await?;
                     Ok((thread_id, true))
                 } else {
-                    let thread_id = self.start_thread(false, context).await?;
+                    let thread_id = self.start_thread(rpc, false, context).await?;
                     self.sessions.put(key, &thread_id).await?;
                     Ok((thread_id, false))
                 }
@@ -219,7 +253,7 @@ impl AppServerImageProvider {
                 let thread_id = request.session.thread_id.as_deref().ok_or_else(|| {
                     BridgeError::new(ErrorCode::Session, "explicit thread ID is missing")
                 })?;
-                self.resume_thread(thread_id, context).await?;
+                self.resume_thread(rpc, thread_id, context).await?;
                 Ok((thread_id.to_owned(), true))
             }
         }
@@ -227,11 +261,11 @@ impl AppServerImageProvider {
 
     async fn start_thread(
         &self,
+        rpc: &AppServerRpc,
         ephemeral: bool,
         context: &ProviderContext,
     ) -> Result<String, BridgeError> {
-        let result = self
-            .rpc
+        let result = rpc
             .request_until(
                 "thread/start",
                 json!({
@@ -255,22 +289,23 @@ impl AppServerImageProvider {
 
     async fn resume_thread(
         &self,
+        rpc: &AppServerRpc,
         thread_id: &str,
         context: &ProviderContext,
     ) -> Result<(), BridgeError> {
-        self.rpc
-            .request_until(
-                "thread/resume",
-                json!({"threadId": thread_id}),
-                context.deadline,
-                context.cancellation.clone(),
-            )
-            .await?;
+        rpc.request_until(
+            "thread/resume",
+            json!({"threadId": thread_id}),
+            context.deadline,
+            context.cancellation.clone(),
+        )
+        .await?;
         Ok(())
     }
 
     async fn run_turn(
         &self,
+        rpc: &AppServerRpc,
         thread_id: &str,
         request: &ImageRequest,
         context: &ProviderContext,
@@ -286,9 +321,8 @@ impl AppServerImageProvider {
                 .iter()
                 .map(|path| json!({"type": "localImage", "path": path, "detail": "original"})),
         );
-        let mut notifications = self.rpc.subscribe();
-        let result = self
-            .rpc
+        let mut notifications = rpc.subscribe();
+        let result = rpc
             .request_until(
                 "turn/start",
                 json!({"threadId": thread_id, "input": input}),
@@ -304,11 +338,11 @@ impl AppServerImageProvider {
             let notification = tokio::select! {
                 result = notifications.recv() => result.map_err(|error| notification_error(&error))?,
                 () = context.cancellation.cancelled() => {
-                    self.interrupt(thread_id, &turn_id, context).await;
+                    self.interrupt(rpc, thread_id, &turn_id, context).await;
                     return Err(BridgeError::new(ErrorCode::Cancelled, "image generation was cancelled"));
                 }
                 () = tokio::time::sleep(remaining) => {
-                    self.interrupt(thread_id, &turn_id, context).await;
+                    self.interrupt(rpc, thread_id, &turn_id, context).await;
                     return Err(BridgeError::new(ErrorCode::Timeout, "image generation timed out").retryable(true));
                 }
             };
@@ -350,9 +384,14 @@ impl AppServerImageProvider {
         }
     }
 
-    async fn interrupt(&self, thread_id: &str, turn_id: &str, context: &ProviderContext) {
-        let _ = self
-            .rpc
+    async fn interrupt(
+        &self,
+        rpc: &AppServerRpc,
+        thread_id: &str,
+        turn_id: &str,
+        context: &ProviderContext,
+    ) {
+        let _ = rpc
             .request_until(
                 "turn/interrupt",
                 json!({"threadId": thread_id, "turnId": turn_id}),
@@ -415,7 +454,11 @@ impl ImageProvider for AppServerImageProvider {
     }
 
     async fn check_ready(&self) -> Result<(), BridgeError> {
-        let account = self.rpc.request("account/read", json!({})).await?;
+        let account = self
+            .connection()
+            .await?
+            .request("account/read", json!({}))
+            .await?;
         if account["account"].is_null() {
             return Err(BridgeError::new(
                 ErrorCode::Authentication,
@@ -556,7 +599,10 @@ struct TurnImages {
 mod tests {
     #![allow(clippy::unwrap_used)]
 
-    use std::time::Duration;
+    use std::{fs, time::Duration};
+
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt as _;
 
     use futures_util::{SinkExt as _, StreamExt as _};
     use tokio::io::duplex;
@@ -714,6 +760,304 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn waiting_on_the_same_session_is_cancellable_without_starting_a_turn() {
+        let (rpc, mut server) = rpc_and_server().await;
+        let provider = Arc::new(AppServerImageProvider::new(
+            rpc,
+            Arc::new(MemorySessionBindingStore::default()),
+            AppServerProviderConfig {
+                codex_model: None,
+                cwd: PathBuf::from("/tmp"),
+                image_limits: ImageLimits::default(),
+            },
+        ));
+        let first = tokio::spawn({
+            let provider = Arc::clone(&provider);
+            async move { provider.execute(request(), context("first")).await }
+        });
+        let start = next_message(&mut server).await;
+        server
+            .send(json!({"id": start["id"], "result": {"thread": {"id": "thread-1"}}}).to_string())
+            .await
+            .unwrap();
+        let turn = next_message(&mut server).await;
+        server
+            .send(json!({"id": turn["id"], "result": {"turn": {"id": "turn-1"}}}).to_string())
+            .await
+            .unwrap();
+
+        let cancellation = CancellationToken::new();
+        let second = tokio::spawn({
+            let provider = Arc::clone(&provider);
+            let cancellation = cancellation.clone();
+            async move {
+                provider
+                    .execute(
+                        request(),
+                        ProviderContext {
+                            request_id: "second".to_owned(),
+                            deadline: Instant::now() + Duration::from_secs(2),
+                            cancellation,
+                        },
+                    )
+                    .await
+            }
+        });
+        tokio::task::yield_now().await;
+        cancellation.cancel();
+        let error = second.await.unwrap().unwrap_err();
+        assert_eq!(error.code, ErrorCode::Cancelled);
+
+        complete_turn(&mut server, "thread-1", "turn-1").await;
+        assert!(first.await.unwrap().is_ok());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn process_restart_resumes_the_durable_thread_without_starting_a_new_chat() {
+        let directory = tempfile::tempdir().unwrap();
+        let script = directory.path().join("fake-codex");
+        let state = directory.path().join("started-once");
+        let source = format!(
+            r#"#!/bin/sh
+STATE='{}'
+if [ -e "$STATE" ]; then
+  RUN=2
+else
+  : > "$STATE"
+  RUN=1
+fi
+while IFS= read -r LINE; do
+  case "$LINE" in
+    *'"method":"initialize"'*)
+      printf '%s\n' '{{"id":1,"result":{{}}}}'
+      ;;
+    *'"method":"thread/resume"'*)
+      printf '%s\n' '{{"id":2,"result":{{"thread":{{"id":"thread-1"}}}}}}'
+      ;;
+    *'"method":"turn/start"'*)
+      if [ "$RUN" -eq 1 ]; then
+        exit 17
+      fi
+      printf '%s\n' '{{"id":3,"result":{{"turn":{{"id":"turn-2"}}}}}}'
+      printf '%s\n' '{{"method":"item/completed","params":{{"threadId":"thread-1","turnId":"turn-2","item":{{"type":"imageGeneration","id":"image-1","status":"completed","revisedPrompt":"resumed prompt","result":"{}"}}}}}}'
+      printf '%s\n' '{{"method":"turn/completed","params":{{"threadId":"thread-1","turn":{{"id":"turn-2","status":"completed","items":[]}}}}}}'
+      ;;
+  esac
+done
+"#,
+            state.display(),
+            ONE_PIXEL_PNG
+        );
+        fs::write(&script, source).unwrap();
+        let mut permissions = fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&script, permissions).unwrap();
+
+        let process = Arc::new(
+            CodexProcess::spawn(crate::CodexProcessConfig {
+                executable: script,
+                cwd: Some(directory.path().to_owned()),
+                rpc: RpcConfig {
+                    request_timeout: Duration::from_secs(2),
+                    ..RpcConfig::default()
+                },
+                restart_backoff: Duration::ZERO,
+                ..crate::CodexProcessConfig::default()
+            })
+            .await
+            .unwrap(),
+        );
+        let sessions = Arc::new(MemorySessionBindingStore::default());
+        sessions.put("gallery", "thread-1").await.unwrap();
+        let provider = AppServerImageProvider::with_process(
+            Arc::clone(&process),
+            sessions,
+            AppServerProviderConfig {
+                codex_model: None,
+                cwd: directory.path().to_owned(),
+                image_limits: ImageLimits::default(),
+            },
+        );
+
+        let first = provider
+            .execute(request(), context("crashing-request"))
+            .await
+            .unwrap_err();
+        assert_eq!(first.code, ErrorCode::Protocol);
+        let second = provider
+            .execute(request(), context("resumed-request"))
+            .await
+            .unwrap();
+        let session = second.session.unwrap();
+        assert!(session.reused);
+        assert_eq!(session.thread_id.as_deref(), Some("thread-1"));
+        assert_eq!(process.generation(), 2);
+        provider.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn deadline_interrupts_an_active_turn() {
+        let (rpc, mut server) = rpc_and_server().await;
+        let provider = Arc::new(AppServerImageProvider::new(
+            rpc,
+            Arc::new(MemorySessionBindingStore::default()),
+            AppServerProviderConfig {
+                codex_model: None,
+                cwd: PathBuf::from("/tmp"),
+                image_limits: ImageLimits::default(),
+            },
+        ));
+        let execution = tokio::spawn({
+            let provider = Arc::clone(&provider);
+            async move {
+                provider
+                    .execute(
+                        ImageRequest::generate("timeout"),
+                        ProviderContext {
+                            request_id: "timeout".to_owned(),
+                            deadline: Instant::now() + Duration::from_millis(20),
+                            cancellation: CancellationToken::new(),
+                        },
+                    )
+                    .await
+            }
+        });
+        let start = next_message(&mut server).await;
+        assert_eq!(start["method"], "thread/start");
+        server
+            .send(
+                json!({"id": start["id"], "result": {"thread": {"id": "thread-timeout"}}})
+                    .to_string(),
+            )
+            .await
+            .unwrap();
+        let turn = next_message(&mut server).await;
+        server
+            .send(json!({"id": turn["id"], "result": {"turn": {"id": "turn-timeout"}}}).to_string())
+            .await
+            .unwrap();
+        let error = execution.await.unwrap().unwrap_err();
+        assert_eq!(error.code, ErrorCode::Timeout);
+    }
+
+    #[tokio::test]
+    async fn cancellation_interrupts_an_active_turn() {
+        let (rpc, mut server) = rpc_and_server().await;
+        let provider = Arc::new(AppServerImageProvider::new(
+            rpc,
+            Arc::new(MemorySessionBindingStore::default()),
+            AppServerProviderConfig {
+                codex_model: None,
+                cwd: PathBuf::from("/tmp"),
+                image_limits: ImageLimits::default(),
+            },
+        ));
+        let cancellation = CancellationToken::new();
+        let execution = tokio::spawn({
+            let provider = Arc::clone(&provider);
+            let cancellation = cancellation.clone();
+            async move {
+                provider
+                    .execute(
+                        ImageRequest::generate("cancel"),
+                        ProviderContext {
+                            request_id: "cancel".to_owned(),
+                            deadline: Instant::now() + Duration::from_secs(2),
+                            cancellation,
+                        },
+                    )
+                    .await
+            }
+        });
+        let start = next_message(&mut server).await;
+        server
+            .send(
+                json!({"id": start["id"], "result": {"thread": {"id": "thread-cancel"}}})
+                    .to_string(),
+            )
+            .await
+            .unwrap();
+        let turn = next_message(&mut server).await;
+        server
+            .send(json!({"id": turn["id"], "result": {"turn": {"id": "turn-cancel"}}}).to_string())
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        cancellation.cancel();
+        let interrupt = next_message(&mut server).await;
+        assert_eq!(interrupt["method"], "turn/interrupt");
+        assert_eq!(interrupt["params"]["threadId"], "thread-cancel");
+        server
+            .send(json!({"id": interrupt["id"], "result": {}}).to_string())
+            .await
+            .unwrap();
+        let archive = next_message(&mut server).await;
+        assert_eq!(archive["method"], "thread/archive");
+        server
+            .send(json!({"id": archive["id"], "result": {}}).to_string())
+            .await
+            .unwrap();
+        let error = execution.await.unwrap().unwrap_err();
+        assert_eq!(error.code, ErrorCode::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn completed_turn_without_a_valid_image_is_rejected() {
+        let (rpc, mut server) = rpc_and_server().await;
+        let provider = Arc::new(AppServerImageProvider::new(
+            rpc,
+            Arc::new(MemorySessionBindingStore::default()),
+            AppServerProviderConfig {
+                codex_model: None,
+                cwd: PathBuf::from("/tmp"),
+                image_limits: ImageLimits::default(),
+            },
+        ));
+        let execution = tokio::spawn({
+            let provider = Arc::clone(&provider);
+            async move {
+                provider
+                    .execute(ImageRequest::generate("missing"), context("missing"))
+                    .await
+            }
+        });
+        let start = next_message(&mut server).await;
+        server
+            .send(
+                json!({"id": start["id"], "result": {"thread": {"id": "thread-missing"}}})
+                    .to_string(),
+            )
+            .await
+            .unwrap();
+        let turn = next_message(&mut server).await;
+        server
+            .send(json!({"id": turn["id"], "result": {"turn": {"id": "turn-missing"}}}).to_string())
+            .await
+            .unwrap();
+        server
+            .send(
+                json!({
+                    "method": "turn/completed",
+                    "params": {
+                        "threadId": "thread-missing",
+                        "turn": {"id": "turn-missing", "status": "completed", "items": []}
+                    }
+                })
+                .to_string(),
+            )
+            .await
+            .unwrap();
+        let archive = next_message(&mut server).await;
+        server
+            .send(json!({"id": archive["id"], "result": {}}).to_string())
+            .await
+            .unwrap();
+        let error = execution.await.unwrap().unwrap_err();
+        assert_eq!(error.code, ErrorCode::Upstream);
+    }
+
+    #[tokio::test]
     #[ignore = "requires authenticated Codex OAuth and performs a real image generation"]
     async fn live_codex_generates_a_verified_image() {
         if std::env::var("IMAGEGEN_BRIDGE_LIVE_CODEX").as_deref() != Ok("1") {
@@ -740,21 +1084,43 @@ mod tests {
             },
         );
         provider.check_ready().await.unwrap();
-        let response = provider
+        let mut live_request = ImageRequest::generate(
+            "A single cobalt-blue circle centered on a plain white background",
+        );
+        live_request.session.mode = SessionMode::Persistent;
+        live_request.session.key = Some("live-persistent-session".to_owned());
+        let first = provider
             .execute(
-                ImageRequest::generate(
-                    "A single cobalt-blue circle centered on a plain white background",
-                ),
+                live_request.clone(),
                 ProviderContext {
-                    request_id: "live-test".to_owned(),
+                    request_id: "live-test-1".to_owned(),
                     deadline: Instant::now() + Duration::from_secs(240),
                     cancellation: CancellationToken::new(),
                 },
             )
             .await
             .unwrap();
-        assert_eq!(response.data.len(), 1);
-        assert!(response.data[0].bytes > 0);
+        assert_eq!(first.data.len(), 1);
+        assert!(first.data[0].bytes > 0);
+        let first_session = first.session.unwrap();
+        assert!(!first_session.reused);
+
+        let second = provider
+            .execute(
+                live_request,
+                ProviderContext {
+                    request_id: "live-test-2".to_owned(),
+                    deadline: Instant::now() + Duration::from_secs(240),
+                    cancellation: CancellationToken::new(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(second.data.len(), 1);
+        assert!(second.data[0].bytes > 0);
+        let second_session = second.session.unwrap();
+        assert!(second_session.reused);
+        assert_eq!(first_session.thread_id, second_session.thread_id);
         provider.shutdown().await.unwrap();
     }
 }
