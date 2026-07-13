@@ -253,7 +253,9 @@ experimental in discovery responses. The app-server adapter is the default.
 
 Do not commit `auth.json`, mount an entire home directory into the container, or
 bind an unauthenticated bridge to a public interface. Imagegen Bridge does not
-disable or bypass upstream safety checks.
+disable or bypass upstream safety checks. Safety refusals are returned as
+`safety_rejected` / `moderation_blocked` with a stable recovery hint to revise
+the prompt or input images; the unchanged request is not retried automatically.
 
 ## License
 

@@ -166,7 +166,8 @@ impl CodexResponsesProvider {
         for output_index in 0..request.parameters.n {
             let result = self
                 .call_once(&request, image_model, output_index, &user_content, &context)
-                .await?;
+                .await
+                .map_err(|error| annotate_safety_rejection(error, &request))?;
             revised_prompt = result.revised_prompt.or(revised_prompt);
             merge_usage(&mut usage, &result.usage);
             images.push(self.normalized_image(&result.b64_json)?);
@@ -434,6 +435,16 @@ impl CodexResponsesProvider {
     ) -> Result<ProviderCapabilities, BridgeError> {
         capabilities(self.selected_image_model(requested)?)
     }
+}
+
+fn annotate_safety_rejection(mut error: BridgeError, request: &ImageRequest) -> BridgeError {
+    if error.code != ErrorCode::SafetyRejected {
+        return error;
+    }
+    error = error
+        .with_detail("requested_moderation", request.parameters.moderation)
+        .with_detail("input_images_present", !request_images(request).is_empty());
+    error
 }
 
 #[async_trait]

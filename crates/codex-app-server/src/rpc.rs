@@ -286,20 +286,33 @@ fn dispatch_message(
 }
 
 fn rpc_response_error(value: &Value) -> BridgeError {
-    let mut error = BridgeError::new(ErrorCode::Upstream, "Codex app-server request failed")
-        .with_provider("codex-app-server");
-    if let Some(code) = value.get("code").and_then(Value::as_i64) {
-        error = error.with_detail("rpc_code", code);
-    } else if let Some(code) = value.get("code").and_then(Value::as_str).filter(|code| {
+    let safe_string_code = value.get("code").and_then(Value::as_str).filter(|code| {
         !code.is_empty()
             && code.len() <= 64
             && code
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-    }) {
+    });
+    let mut error = if safe_string_code.is_some_and(is_safety_code) {
+        BridgeError::safety_rejected("Codex app-server rejected the image request")
+    } else {
+        BridgeError::new(ErrorCode::Upstream, "Codex app-server request failed")
+    }
+    .with_provider("codex-app-server");
+    if let Some(code) = value.get("code").and_then(Value::as_i64) {
+        error = error.with_detail("rpc_code", code);
+    } else if let Some(code) = safe_string_code {
         error = error.with_detail("rpc_code", code);
     }
     error
+}
+
+fn is_safety_code(code: &str) -> bool {
+    let lower = code.to_ascii_lowercase();
+    lower.contains("safety")
+        || lower.contains("content_policy")
+        || lower.contains("moderation")
+        || lower.contains("refusal")
 }
 
 fn fail_connection(
@@ -445,5 +458,17 @@ mod tests {
         assert!(!error.message.contains("secret"));
         assert!(!error.message.contains("/private"));
         assert_eq!(error.details["rpc_code"], "invalid_request");
+    }
+
+    #[test]
+    fn safety_rpc_codes_return_structured_recovery_guidance() {
+        let error = rpc_response_error(&json!({
+            "code": "content_policy_violation",
+            "message": "untrusted upstream detail"
+        }));
+        assert_eq!(error.code, ErrorCode::SafetyRejected);
+        assert_eq!(error.details["recovery"], "revise_prompt_or_inputs");
+        assert_eq!(error.details["rpc_code"], "content_policy_violation");
+        assert!(!error.message.contains("untrusted"));
     }
 }

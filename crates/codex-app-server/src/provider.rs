@@ -448,11 +448,7 @@ impl AppServerImageProvider {
                 && belongs_to(&notification.params, thread_id, &turn_id)
             {
                 if notification.params["turn"]["status"] != "completed" {
-                    return Err(BridgeError::new(
-                        ErrorCode::Upstream,
-                        "Codex image generation turn did not complete successfully",
-                    )
-                    .with_provider("codex-app-server"));
+                    return Err(turn_failure_error(&notification.params["turn"], request));
                 }
                 if images.is_empty() {
                     return Err(BridgeError::new(
@@ -750,6 +746,51 @@ fn notification_error(error: &broadcast::error::RecvError) -> BridgeError {
     .with_provider("codex-app-server")
 }
 
+fn turn_failure_error(turn: &Value, request: &ImageRequest) -> BridgeError {
+    let upstream_code = turn["error"]["code"]
+        .as_str()
+        .or_else(|| turn["errorCode"].as_str())
+        .and_then(safe_failure_label);
+    let upstream_status = turn["status"].as_str().and_then(safe_failure_label);
+    let safety_rejected = upstream_code.is_some_and(is_safety_failure_label)
+        || upstream_status.is_some_and(is_safety_failure_label);
+    let mut error = if safety_rejected {
+        BridgeError::safety_rejected("Codex app-server rejected the image request")
+            .with_detail("requested_moderation", request.parameters.moderation)
+            .with_detail("input_images_present", !request_images(request).is_empty())
+    } else {
+        BridgeError::new(
+            ErrorCode::Upstream,
+            "Codex image generation turn did not complete successfully",
+        )
+    }
+    .with_provider("codex-app-server");
+    if let Some(code) = upstream_code {
+        error = error.with_detail("upstream_code", code);
+    }
+    if let Some(status) = upstream_status {
+        error = error.with_detail("upstream_status", status);
+    }
+    error
+}
+
+fn safe_failure_label(value: &str) -> Option<&str> {
+    (!value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')))
+    .then_some(value)
+}
+
+fn is_safety_failure_label(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.contains("safety")
+        || lower.contains("content_policy")
+        || lower.contains("moderation")
+        || lower.contains("refusal")
+}
+
 struct TurnImages {
     images: Vec<String>,
     revised_prompt: Option<String>,
@@ -775,6 +816,26 @@ mod tests {
     use crate::RpcConfig;
 
     const ONE_PIXEL_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+    #[test]
+    fn turn_safety_failures_are_classified_without_reflecting_messages() {
+        let mut request = ImageRequest::generate("safe fixture");
+        request.parameters.moderation = Moderation::Auto;
+        let error = turn_failure_error(
+            &json!({
+                "status": "failed",
+                "error": {
+                    "code": "content_policy_violation",
+                    "message": "secret upstream prompt detail"
+                }
+            }),
+            &request,
+        );
+        assert_eq!(error.code, ErrorCode::SafetyRejected);
+        assert_eq!(error.details["recovery"], "revise_prompt_or_inputs");
+        assert_eq!(error.details["requested_moderation"], "auto");
+        assert!(!error.message.contains("secret"));
+    }
 
     async fn rpc_and_server() -> (
         Arc<AppServerRpc>,

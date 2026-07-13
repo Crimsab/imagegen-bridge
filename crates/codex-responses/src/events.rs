@@ -203,8 +203,12 @@ fn classified_upstream_error(raw_code: &str) -> BridgeError {
     } else {
         (ErrorCode::Upstream, false)
     };
-    BridgeError::new(code, "Codex Responses reported a failure")
-        .retryable(retryable)
+    let error = if code == ErrorCode::SafetyRejected {
+        BridgeError::safety_rejected("Codex Responses rejected the image request")
+    } else {
+        BridgeError::new(code, "Codex Responses reported a failure").retryable(retryable)
+    };
+    error
         .with_provider("codex-responses")
         .with_detail("upstream_code", safe_code)
 }
@@ -333,6 +337,8 @@ mod tests {
         .unwrap();
         let error = state.finish().unwrap_err();
         assert_eq!(error.code, ErrorCode::SafetyRejected);
+        assert_eq!(error.details["recovery"], "revise_prompt_or_inputs");
+        assert_eq!(error.details["retry_same_request"], false);
         assert!(!format!("{error:?}").contains('<'));
     }
 

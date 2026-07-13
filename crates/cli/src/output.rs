@@ -111,6 +111,12 @@ impl Output {
             if let Some(provider) = error.provider.as_deref() {
                 let _ = writeln!(stderr, "provider: {provider}");
             }
+            if error.code == ErrorCode::SafetyRejected {
+                let _ = writeln!(
+                    stderr,
+                    "recovery: revise the prompt or input images; retrying the unchanged request will not help"
+                );
+            }
         }
     }
 
@@ -162,5 +168,12 @@ mod tests {
         assert!(!should_refuse_inline(false, false, true));
         assert!(!should_refuse_inline(true, true, true));
         assert!(!should_refuse_inline(true, false, false));
+    }
+
+    #[test]
+    fn safety_rejection_exits_as_a_caller_action_error() {
+        let error = BridgeError::safety_rejected("blocked");
+        assert_eq!(exit_code(error.code), 3);
+        assert_eq!(error.details["recovery"], "revise_prompt_or_inputs");
     }
 }

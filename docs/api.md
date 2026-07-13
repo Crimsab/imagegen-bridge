@@ -79,6 +79,10 @@ The four standard fields under `error` are consumable by OpenAI clients.
 `type=image_generation_user_error` and `code=moderation_blocked`. The
 `imagegen_bridge` extension always preserves the original bridge error code,
 retryability, safe provider/upstream IDs, and redaction-safe structured detail.
+Safety rejections include `safety_category=content_policy`,
+`recovery=revise_prompt_or_inputs`, `retry_same_request=false`, the requested
+moderation mode when available, and whether input images were present. The
+bridge does not automatically weaken the prompt or moderation setting.
 The top-level request ID also appears in the `x-request-id` response header.
 
 Validation/input errors map to `400`/`422`, missing authentication to `401`,

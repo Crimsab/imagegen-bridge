@@ -82,6 +82,16 @@ impl BridgeError {
         }
     }
 
+    /// Creates a safety rejection with stable, non-bypass recovery guidance.
+    #[must_use]
+    pub fn safety_rejected(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::SafetyRejected, message)
+            .with_detail("safety_category", "content_policy")
+            .with_detail("recovery", "revise_prompt_or_inputs")
+            .with_detail("retry_same_request", false)
+            .with_detail("safety_controls_relaxed", false)
+    }
+
     /// Marks the error as potentially retryable.
     #[must_use]
     pub const fn retryable(mut self, value: bool) -> Self {
@@ -103,5 +113,20 @@ impl BridgeError {
             self.details.insert(key.into(), value);
         }
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn safety_rejections_include_actionable_non_bypass_guidance() {
+        let error = BridgeError::safety_rejected("request rejected");
+        assert_eq!(error.code, ErrorCode::SafetyRejected);
+        assert!(!error.retryable);
+        assert_eq!(error.details["recovery"], "revise_prompt_or_inputs");
+        assert_eq!(error.details["retry_same_request"], false);
+        assert_eq!(error.details["safety_controls_relaxed"], false);
     }
 }
