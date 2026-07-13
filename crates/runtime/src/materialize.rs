@@ -7,8 +7,8 @@ use imagegen_bridge_artifacts::{
     ArtifactStore, ImageLimits, ImageMetadata, RemoteImageFetcher, inspect_image,
 };
 use imagegen_bridge_core::{
-    BridgeError, ErrorCode, GeneratedImage, ImagePayload, ImageResponse, OutputFormat,
-    OutputOptions, ResponseFormat,
+    BridgeError, CompatibilityMode, ErrorCode, GeneratedImage, ImagePayload, ImageResponse,
+    ImageSize, Normalization, OutputFormat, OutputOptions, ResponseFormat,
 };
 use url::Url;
 
@@ -93,6 +93,8 @@ impl OutputMaterializer {
         output: &OutputOptions,
         expected_count: u8,
         expected_format: OutputFormat,
+        expected_size: &ImageSize,
+        compatibility: CompatibilityMode,
     ) -> Result<ImageResponse, BridgeError> {
         if response.data.len() != usize::from(expected_count) {
             return Err(protocol_error(
@@ -107,12 +109,65 @@ impl OutputMaterializer {
             verified.push(self.verify(image, expected_format).await?);
         }
 
+        Self::reconcile_dimensions(&mut response, &verified, expected_size, compatibility)?;
+
         let mut projected = Vec::with_capacity(verified.len());
         for image in verified {
             projected.push(self.project(image, output)?);
         }
         response.data = projected;
         Ok(response)
+    }
+
+    fn reconcile_dimensions(
+        response: &mut ImageResponse,
+        verified: &[VerifiedImage],
+        expected_size: &ImageSize,
+        compatibility: CompatibilityMode,
+    ) -> Result<(), BridgeError> {
+        let Some((expected_width, expected_height)) = expected_size.dimensions() else {
+            return Ok(());
+        };
+        let Some(first) = verified.first() else {
+            return Ok(());
+        };
+        let actual = (first.metadata.width, first.metadata.height);
+        if verified
+            .iter()
+            .any(|image| (image.metadata.width, image.metadata.height) != actual)
+        {
+            return Err(protocol_error(
+                "provider returned inconsistent dimensions across generated images",
+            ));
+        }
+        if actual == (expected_width, expected_height) {
+            return Ok(());
+        }
+        if compatibility == CompatibilityMode::Strict {
+            return Err(protocol_error(
+                "provider output dimensions do not match the negotiated size",
+            )
+            .with_detail("expected", expected_size.to_string())
+            .with_detail("actual", format!("{}x{}", actual.0, actual.1)));
+        }
+        let actual_size = ImageSize::exact(actual.0, actual.1)?;
+        response.effective.size = actual_size.clone();
+        response.normalizations.push(Normalization {
+            field: "parameters.size".to_owned(),
+            requested: Some(serde_json::Value::String(expected_size.to_string())),
+            effective: Some(serde_json::Value::String(actual_size.to_string())),
+            reason: "provider_output_dimensions_differed".to_owned(),
+        });
+        if !response
+            .warnings
+            .iter()
+            .any(|warning| warning == "provider_output_dimensions_differed")
+        {
+            response
+                .warnings
+                .push("provider_output_dimensions_differed".to_owned());
+        }
+        Ok(())
     }
 
     async fn verify(

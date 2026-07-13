@@ -569,11 +569,21 @@ impl ImageProvider for AppServerImageProvider {
         }
     }
 
-    async fn capabilities(
-        &self,
-        _model: Option<&str>,
-    ) -> Result<ProviderCapabilities, BridgeError> {
-        Ok(capabilities())
+    async fn capabilities(&self, model: Option<&str>) -> Result<ProviderCapabilities, BridgeError> {
+        let capabilities = capabilities();
+        if let Some(model) = model
+            && capabilities.model.as_deref() != Some(model)
+        {
+            return Err(BridgeError::new(
+                ErrorCode::UnsupportedCapability,
+                "Codex app-server image generation only exposes gpt-image-2",
+            )
+            .with_provider("codex-app-server")
+            .with_detail("field", "routing.model")
+            .with_detail("requested_model", model)
+            .with_detail("effective_model", "gpt-image-2"));
+        }
+        Ok(capabilities)
     }
 
     async fn execute(

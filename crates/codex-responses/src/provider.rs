@@ -14,8 +14,8 @@ use imagegen_bridge_artifacts::{
 };
 use imagegen_bridge_core::{
     Background, BridgeError, ErrorCode, GeneratedImage, ImageOperation, ImagePayload,
-    ImageProvider, ImageRequest, ImageResponse, ImageSource, InputCapabilities, Moderation,
-    OutputFormat, ProviderCapabilities, ProviderContext, ProviderDescriptor, Quality,
+    ImageProvider, ImageRequest, ImageResponse, ImageSize, ImageSource, InputCapabilities,
+    Moderation, OutputFormat, ProviderCapabilities, ProviderContext, ProviderDescriptor, Quality,
     RequestLimits, RevisedPromptPolicy, SizeCapabilities, SupportLevel, Timings, U8Range, Usage,
     negotiate_request, validate_request,
 };
@@ -31,6 +31,12 @@ use crate::{
 const DEFAULT_ENDPOINT: &str = "https://chatgpt.com/backend-api/codex/responses";
 const DEFAULT_RESPONSES_MODEL: &str = "gpt-5.5";
 const DEFAULT_IMAGE_MODEL: &str = "gpt-image-2";
+const SUPPORTED_IMAGE_MODELS: [&str; 4] = [
+    "gpt-image-2",
+    "gpt-image-1.5",
+    "gpt-image-1",
+    "gpt-image-1-mini",
+];
 const INSTRUCTIONS: &str = "You are an image generation assistant inside the Codex backend. Invoke the image_generation tool exactly once and do not answer with text only.";
 
 /// Experimental provider configuration.
@@ -149,7 +155,8 @@ impl CodexResponsesProvider {
         context: ProviderContext,
     ) -> Result<ImageResponse, BridgeError> {
         validate_request(&request, RequestLimits::default())?;
-        let negotiated = negotiate_request(&request, &self.capability_document())?;
+        let image_model = self.selected_image_model(request.routing.model.as_deref())?;
+        let negotiated = negotiate_request(&request, &capabilities(image_model)?)?;
         let request = negotiated.effective_request;
         let user_content = self.input_content(&request).await?;
         let started = Instant::now();
@@ -157,7 +164,9 @@ impl CodexResponsesProvider {
         let mut revised_prompt = None;
         let mut usage = Usage::default();
         for _ in 0..request.parameters.n {
-            let result = self.call_once(&request, &user_content, &context).await?;
+            let result = self
+                .call_once(&request, image_model, &user_content, &context)
+                .await?;
             revised_prompt = result.revised_prompt.or(revised_prompt);
             merge_usage(&mut usage, &result.usage);
             images.push(self.normalized_image(&result.b64_json)?);
@@ -181,7 +190,7 @@ impl CodexResponsesProvider {
                 .duration_since(UNIX_EPOCH)
                 .map_or(0, |duration| duration.as_secs()),
             provider: "codex-responses".to_owned(),
-            model: self.config.image_model.clone(),
+            model: image_model.to_owned(),
             requested: negotiated.requested,
             effective: request.parameters,
             normalizations: negotiated.normalizations,
@@ -233,11 +242,12 @@ impl CodexResponsesProvider {
     async fn call_once(
         &self,
         request: &ImageRequest,
+        image_model: &str,
         user_content: &[Value],
         context: &ProviderContext,
     ) -> Result<CallResult, BridgeError> {
         let credentials = self.credentials.load().await?;
-        let body = self.request_body(request, user_content);
+        let body = self.request_body(request, image_model, user_content);
         let remaining = context.deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             return Err(BridgeError::new(
@@ -302,11 +312,16 @@ impl CodexResponsesProvider {
         state.finish()
     }
 
-    fn request_body(&self, request: &ImageRequest, user_content: &[Value]) -> Value {
+    fn request_body(
+        &self,
+        request: &ImageRequest,
+        image_model: &str,
+        user_content: &[Value],
+    ) -> Value {
         let parameters = &request.parameters;
         let mut tool = json!({
             "type": "image_generation",
-            "model": self.config.image_model,
+            "model": image_model,
             "size": parameters.size.to_string(),
             "quality": parameters.quality.to_string(),
             "output_format": parameters.output_format.to_string(),
@@ -361,8 +376,30 @@ impl CodexResponsesProvider {
         })
     }
 
-    fn capability_document(&self) -> ProviderCapabilities {
-        capabilities(&self.config.image_model)
+    fn selected_image_model<'a>(
+        &'a self,
+        requested: Option<&'a str>,
+    ) -> Result<&'a str, BridgeError> {
+        let model = requested.unwrap_or(&self.config.image_model);
+        if SUPPORTED_IMAGE_MODELS.contains(&model) {
+            Ok(model)
+        } else {
+            Err(BridgeError::new(
+                ErrorCode::UnsupportedCapability,
+                "Codex Responses does not support the requested image model",
+            )
+            .with_provider("codex-responses")
+            .with_detail("field", "routing.model")
+            .with_detail("requested_model", model)
+            .with_detail("supported_models", SUPPORTED_IMAGE_MODELS))
+        }
+    }
+
+    fn capability_document(
+        &self,
+        requested: Option<&str>,
+    ) -> Result<ProviderCapabilities, BridgeError> {
+        capabilities(self.selected_image_model(requested)?)
     }
 }
 
@@ -377,11 +414,8 @@ impl ImageProvider for CodexResponsesProvider {
         }
     }
 
-    async fn capabilities(
-        &self,
-        _model: Option<&str>,
-    ) -> Result<ProviderCapabilities, BridgeError> {
-        Ok(self.capability_document())
+    async fn capabilities(&self, model: Option<&str>) -> Result<ProviderCapabilities, BridgeError> {
+        self.capability_document(model)
     }
 
     async fn execute(
@@ -397,14 +431,44 @@ impl ImageProvider for CodexResponsesProvider {
     }
 }
 
-fn capabilities(model: &str) -> ProviderCapabilities {
+fn capabilities(model: &str) -> Result<ProviderCapabilities, BridgeError> {
+    if !SUPPORTED_IMAGE_MODELS.contains(&model) {
+        return Err(BridgeError::new(
+            ErrorCode::UnsupportedCapability,
+            "Codex Responses does not support the requested image model",
+        )
+        .with_provider("codex-responses")
+        .with_detail("field", "routing.model")
+        .with_detail("requested_model", model));
+    }
     let references = InputCapabilities {
         support: SupportLevel::Native,
         max_count: 5,
         max_bytes_each: 32 * 1024 * 1024,
         max_bytes_total: 64 * 1024 * 1024,
     };
-    ProviderCapabilities {
+    let size_pairs: &[(u32, u32)] = if matches!(model, "gpt-image-1" | "gpt-image-1-mini") {
+        &[(1024, 1024), (1536, 1024), (1024, 1536)]
+    } else {
+        &[
+            (1024, 1024),
+            (1536, 1024),
+            (1024, 1536),
+            (2048, 2048),
+            (2048, 1152),
+            (3840, 2160),
+            (2160, 3840),
+        ]
+    };
+    let allowed = size_pairs
+        .iter()
+        .map(|&(width, height)| ImageSize::exact(width, height))
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    let mut backgrounds = BTreeSet::from([Background::Auto, Background::Opaque]);
+    if model != "gpt-image-2" {
+        backgrounds.insert(Background::Transparent);
+    }
+    Ok(ProviderCapabilities {
         provider: "codex-responses".to_owned(),
         implementation_version: env!("CARGO_PKG_VERSION").to_owned(),
         model: Some(model.to_owned()),
@@ -414,20 +478,20 @@ fn capabilities(model: &str) -> ProviderCapabilities {
         count: U8Range { min: 1, max: 4 },
         sizes: SizeCapabilities {
             auto: true,
-            allowed: BTreeSet::new(),
-            arbitrary: true,
+            allowed,
+            arbitrary: false,
             min_edge: None,
-            max_edge: Some(3840),
-            edge_multiple: Some(16),
-            min_pixels: Some(655_360),
-            max_pixels: Some(8_294_400),
-            max_aspect_ratio: Some(3.0),
+            max_edge: None,
+            edge_multiple: None,
+            min_pixels: None,
+            max_pixels: None,
+            max_aspect_ratio: None,
         },
         aspect_ratio: SupportLevel::Emulated,
         resolution: SupportLevel::Emulated,
         qualities: BTreeSet::from([Quality::Auto, Quality::Low, Quality::Medium, Quality::High]),
         output_formats: BTreeSet::from([OutputFormat::Png, OutputFormat::Jpeg, OutputFormat::Webp]),
-        backgrounds: BTreeSet::from([Background::Auto, Background::Opaque]),
+        backgrounds,
         moderation: BTreeSet::from([Moderation::Auto, Moderation::Low]),
         negative_prompt: SupportLevel::Emulated,
         revised_prompt: SupportLevel::Native,
@@ -442,7 +506,7 @@ fn capabilities(model: &str) -> ProviderCapabilities {
         partial_images: U8Range { min: 0, max: 3 },
         persistent_sessions: false,
         explicit_threads: false,
-    }
+    })
 }
 
 fn request_images(request: &ImageRequest) -> Vec<&imagegen_bridge_core::ImageInput> {
@@ -615,7 +679,11 @@ mod tests {
             partial_images: 2,
             ..GenerationParameters::default()
         };
-        let body = provider.request_body(&request, &[json!({"type":"input_text","text":"test"})]);
+        let body = provider.request_body(
+            &request,
+            "gpt-image-2",
+            &[json!({"type":"input_text","text":"test"})],
+        );
         let expected: Value =
             serde_json::from_str(include_str!("../tests/fixtures/advanced-request.json")).unwrap();
         assert_eq!(body, expected);
@@ -627,6 +695,39 @@ mod tests {
         assert_eq!(tool["output_compression"], 80);
         assert_eq!(tool["partial_images"], 2);
         assert_eq!(body["store"], false);
+    }
+
+    #[test]
+    fn model_selection_changes_payload_and_model_specific_capabilities() {
+        let provider = provider();
+        let request = ImageRequest::generate("test");
+        let body = provider.request_body(
+            &request,
+            "gpt-image-1.5",
+            &[json!({"type":"input_text","text":"test"})],
+        );
+        assert_eq!(body["tools"][0]["model"], "gpt-image-1.5");
+
+        let image_two = provider.capability_document(Some("gpt-image-2")).unwrap();
+        assert!(!image_two.backgrounds.contains(&Background::Transparent));
+        assert_eq!(image_two.sizes.allowed.len(), 7);
+
+        let image_one = provider.capability_document(Some("gpt-image-1")).unwrap();
+        assert!(image_one.backgrounds.contains(&Background::Transparent));
+        assert_eq!(image_one.sizes.allowed.len(), 3);
+    }
+
+    #[test]
+    fn unsupported_model_is_rejected_during_capability_discovery() {
+        let provider = provider();
+        let error = provider
+            .capability_document(Some("not-an-image-model"))
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::UnsupportedCapability);
+        assert_eq!(
+            error.details.get("field"),
+            Some(&serde_json::Value::String("routing.model".to_owned()))
+        );
     }
 
     #[test]
@@ -658,7 +759,7 @@ mod tests {
             compatibility: CompatibilityMode::BestEffort,
             ..RequestPolicies::default()
         };
-        assert!(negotiate_request(&request, &provider.capability_document()).is_err());
+        assert!(negotiate_request(&request, &provider.capability_document(None).unwrap()).is_err());
     }
 
     #[tokio::test]

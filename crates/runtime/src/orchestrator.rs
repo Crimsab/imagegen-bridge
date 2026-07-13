@@ -413,6 +413,17 @@ impl ImagegenRuntime {
         let mut response =
             provider_result.map_err(|error| attach_provider(error, &descriptor.name))?;
 
+        if let Some(expected_model) = capabilities.model.as_deref()
+            && response.model != expected_model
+        {
+            return Err(protocol_error(
+                "provider response model does not match discovered capabilities",
+            )
+            .with_provider(descriptor.name)
+            .with_detail("expected_model", expected_model)
+            .with_detail("actual_model", response.model));
+        }
+
         response.id = request_id;
         response.provider = descriptor.name;
         response.requested = negotiated.requested;
@@ -431,6 +442,8 @@ impl ImagegenRuntime {
                     &effective_request.output,
                     effective_request.parameters.n,
                     effective_request.parameters.output_format,
+                    &effective_request.parameters.size,
+                    effective_request.policies.compatibility,
                 ),
                 deadline,
                 external_cancellation,
@@ -597,9 +610,9 @@ mod tests {
     use imagegen_bridge_artifacts::{ArtifactStore, ImageLimits, inspect_image};
     use imagegen_bridge_core::{
         Background, CompatibilityMode, GeneratedImage, GenerationParameters, ImagePayload,
-        ImageProvider, InputCapabilities, Moderation, OutputFormat, ProviderCapabilities,
-        ProviderDescriptor, Quality, ResponseFormat, SizeCapabilities, SupportLevel, Timings,
-        U8Range, Usage,
+        ImageProvider, ImageSize, InputCapabilities, Moderation, OutputFormat,
+        ProviderCapabilities, ProviderDescriptor, Quality, ResponseFormat, SizeCapabilities,
+        SupportLevel, Timings, U8Range, Usage,
     };
 
     use super::*;
@@ -721,7 +734,7 @@ mod tests {
             count: U8Range { min: 1, max: 1 },
             sizes: SizeCapabilities {
                 auto: true,
-                allowed: BTreeSet::new(),
+                allowed: BTreeSet::from([ImageSize::exact(2, 2).unwrap()]),
                 arbitrary: false,
                 min_edge: None,
                 max_edge: None,
@@ -788,6 +801,39 @@ mod tests {
         assert!(matches!(response.data[0].payload, ImagePayload::Metadata));
         assert!(response.revised_prompt.is_none());
         assert_eq!(provider.calls.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn strict_mode_rejects_verified_dimension_mismatch() {
+        let provider = Arc::new(FakeProvider::new(Duration::ZERO));
+        let runtime = runtime(&provider, |_| {});
+        let mut request = ImageRequest::generate("test");
+        request.parameters.size = ImageSize::exact(2, 2).unwrap();
+        let error = runtime.execute(request).await.unwrap_err();
+        assert_eq!(error.code, ErrorCode::Protocol);
+        assert_eq!(error.details["expected"], "2x2");
+        assert_eq!(error.details["actual"], "1x1");
+    }
+
+    #[tokio::test]
+    async fn normalize_mode_reports_verified_dimension_mismatch() {
+        let provider = Arc::new(FakeProvider::new(Duration::ZERO));
+        let runtime = runtime(&provider, |_| {});
+        let mut request = ImageRequest::generate("test");
+        request.parameters.size = ImageSize::exact(2, 2).unwrap();
+        request.policies.compatibility = CompatibilityMode::Normalize;
+        let response = runtime.execute(request).await.unwrap();
+        assert_eq!(response.effective.size, ImageSize::exact(1, 1).unwrap());
+        assert!(response.normalizations.iter().any(|entry| {
+            entry.field == "parameters.size"
+                && entry.reason == "provider_output_dimensions_differed"
+        }));
+        assert!(
+            response
+                .warnings
+                .iter()
+                .any(|warning| warning == "provider_output_dimensions_differed")
+        );
     }
 
     #[tokio::test]

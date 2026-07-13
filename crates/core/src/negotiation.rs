@@ -37,6 +37,7 @@ pub fn negotiate_request(
     let mut normalizations = Vec::new();
     let mode = request.policies.compatibility;
 
+    check_model(request, capabilities)?;
     check_operation(request, capabilities)?;
     check_input_counts(request, capabilities)?;
     check_sessions(request, capabilities)?;
@@ -66,6 +67,28 @@ pub fn negotiate_request(
         effective_request,
         normalizations,
     })
+}
+
+fn check_model(
+    request: &ImageRequest,
+    capabilities: &ProviderCapabilities,
+) -> Result<(), BridgeError> {
+    let (Some(requested), Some(effective)) = (
+        request.routing.model.as_deref(),
+        capabilities.model.as_deref(),
+    ) else {
+        return Ok(());
+    };
+    if requested == effective {
+        return Ok(());
+    }
+    Err(unsupported(
+        capabilities,
+        "routing.model",
+        "provider cannot honor the requested image model",
+    )
+    .with_detail("requested_model", requested)
+    .with_detail("effective_model", effective))
 }
 
 fn check_operation(
@@ -682,6 +705,19 @@ mod tests {
         assert_eq!(
             error.details.get("field"),
             Some(&serde_json::Value::String("parameters.quality".to_owned()))
+        );
+    }
+
+    #[test]
+    fn explicit_model_mismatch_is_never_silently_normalized() {
+        let mut request = ImageRequest::generate("test");
+        request.routing.model = Some("another-image-model".to_owned());
+        request.policies.compatibility = CompatibilityMode::BestEffort;
+        let error = negotiate_request(&request, &capabilities()).unwrap_err();
+        assert_eq!(error.code, ErrorCode::UnsupportedCapability);
+        assert_eq!(
+            error.details.get("field"),
+            Some(&serde_json::Value::String("routing.model".to_owned()))
         );
     }
 
