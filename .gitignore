@@ -9,6 +9,7 @@
 *.db-shm
 *.db-wal
 /artifacts/
+/data/
 /live-test-output/
 /coverage/
 /dist/
@@ -20,4 +21,3 @@
 __pycache__/
 *.py[cod]
 .DS_Store
-
