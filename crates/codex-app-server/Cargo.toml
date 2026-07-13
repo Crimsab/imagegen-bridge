@@ -9,7 +9,10 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+async-trait = "0.1"
+base64 = "0.22"
 futures-util = { version = "0.3", features = ["sink"] }
+imagegen-bridge-artifacts = { path = "../artifacts", version = "0.1.0" }
 imagegen-bridge-core = { path = "../core", version = "0.1.0" }
 parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }

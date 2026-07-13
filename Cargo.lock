@@ -694,7 +694,10 @@ dependencies = [
 name = "imagegen-bridge-codex-app-server"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "base64",
  "futures-util",
+ "imagegen-bridge-artifacts",
  "imagegen-bridge-core",
  "parking_lot",
  "serde",

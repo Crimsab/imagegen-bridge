@@ -1,0 +1,707 @@
+//! Image provider and persistent Codex thread semantics.
+
+use std::{
+    collections::{BTreeSet, HashMap},
+    path::PathBuf,
+    sync::Arc,
+    time::{Instant, SystemTime, UNIX_EPOCH},
+};
+
+use async_trait::async_trait;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use imagegen_bridge_artifacts::{ImageLimits, inspect_image};
+use imagegen_bridge_core::{
+    Background, BridgeError, ErrorCode, GeneratedImage, ImageOperation, ImagePayload,
+    ImageProvider, ImageRequest, ImageResponse, InputCapabilities, Moderation, OutputFormat,
+    ProviderCapabilities, ProviderContext, ProviderDescriptor, Quality, RequestLimits,
+    SessionMetadata, SessionMode, SizeCapabilities, SupportLevel, Timings, U8Range, Usage,
+    negotiate_request, validate_request,
+};
+use serde_json::{Value, json};
+use tokio::sync::{Mutex, broadcast};
+
+use crate::{AppServerRpc, CodexProcess};
+
+/// Durable binding interface implemented by memory and runtime `SQLite` stores.
+#[async_trait]
+pub trait SessionBindingStore: Send + Sync {
+    /// Looks up a provider thread for a caller session key.
+    async fn get(&self, key: &str) -> Result<Option<String>, BridgeError>;
+    /// Atomically creates or replaces a session binding.
+    async fn put(&self, key: &str, thread_id: &str) -> Result<(), BridgeError>;
+    /// Deletes a binding.
+    async fn delete(&self, key: &str) -> Result<(), BridgeError>;
+}
+
+/// In-memory session store for embedded use and tests.
+#[derive(Debug, Default)]
+pub struct MemorySessionBindingStore {
+    bindings: Mutex<HashMap<String, String>>,
+}
+
+#[async_trait]
+impl SessionBindingStore for MemorySessionBindingStore {
+    async fn get(&self, key: &str) -> Result<Option<String>, BridgeError> {
+        Ok(self.bindings.lock().await.get(key).cloned())
+    }
+
+    async fn put(&self, key: &str, thread_id: &str) -> Result<(), BridgeError> {
+        self.bindings
+            .lock()
+            .await
+            .insert(key.to_owned(), thread_id.to_owned());
+        Ok(())
+    }
+
+    async fn delete(&self, key: &str) -> Result<(), BridgeError> {
+        self.bindings.lock().await.remove(key);
+        Ok(())
+    }
+}
+
+/// App-server image provider settings.
+#[derive(Debug, Clone)]
+pub struct AppServerProviderConfig {
+    /// Optional Codex chat model used to orchestrate the image tool.
+    pub codex_model: Option<String>,
+    /// Working directory visible to Codex.
+    pub cwd: PathBuf,
+    /// Limits used to verify returned base64 images.
+    pub image_limits: ImageLimits,
+}
+
+/// Provider backed by one initialized app-server connection.
+pub struct AppServerImageProvider {
+    rpc: Arc<AppServerRpc>,
+    process: Option<Arc<CodexProcess>>,
+    sessions: Arc<dyn SessionBindingStore>,
+    thread_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    config: AppServerProviderConfig,
+}
+
+impl std::fmt::Debug for AppServerImageProvider {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AppServerImageProvider")
+            .field("rpc", &self.rpc)
+            .field("has_process", &self.process.is_some())
+            .field("config", &self.config)
+            .finish_non_exhaustive()
+    }
+}
+
+impl AppServerImageProvider {
+    /// Creates a provider over an existing initialized connection.
+    #[must_use]
+    pub fn new(
+        rpc: Arc<AppServerRpc>,
+        sessions: Arc<dyn SessionBindingStore>,
+        config: AppServerProviderConfig,
+    ) -> Self {
+        Self {
+            rpc,
+            process: None,
+            sessions,
+            thread_locks: Mutex::new(HashMap::new()),
+            config,
+        }
+    }
+
+    /// Creates a provider that owns and shuts down its Codex child process.
+    #[must_use]
+    pub fn with_process(
+        process: Arc<CodexProcess>,
+        sessions: Arc<dyn SessionBindingStore>,
+        config: AppServerProviderConfig,
+    ) -> Self {
+        let rpc = process.rpc();
+        Self {
+            rpc,
+            process: Some(process),
+            sessions,
+            thread_locks: Mutex::new(HashMap::new()),
+            config,
+        }
+    }
+
+    async fn execute_inner(
+        &self,
+        request: ImageRequest,
+        context: ProviderContext,
+    ) -> Result<ImageResponse, BridgeError> {
+        validate_request(&request, RequestLimits::default())?;
+        let negotiated = negotiate_request(&request, &capabilities())?;
+        let request = negotiated.effective_request;
+        let lock_key = request
+            .session
+            .key
+            .clone()
+            .or_else(|| request.session.thread_id.clone())
+            .unwrap_or_else(|| context.request_id.clone());
+        let thread_lock = {
+            let mut locks = self.thread_locks.lock().await;
+            Arc::clone(
+                locks
+                    .entry(lock_key)
+                    .or_insert_with(|| Arc::new(Mutex::new(()))),
+            )
+        };
+        let _guard = thread_lock.lock().await;
+        let started = Instant::now();
+        let (thread_id, reused) = self.resolve_thread(&request, &context).await?;
+        let result = self.run_turn(&thread_id, &request, &context).await;
+        if request.session.mode == SessionMode::Isolated {
+            let _ = self
+                .rpc
+                .request_until(
+                    "thread/archive",
+                    json!({"threadId": thread_id}),
+                    context.deadline,
+                    context.cancellation.clone(),
+                )
+                .await;
+        }
+        let turn = result?;
+        let images = turn
+            .images
+            .into_iter()
+            .map(|encoded| self.normalized_image(&encoded))
+            .collect::<Result<Vec<_>, BridgeError>>()?;
+        let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        Ok(ImageResponse {
+            id: context.request_id,
+            created: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_secs()),
+            provider: "codex-app-server".to_owned(),
+            model: "gpt-image-2".to_owned(),
+            requested: negotiated.requested,
+            effective: request.parameters,
+            normalizations: negotiated.normalizations,
+            data: images,
+            revised_prompt: turn.revised_prompt,
+            usage: None::<Usage>,
+            session: Some(SessionMetadata {
+                key: request.session.key,
+                thread_id: Some(thread_id),
+                reused,
+            }),
+            timings: Timings {
+                provider_ms: elapsed,
+                total_ms: elapsed,
+                ..Timings::default()
+            },
+            warnings: Vec::new(),
+        })
+    }
+
+    async fn resolve_thread(
+        &self,
+        request: &ImageRequest,
+        context: &ProviderContext,
+    ) -> Result<(String, bool), BridgeError> {
+        match request.session.mode {
+            SessionMode::Isolated => self.start_thread(true, context).await.map(|id| (id, false)),
+            SessionMode::Persistent => {
+                let key = request.session.key.as_deref().ok_or_else(|| {
+                    BridgeError::new(ErrorCode::Session, "persistent session key is missing")
+                })?;
+                if let Some(thread_id) = self.sessions.get(key).await? {
+                    self.resume_thread(&thread_id, context).await?;
+                    Ok((thread_id, true))
+                } else {
+                    let thread_id = self.start_thread(false, context).await?;
+                    self.sessions.put(key, &thread_id).await?;
+                    Ok((thread_id, false))
+                }
+            }
+            SessionMode::Thread => {
+                let thread_id = request.session.thread_id.as_deref().ok_or_else(|| {
+                    BridgeError::new(ErrorCode::Session, "explicit thread ID is missing")
+                })?;
+                self.resume_thread(thread_id, context).await?;
+                Ok((thread_id.to_owned(), true))
+            }
+        }
+    }
+
+    async fn start_thread(
+        &self,
+        ephemeral: bool,
+        context: &ProviderContext,
+    ) -> Result<String, BridgeError> {
+        let result = self
+            .rpc
+            .request_until(
+                "thread/start",
+                json!({
+                    "model": self.config.codex_model,
+                    "cwd": self.config.cwd,
+                    "approvalPolicy": "never",
+                    "sandbox": "read-only",
+                    "ephemeral": ephemeral,
+                    "developerInstructions": "For each request, call image_gen.imagegen exactly once and do not use unrelated tools."
+                }),
+                context.deadline,
+                context.cancellation.clone(),
+            )
+            .await?;
+        string_at(
+            &result,
+            &["thread", "id"],
+            "thread/start returned no thread ID",
+        )
+    }
+
+    async fn resume_thread(
+        &self,
+        thread_id: &str,
+        context: &ProviderContext,
+    ) -> Result<(), BridgeError> {
+        self.rpc
+            .request_until(
+                "thread/resume",
+                json!({"threadId": thread_id}),
+                context.deadline,
+                context.cancellation.clone(),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn run_turn(
+        &self,
+        thread_id: &str,
+        request: &ImageRequest,
+        context: &ProviderContext,
+    ) -> Result<TurnImages, BridgeError> {
+        let paths = reference_paths(request)?;
+        let mut input = vec![json!({
+            "type": "text",
+            "text": turn_prompt(&request.prompt, &paths),
+            "textElements": []
+        })];
+        input.extend(
+            paths
+                .iter()
+                .map(|path| json!({"type": "localImage", "path": path, "detail": "original"})),
+        );
+        let mut notifications = self.rpc.subscribe();
+        let result = self
+            .rpc
+            .request_until(
+                "turn/start",
+                json!({"threadId": thread_id, "input": input}),
+                context.deadline,
+                context.cancellation.clone(),
+            )
+            .await?;
+        let turn_id = string_at(&result, &["turn", "id"], "turn/start returned no turn ID")?;
+        let mut images = Vec::new();
+        let mut revised_prompt = None;
+        loop {
+            let remaining = context.deadline.saturating_duration_since(Instant::now());
+            let notification = tokio::select! {
+                result = notifications.recv() => result.map_err(|error| notification_error(&error))?,
+                () = context.cancellation.cancelled() => {
+                    self.interrupt(thread_id, &turn_id, context).await;
+                    return Err(BridgeError::new(ErrorCode::Cancelled, "image generation was cancelled"));
+                }
+                () = tokio::time::sleep(remaining) => {
+                    self.interrupt(thread_id, &turn_id, context).await;
+                    return Err(BridgeError::new(ErrorCode::Timeout, "image generation timed out").retryable(true));
+                }
+            };
+            if notification.method == "item/completed"
+                && belongs_to(&notification.params, thread_id, &turn_id)
+                && notification.params["item"]["type"] == "imageGeneration"
+            {
+                let item = &notification.params["item"];
+                if item["status"] == "completed" {
+                    if let Some(result) = item["result"].as_str().filter(|value| !value.is_empty())
+                    {
+                        images.push(result.to_owned());
+                    }
+                    revised_prompt = item["revisedPrompt"].as_str().map(str::to_owned);
+                }
+            }
+            if notification.method == "turn/completed"
+                && belongs_to(&notification.params, thread_id, &turn_id)
+            {
+                if notification.params["turn"]["status"] != "completed" {
+                    return Err(BridgeError::new(
+                        ErrorCode::Upstream,
+                        "Codex image generation turn did not complete successfully",
+                    )
+                    .with_provider("codex-app-server"));
+                }
+                if images.is_empty() {
+                    return Err(BridgeError::new(
+                        ErrorCode::Upstream,
+                        "Codex turn completed without an image",
+                    )
+                    .with_provider("codex-app-server"));
+                }
+                return Ok(TurnImages {
+                    images,
+                    revised_prompt,
+                });
+            }
+        }
+    }
+
+    async fn interrupt(&self, thread_id: &str, turn_id: &str, context: &ProviderContext) {
+        let _ = self
+            .rpc
+            .request_until(
+                "turn/interrupt",
+                json!({"threadId": thread_id, "turnId": turn_id}),
+                context.deadline,
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .await;
+    }
+
+    fn normalized_image(&self, encoded: &str) -> Result<GeneratedImage, BridgeError> {
+        let bytes = STANDARD.decode(encoded.trim()).map_err(|_| {
+            BridgeError::new(
+                ErrorCode::Protocol,
+                "Codex returned malformed base64 image data",
+            )
+        })?;
+        let metadata =
+            inspect_image(&bytes, self.config.image_limits).map_err(|error| BridgeError {
+                code: ErrorCode::Protocol,
+                provider: Some("codex-app-server".to_owned()),
+                ..error
+            })?;
+        Ok(GeneratedImage {
+            payload: ImagePayload::B64Json {
+                b64_json: encoded.to_owned(),
+            },
+            format: metadata.format,
+            width: metadata.width,
+            height: metadata.height,
+            bytes: metadata.bytes,
+            sha256: metadata.sha256,
+        })
+    }
+}
+
+#[async_trait]
+impl ImageProvider for AppServerImageProvider {
+    fn descriptor(&self) -> ProviderDescriptor {
+        ProviderDescriptor {
+            name: "codex-app-server".to_owned(),
+            display_name: "Codex app-server".to_owned(),
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            experimental: false,
+        }
+    }
+
+    async fn capabilities(
+        &self,
+        _model: Option<&str>,
+    ) -> Result<ProviderCapabilities, BridgeError> {
+        Ok(capabilities())
+    }
+
+    async fn execute(
+        &self,
+        request: ImageRequest,
+        context: ProviderContext,
+    ) -> Result<ImageResponse, BridgeError> {
+        self.execute_inner(request, context).await
+    }
+
+    async fn check_ready(&self) -> Result<(), BridgeError> {
+        Ok(())
+    }
+
+    async fn shutdown(&self) -> Result<(), BridgeError> {
+        if let Some(process) = &self.process {
+            process.shutdown().await?;
+        }
+        Ok(())
+    }
+}
+
+fn capabilities() -> ProviderCapabilities {
+    let no_input = InputCapabilities {
+        support: SupportLevel::Unsupported,
+        max_count: 0,
+        max_bytes_each: 0,
+        max_bytes_total: 0,
+    };
+    let references = InputCapabilities {
+        support: SupportLevel::Native,
+        max_count: 5,
+        max_bytes_each: 32 * 1024 * 1024,
+        max_bytes_total: 64 * 1024 * 1024,
+    };
+    ProviderCapabilities {
+        provider: "codex-app-server".to_owned(),
+        implementation_version: env!("CARGO_PKG_VERSION").to_owned(),
+        model: Some("gpt-image-2".to_owned()),
+        experimental: false,
+        generation: true,
+        edits: true,
+        count: U8Range { min: 1, max: 1 },
+        sizes: SizeCapabilities {
+            auto: true,
+            allowed: BTreeSet::new(),
+            arbitrary: false,
+            min_edge: None,
+            max_edge: None,
+            edge_multiple: None,
+            min_pixels: None,
+            max_pixels: None,
+            max_aspect_ratio: None,
+        },
+        aspect_ratio: SupportLevel::Unsupported,
+        resolution: SupportLevel::Unsupported,
+        qualities: BTreeSet::from([Quality::Auto]),
+        output_formats: BTreeSet::from([OutputFormat::Png]),
+        backgrounds: BTreeSet::from([Background::Auto]),
+        moderation: BTreeSet::from([Moderation::Auto]),
+        negative_prompt: SupportLevel::Emulated,
+        revised_prompt: SupportLevel::Emulated,
+        reference_images: references.clone(),
+        edit_images: references,
+        masks: no_input,
+        partial_images: U8Range { min: 0, max: 0 },
+        persistent_sessions: true,
+        explicit_threads: true,
+    }
+}
+
+fn reference_paths(request: &ImageRequest) -> Result<Vec<PathBuf>, BridgeError> {
+    let inputs = match &request.operation {
+        ImageOperation::Generate { reference_images } => reference_images.clone(),
+        ImageOperation::Edit {
+            images,
+            reference_images,
+            ..
+        } => images.iter().chain(reference_images).cloned().collect(),
+    };
+    inputs
+        .into_iter()
+        .map(|input| match input.source {
+            imagegen_bridge_core::ImageSource::File { path } => Ok(path),
+            _ => Err(BridgeError::new(
+                ErrorCode::Input,
+                "app-server references must be materialized as local files",
+            )),
+        })
+        .collect()
+}
+
+fn turn_prompt(prompt: &str, paths: &[PathBuf]) -> String {
+    if paths.is_empty() {
+        format!("Generate this image now with image_gen.imagegen: {prompt}")
+    } else {
+        let paths = paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "Generate or edit this image now with image_gen.imagegen. Use referenced_image_paths exactly as listed: [{paths}]. Prompt: {prompt}"
+        )
+    }
+}
+
+fn string_at(value: &Value, path: &[&str], message: &str) -> Result<String, BridgeError> {
+    let mut value = value;
+    for component in path {
+        value = &value[*component];
+    }
+    value.as_str().map(str::to_owned).ok_or_else(|| {
+        BridgeError::new(ErrorCode::Protocol, message).with_provider("codex-app-server")
+    })
+}
+
+fn belongs_to(params: &Value, thread_id: &str, turn_id: &str) -> bool {
+    params["threadId"] == thread_id
+        && (params["turnId"] == turn_id || params["turn"]["id"] == turn_id)
+}
+
+fn notification_error(error: &broadcast::error::RecvError) -> BridgeError {
+    match error {
+        broadcast::error::RecvError::Closed => {
+            BridgeError::new(ErrorCode::Protocol, "app-server notification stream closed")
+        }
+        broadcast::error::RecvError::Lagged(_) => BridgeError::new(
+            ErrorCode::Overloaded,
+            "app-server notification consumer lagged behind",
+        ),
+    }
+    .with_provider("codex-app-server")
+}
+
+struct TurnImages {
+    images: Vec<String>,
+    revised_prompt: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use std::time::Duration;
+
+    use futures_util::{SinkExt as _, StreamExt as _};
+    use tokio::io::duplex;
+    use tokio_util::{
+        codec::{Framed, LinesCodec},
+        sync::CancellationToken,
+    };
+
+    use super::*;
+    use crate::RpcConfig;
+
+    const ONE_PIXEL_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+    async fn rpc_and_server() -> (
+        Arc<AppServerRpc>,
+        Framed<tokio::io::DuplexStream, LinesCodec>,
+    ) {
+        let (client, server) = duplex(128 * 1024);
+        let (reader, writer) = tokio::io::split(client);
+        let mut server = Framed::new(server, LinesCodec::new());
+        let connection = tokio::spawn(AppServerRpc::connect(
+            reader,
+            writer,
+            RpcConfig {
+                max_message_bytes: 128 * 1024,
+                request_timeout: Duration::from_secs(2),
+                notification_capacity: 16,
+            },
+        ));
+        let initialize = next_message(&mut server).await;
+        server
+            .send(json!({"id": initialize["id"], "result": {}}).to_string())
+            .await
+            .unwrap();
+        let rpc = connection.await.unwrap().unwrap();
+        assert_eq!(next_message(&mut server).await["method"], "initialized");
+        (rpc, server)
+    }
+
+    async fn next_message(server: &mut Framed<tokio::io::DuplexStream, LinesCodec>) -> Value {
+        serde_json::from_str(&server.next().await.unwrap().unwrap()).unwrap()
+    }
+
+    fn request() -> ImageRequest {
+        let mut request = ImageRequest::generate("a tiny blue square");
+        request.session.mode = SessionMode::Persistent;
+        request.session.key = Some("gallery".to_owned());
+        request
+    }
+
+    fn context(id: &str) -> ProviderContext {
+        ProviderContext {
+            request_id: id.to_owned(),
+            deadline: Instant::now() + Duration::from_secs(2),
+            cancellation: CancellationToken::new(),
+        }
+    }
+
+    async fn complete_turn(
+        server: &mut Framed<tokio::io::DuplexStream, LinesCodec>,
+        thread_id: &str,
+        turn_id: &str,
+    ) {
+        server
+            .send(
+                json!({
+                    "method": "item/completed",
+                    "params": {
+                        "threadId": thread_id,
+                        "turnId": turn_id,
+                        "completedAtMs": 1,
+                        "item": {
+                            "type": "imageGeneration",
+                            "id": "image-1",
+                            "status": "completed",
+                            "revisedPrompt": "a tiny blue square",
+                            "result": ONE_PIXEL_PNG
+                        }
+                    }
+                })
+                .to_string(),
+            )
+            .await
+            .unwrap();
+        server
+            .send(
+                json!({
+                    "method": "turn/completed",
+                    "params": {
+                        "threadId": thread_id,
+                        "turn": {"id": turn_id, "status": "completed", "items": []}
+                    }
+                })
+                .to_string(),
+            )
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn persistent_requests_start_once_then_resume_the_same_thread() {
+        let (rpc, mut server) = rpc_and_server().await;
+        let provider = Arc::new(AppServerImageProvider::new(
+            rpc,
+            Arc::new(MemorySessionBindingStore::default()),
+            AppServerProviderConfig {
+                codex_model: None,
+                cwd: PathBuf::from("/tmp"),
+                image_limits: ImageLimits::default(),
+            },
+        ));
+
+        let first = tokio::spawn({
+            let provider = Arc::clone(&provider);
+            async move { provider.execute(request(), context("request-1")).await }
+        });
+        let start = next_message(&mut server).await;
+        assert_eq!(start["method"], "thread/start");
+        assert_eq!(start["params"]["ephemeral"], false);
+        server
+            .send(json!({"id": start["id"], "result": {"thread": {"id": "thread-1"}}}).to_string())
+            .await
+            .unwrap();
+        let turn = next_message(&mut server).await;
+        assert_eq!(turn["method"], "turn/start");
+        assert_eq!(turn["params"]["threadId"], "thread-1");
+        server
+            .send(json!({"id": turn["id"], "result": {"turn": {"id": "turn-1"}}}).to_string())
+            .await
+            .unwrap();
+        complete_turn(&mut server, "thread-1", "turn-1").await;
+        let first = first.await.unwrap().unwrap();
+        assert!(!first.session.unwrap().reused);
+        assert_eq!(first.data.len(), 1);
+
+        let second = tokio::spawn({
+            let provider = Arc::clone(&provider);
+            async move { provider.execute(request(), context("request-2")).await }
+        });
+        let resume = next_message(&mut server).await;
+        assert_eq!(resume["method"], "thread/resume");
+        assert_eq!(resume["params"]["threadId"], "thread-1");
+        server
+            .send(json!({"id": resume["id"], "result": {"thread": {"id": "thread-1"}}}).to_string())
+            .await
+            .unwrap();
+        let turn = next_message(&mut server).await;
+        server
+            .send(json!({"id": turn["id"], "result": {"turn": {"id": "turn-2"}}}).to_string())
+            .await
+            .unwrap();
+        complete_turn(&mut server, "thread-1", "turn-2").await;
+        let second = second.await.unwrap().unwrap();
+        assert!(second.session.unwrap().reused);
+    }
+}
