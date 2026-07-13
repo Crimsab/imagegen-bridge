@@ -8,16 +8,16 @@ use std::{
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use futures_util::StreamExt as _;
+use futures_util::{StreamExt as _, stream};
 use imagegen_bridge_artifacts::{
     ImageLimits, InputLoader, LoadedImage, RemoteImageFetcher, inspect_image,
 };
 use imagegen_bridge_core::{
-    Background, BridgeError, ErrorCode, GeneratedImage, ImageOperation, ImagePayload,
+    Background, BridgeError, ErrorCode, GeneratedImage, ImageFailure, ImageOperation, ImagePayload,
     ImageProvider, ImageRequest, ImageResponse, ImageSize, ImageSource, InputCapabilities,
-    Moderation, OutputFormat, ProviderCapabilities, ProviderContext, ProviderDescriptor,
-    ProviderEvent, Quality, RequestLimits, RevisedPromptPolicy, SizeCapabilities, SupportLevel,
-    Timings, U8Range, Usage, negotiate_request, validate_request,
+    Moderation, MultiImageFailurePolicy, OutputFormat, ProviderCapabilities, ProviderContext,
+    ProviderDescriptor, ProviderEvent, Quality, RequestLimits, RevisedPromptPolicy,
+    SizeCapabilities, SupportLevel, Timings, U8Range, Usage, negotiate_request, validate_request,
 };
 use reqwest::{Client, StatusCode, Url, header};
 use secrecy::ExposeSecret as _;
@@ -60,6 +60,8 @@ pub struct CodexResponsesConfig {
     pub max_base64_chars: usize,
     /// Maximum aggregate decoded reference bytes.
     pub max_reference_bytes: u64,
+    /// Maximum simultaneous upstream calls within one multi-image request.
+    pub max_parallel_outputs: usize,
 }
 
 impl std::fmt::Debug for CodexResponsesConfig {
@@ -75,6 +77,7 @@ impl std::fmt::Debug for CodexResponsesConfig {
             .field("sse_limits", &self.sse_limits)
             .field("max_base64_chars", &self.max_base64_chars)
             .field("max_reference_bytes", &self.max_reference_bytes)
+            .field("max_parallel_outputs", &self.max_parallel_outputs)
             .finish()
     }
 }
@@ -94,6 +97,7 @@ impl CodexResponsesConfig {
             sse_limits: SseLimits::default(),
             max_base64_chars: 128 * 1024 * 1024,
             max_reference_bytes: 64 * 1024 * 1024,
+            max_parallel_outputs: 2,
         })
     }
 }
@@ -132,6 +136,12 @@ impl CodexResponsesProvider {
                 "Codex Responses endpoint must use HTTPS",
             ));
         }
+        if config.max_parallel_outputs == 0 || config.max_parallel_outputs > 4 {
+            return Err(BridgeError::new(
+                ErrorCode::Configuration,
+                "Codex Responses parallel output limit must be between 1 and 4",
+            ));
+        }
         let client = Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
@@ -161,16 +171,78 @@ impl CodexResponsesProvider {
         let user_content = self.input_content(&request).await?;
         let started = Instant::now();
         let mut images = Vec::with_capacity(usize::from(request.parameters.n));
+        let mut failures = Vec::new();
         let mut revised_prompt = None;
         let mut usage = Usage::default();
-        for output_index in 0..request.parameters.n {
-            let result = self
-                .call_once(&request, image_model, output_index, &user_content, &context)
-                .await
-                .map_err(|error| annotate_safety_rejection(error, &request))?;
-            revised_prompt = result.revised_prompt.or(revised_prompt);
-            merge_usage(&mut usage, &result.usage);
-            images.push(self.normalized_image(&result.b64_json)?);
+        let output_calls = stream::iter(0..request.parameters.n)
+            .map(|output_index| {
+                let request = &request;
+                let user_content = &user_content;
+                let context = &context;
+                async move {
+                    let output_started = Instant::now();
+                    let result = match self
+                        .call_once(request, image_model, output_index, user_content, context)
+                        .await
+                        .map_err(|error| annotate_safety_rejection(error, request))
+                    {
+                        Ok(call) => self
+                            .normalized_image(&call.b64_json)
+                            .map(|image| (call, image)),
+                        Err(error) => Err(error),
+                    };
+                    let generation_ms =
+                        u64::try_from(output_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                    IndexedOutput {
+                        index: output_index,
+                        generation_ms,
+                        result,
+                    }
+                }
+            })
+            .buffer_unordered(self.config.max_parallel_outputs);
+        tokio::pin!(output_calls);
+        let mut outputs = Vec::with_capacity(usize::from(request.parameters.n));
+        while let Some(mut output) = output_calls.next().await {
+            if request.parameters.failure_policy == MultiImageFailurePolicy::FailFast
+                && let Err(error) = &output.result
+            {
+                return Err(error
+                    .clone()
+                    .with_detail("output_index", output.index)
+                    .with_detail("generation_ms", output.generation_ms));
+            }
+            if let Err(error) = &mut output.result {
+                *error = error
+                    .clone()
+                    .with_detail("output_index", output.index)
+                    .with_detail("generation_ms", output.generation_ms);
+            }
+            outputs.push(output);
+        }
+        outputs.sort_by_key(|output| output.index);
+        for output in outputs {
+            match output.result {
+                Ok((result, mut image)) => {
+                    revised_prompt = result.revised_prompt.or(revised_prompt);
+                    merge_usage(&mut usage, &result.usage);
+                    image.index = output.index;
+                    image.generation_ms = Some(output.generation_ms);
+                    images.push(image);
+                }
+                Err(error) => failures.push(ImageFailure {
+                    index: output.index,
+                    error,
+                    generation_ms: output.generation_ms,
+                }),
+            }
+        }
+        if images.is_empty() {
+            let mut error = failures.remove(0).error;
+            error = error
+                .with_detail("all_outputs_failed", true)
+                .with_detail("failed_outputs", request.parameters.n);
+            return Err(error);
         }
         if request.policies.revised_prompt == RevisedPromptPolicy::Require
             && revised_prompt.is_none()
@@ -185,17 +257,22 @@ impl CodexResponsesProvider {
             revised_prompt = None;
         }
         let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let mut warnings = vec!["experimental_private_upstream".to_owned()];
+        if !failures.is_empty() {
+            warnings.push("partial_output_failure".to_owned());
+        }
         Ok(ImageResponse {
-            id: context.request_id,
+            id: context.request_id.clone(),
             created: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map_or(0, |duration| duration.as_secs()),
             provider: "codex-responses".to_owned(),
             model: image_model.to_owned(),
             requested: negotiated.requested,
-            effective: request.parameters,
+            effective: request.parameters.clone(),
             normalizations: negotiated.normalizations,
             data: images,
+            failures,
             revised_prompt,
             usage: Some(usage),
             session: None,
@@ -204,7 +281,7 @@ impl CodexResponsesProvider {
                 total_ms: elapsed,
                 ..Timings::default()
             },
-            warnings: vec!["experimental_private_upstream".to_owned()],
+            warnings,
         })
     }
 
@@ -399,6 +476,7 @@ impl CodexResponsesProvider {
                 ..error
             })?;
         Ok(GeneratedImage {
+            index: 0,
             payload: ImagePayload::B64Json {
                 b64_json: encoded.to_owned(),
             },
@@ -407,6 +485,7 @@ impl CodexResponsesProvider {
             height: metadata.height,
             bytes: metadata.bytes,
             sha256: metadata.sha256,
+            generation_ms: None,
         })
     }
 
@@ -435,6 +514,12 @@ impl CodexResponsesProvider {
     ) -> Result<ProviderCapabilities, BridgeError> {
         capabilities(self.selected_image_model(requested)?)
     }
+}
+
+struct IndexedOutput {
+    index: u8,
+    generation_ms: u64,
+    result: Result<(CallResult, GeneratedImage), BridgeError>,
 }
 
 fn annotate_safety_rejection(mut error: BridgeError, request: &ImageRequest) -> BridgeError {
@@ -616,7 +701,11 @@ fn protocol_error(message: &str) -> BridgeError {
 mod tests {
     #![allow(clippy::unwrap_used)]
 
-    use std::path::PathBuf;
+    use std::{
+        path::PathBuf,
+        sync::atomic::{AtomicUsize, Ordering},
+        time::Duration,
+    };
 
     use super::*;
     use imagegen_bridge_core::{
@@ -716,6 +805,84 @@ mod tests {
             }
         });
         (address, handle)
+    }
+
+    async fn mock_parallel_server(
+        calls: usize,
+        failed_accept: Option<usize>,
+        delay: Duration,
+    ) -> (
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<()>,
+        Arc<AtomicUsize>,
+    ) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let active = Arc::new(AtomicUsize::new(0));
+        let max_active = Arc::new(AtomicUsize::new(0));
+        let reported_max = Arc::clone(&max_active);
+        let handle = tokio::spawn(async move {
+            let mut handlers = tokio::task::JoinSet::new();
+            for call_index in 0..calls {
+                let (mut connection, _) = listener.accept().await.unwrap();
+                let active = Arc::clone(&active);
+                let max_active = Arc::clone(&max_active);
+                handlers.spawn(async move {
+                    let now_active = active.fetch_add(1, Ordering::AcqRel) + 1;
+                    max_active.fetch_max(now_active, Ordering::AcqRel);
+                    let mut request = Vec::new();
+                    let mut buffer = [0_u8; 4096];
+                    let header_end = loop {
+                        let read = connection.read(&mut buffer).await.unwrap();
+                        assert_ne!(read, 0);
+                        request.extend_from_slice(&buffer[..read]);
+                        if let Some(position) =
+                            request.windows(4).position(|value| value == b"\r\n\r\n")
+                        {
+                            break position + 4;
+                        }
+                    };
+                    let headers = std::str::from_utf8(&request[..header_end]).unwrap();
+                    let content_length = headers
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length: ")
+                                .map(str::to_owned)
+                        })
+                        .unwrap()
+                        .parse::<usize>()
+                        .unwrap();
+                    while request.len() - header_end < content_length {
+                        let read = connection.read(&mut buffer).await.unwrap();
+                        assert_ne!(read, 0);
+                        request.extend_from_slice(&buffer[..read]);
+                    }
+                    tokio::time::sleep(delay).await;
+                    if failed_accept == Some(call_index) {
+                        connection
+                            .write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                            .await
+                            .unwrap();
+                    } else {
+                        let events = format!(
+                            "data: {{\"type\":\"response.output_item.done\",\"item\":{{\"type\":\"image_generation_call\",\"result\":\"{ONE_PIXEL_PNG}\",\"revised_prompt\":\"parallel fixture\"}}}}\n\ndata: {{\"type\":\"response.completed\",\"response\":{{\"usage\":{{\"total_tokens\":5}}}}}}\n\ndata: [DONE]\n\n"
+                        );
+                        let headers = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            events.len()
+                        );
+                        connection.write_all(headers.as_bytes()).await.unwrap();
+                        connection.write_all(events.as_bytes()).await.unwrap();
+                    }
+                    active.fetch_sub(1, Ordering::AcqRel);
+                });
+            }
+            while let Some(result) = handlers.join_next().await {
+                result.unwrap();
+            }
+        });
+        (address, handle, reported_max)
     }
 
     #[test]
@@ -906,6 +1073,102 @@ mod tests {
         server.await.unwrap();
         assert_eq!(response.data.len(), 2);
         assert_eq!(response.usage.unwrap().total_tokens, Some(10));
+    }
+
+    #[tokio::test]
+    async fn best_effort_runs_bounded_calls_and_preserves_output_indices() {
+        let (address, server, max_active) =
+            mock_parallel_server(3, Some(1), Duration::from_millis(40)).await;
+        let loader =
+            Arc::new(InputLoader::new(Vec::<PathBuf>::new(), ImageLimits::default()).unwrap());
+        let mut config = CodexResponsesConfig::production(loader).unwrap();
+        config.endpoint = Url::parse(&format!("http://{address}/responses")).unwrap();
+        config.max_parallel_outputs = 2;
+        let provider = CodexResponsesProvider::new(Arc::new(FakeCredentials), config).unwrap();
+        let mut request = ImageRequest::generate("three bounded images");
+        request.parameters.n = 3;
+        request.parameters.failure_policy = MultiImageFailurePolicy::BestEffort;
+        let response = provider
+            .execute(
+                request,
+                ProviderContext {
+                    request_id: "bounded-best-effort".to_owned(),
+                    deadline: Instant::now() + Duration::from_secs(10),
+                    cancellation: tokio_util::sync::CancellationToken::new(),
+                    events: None,
+                },
+            )
+            .await
+            .unwrap();
+        server.await.unwrap();
+        assert_eq!(max_active.load(Ordering::Acquire), 2);
+        assert_eq!(response.data.len(), 2);
+        assert_eq!(response.failures.len(), 1);
+        let mut indices = response
+            .data
+            .iter()
+            .map(|image| image.index)
+            .chain(response.failures.iter().map(|failure| failure.index))
+            .collect::<Vec<_>>();
+        indices.sort_unstable();
+        assert_eq!(indices, [0, 1, 2]);
+        assert!(
+            response
+                .data
+                .windows(2)
+                .all(|pair| pair[0].index < pair[1].index)
+        );
+        assert!(
+            response
+                .data
+                .iter()
+                .all(|image| image.generation_ms.is_some_and(|value| value >= 40))
+        );
+        assert!(
+            response
+                .warnings
+                .iter()
+                .any(|value| value == "partial_output_failure")
+        );
+    }
+
+    #[tokio::test]
+    async fn fail_fast_does_not_start_later_outputs_after_the_first_failure() {
+        let (address, server, max_active) =
+            mock_parallel_server(1, Some(0), Duration::from_millis(5)).await;
+        let loader =
+            Arc::new(InputLoader::new(Vec::<PathBuf>::new(), ImageLimits::default()).unwrap());
+        let mut config = CodexResponsesConfig::production(loader).unwrap();
+        config.endpoint = Url::parse(&format!("http://{address}/responses")).unwrap();
+        config.max_parallel_outputs = 1;
+        let provider = CodexResponsesProvider::new(Arc::new(FakeCredentials), config).unwrap();
+        let mut request = ImageRequest::generate("fail immediately");
+        request.parameters.n = 3;
+        let error = provider
+            .execute(
+                request,
+                ProviderContext {
+                    request_id: "bounded-fail-fast".to_owned(),
+                    deadline: Instant::now() + Duration::from_secs(10),
+                    cancellation: tokio_util::sync::CancellationToken::new(),
+                    events: None,
+                },
+            )
+            .await
+            .unwrap_err();
+        server.await.unwrap();
+        assert_eq!(max_active.load(Ordering::Acquire), 1);
+        assert_eq!(error.details["output_index"], 0);
+    }
+
+    #[test]
+    fn rejects_unbounded_parallel_output_configuration() {
+        let loader =
+            Arc::new(InputLoader::new(Vec::<PathBuf>::new(), ImageLimits::default()).unwrap());
+        let mut config = CodexResponsesConfig::production(loader).unwrap();
+        config.max_parallel_outputs = 0;
+        let error = CodexResponsesProvider::new(Arc::new(FakeCredentials), config).unwrap_err();
+        assert_eq!(error.code, ErrorCode::Configuration);
     }
 
     #[tokio::test]

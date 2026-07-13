@@ -10,6 +10,7 @@ Quality: TypeAlias = Literal["auto", "low", "medium", "high"]
 OutputFormat: TypeAlias = Literal["png", "jpeg", "webp"]
 Background: TypeAlias = Literal["auto", "opaque", "transparent"]
 Moderation: TypeAlias = Literal["auto", "low"]
+MultiImageFailurePolicy: TypeAlias = Literal["fail_fast", "best_effort"]
 Resolution: TypeAlias = Literal["1k", "2k", "4k"]
 ResponseFormat: TypeAlias = Literal["b64_json", "url", "artifact", "metadata"]
 CompatibilityMode: TypeAlias = Literal["strict", "normalize", "best_effort"]
@@ -90,6 +91,7 @@ class GenerationParameters:
     background: Background = "auto"
     moderation: Moderation = "auto"
     partial_images: int = 0
+    failure_policy: MultiImageFailurePolicy = "fail_fast"
 
     def to_dict(self) -> dict[str, JSONValue]:
         return cast(dict[str, JSONValue], asdict(self))
@@ -211,11 +213,13 @@ class Normalization:
 @dataclass(frozen=True, slots=True)
 class GeneratedImage:
     type: Literal["b64_json", "url", "artifact", "metadata"]
+    index: int
     format: OutputFormat
     width: int
     height: int
     bytes: int
     sha256: str
+    generation_ms: int | None = None
     b64_json: str | None = None
     url: str | None = None
     id: str | None = None
@@ -255,6 +259,31 @@ class Timings:
 
 
 @dataclass(frozen=True, slots=True)
+class BridgeErrorData:
+    code: str
+    message: str
+    retryable: bool
+    provider: str | None = None
+    upstream_request_id: str | None = None
+    details: dict[str, JSONValue] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class ImageFailure:
+    index: int
+    error: BridgeErrorData
+    generation_ms: int
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> ImageFailure:
+        return cls(
+            index=value["index"],
+            error=BridgeErrorData(**value["error"]),
+            generation_ms=value["generation_ms"],
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ImageResponse:
     id: str
     created: int
@@ -264,6 +293,7 @@ class ImageResponse:
     effective: GenerationParameters
     data: tuple[GeneratedImage, ...]
     timings: Timings
+    failures: tuple[ImageFailure, ...] = ()
     normalizations: tuple[Normalization, ...] = ()
     revised_prompt: str | None = None
     usage: Usage | None = None
@@ -281,6 +311,7 @@ class ImageResponse:
             effective=GenerationParameters.from_dict(value["effective"]),
             data=tuple(GeneratedImage.from_dict(item) for item in value["data"]),
             timings=Timings(**value["timings"]),
+            failures=tuple(ImageFailure.from_dict(item) for item in value.get("failures", [])),
             normalizations=tuple(Normalization(**item) for item in value.get("normalizations", [])),
             revised_prompt=value.get("revised_prompt"),
             usage=Usage(**value["usage"]) if value.get("usage") is not None else None,

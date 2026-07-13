@@ -3,8 +3,9 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 use imagegen_bridge::core::{
-    AspectRatio, Background, CompatibilityMode, ImageSize, Moderation, NegativePromptMode,
-    OutputFormat, Quality, Resolution, ResponseFormat, RevisedPromptPolicy, SessionMode,
+    AspectRatio, Background, CompatibilityMode, ImageSize, Moderation, MultiImageFailurePolicy,
+    NegativePromptMode, OutputFormat, Quality, Resolution, ResponseFormat, RevisedPromptPolicy,
+    SessionMode,
 };
 
 #[derive(Debug, Parser)]
@@ -197,6 +198,9 @@ pub(crate) struct ImageArgs {
     /// Number of partial progress images requested.
     #[arg(long, value_parser = clap::value_parser!(u8).range(0..=3))]
     pub partial_images: Option<u8>,
+    /// Behavior when one output in a multi-image request fails.
+    #[arg(long, value_parser = parse_failure_policy)]
+    pub failure_policy: Option<MultiImageFailurePolicy>,
     /// Output payload representation.
     #[arg(long, value_parser = parse_response_format)]
     pub response_format: Option<ResponseFormat>,
@@ -247,6 +251,7 @@ impl ImageArgs {
             && self.background.is_none()
             && self.moderation.is_none()
             && self.partial_images.is_none()
+            && self.failure_policy.is_none()
             && self.response_format.is_none()
             && self.filename_prefix.is_none()
             && self.compatibility.is_none()
@@ -406,6 +411,7 @@ enum_parser!(parse_quality, Quality);
 enum_parser!(parse_format, OutputFormat);
 enum_parser!(parse_background, Background);
 enum_parser!(parse_moderation, Moderation);
+enum_parser!(parse_failure_policy, MultiImageFailurePolicy);
 enum_parser!(parse_response_format, ResponseFormat);
 enum_parser!(parse_compatibility, CompatibilityMode);
 enum_parser!(parse_negative_prompt_mode, NegativePromptMode);
@@ -448,6 +454,10 @@ mod tests {
             "transparent",
             "--moderation",
             "low",
+            "--count",
+            "3",
+            "--failure-policy",
+            "best_effort",
             "--response-format",
             "artifact",
             "--session",

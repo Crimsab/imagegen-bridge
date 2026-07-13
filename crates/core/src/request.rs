@@ -6,8 +6,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, de};
 
 use crate::{
-    AspectRatio, Background, CompatibilityMode, ImageSize, Moderation, NegativePromptMode,
-    OutputFormat, Quality, Resolution, ResponseFormat, RevisedPromptPolicy, SessionMode,
+    AspectRatio, Background, CompatibilityMode, ImageSize, Moderation, MultiImageFailurePolicy,
+    NegativePromptMode, OutputFormat, Quality, Resolution, ResponseFormat, RevisedPromptPolicy,
+    SessionMode,
 };
 
 const COMMON_REQUEST_FIELDS: &[&str] = &[
@@ -332,6 +333,8 @@ pub struct GenerationParameters {
     pub moderation: Moderation,
     /// Requested number of partial progress images.
     pub partial_images: u8,
+    /// Behavior when one output in a multi-image request fails.
+    pub failure_policy: MultiImageFailurePolicy,
 }
 
 impl Default for GenerationParameters {
@@ -347,6 +350,7 @@ impl Default for GenerationParameters {
             background: Background::default(),
             moderation: Moderation::default(),
             partial_images: 0,
+            failure_policy: MultiImageFailurePolicy::default(),
         }
     }
 }

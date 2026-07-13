@@ -710,6 +710,7 @@ mod tests {
                 effective: request.parameters,
                 normalizations: Vec::new(),
                 data: vec![GeneratedImage {
+                    index: 0,
                     payload: ImagePayload::B64Json {
                         b64_json: ONE_PIXEL_PNG.to_owned(),
                     },
@@ -719,7 +720,9 @@ mod tests {
                     bytes: 68,
                     sha256: "431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460"
                         .to_owned(),
+                    generation_ms: None,
                 }],
+                failures: Vec::new(),
                 revised_prompt: Some("revised".to_owned()),
                 usage: None,
                 session: None,

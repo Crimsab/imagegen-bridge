@@ -320,10 +320,26 @@
           "description": "Verified output format.",
           "$ref": "#/$defs/OutputFormat"
         },
+        "generation_ms": {
+          "description": "Provider time for this output when measured independently.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
         "height": {
           "description": "Verified height in pixels.",
           "type": "integer",
           "format": "uint32",
+          "minimum": 0
+        },
+        "index": {
+          "description": "Zero-based requested output index.",
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
           "minimum": 0
         },
         "sha256": {
@@ -414,6 +430,7 @@
         }
       ],
       "required": [
+        "index",
         "format",
         "width",
         "height",
@@ -441,6 +458,11 @@
           "description": "Requested background behavior.",
           "$ref": "#/$defs/Background",
           "default": "auto"
+        },
+        "failure_policy": {
+          "description": "Behavior when one output in a multi-image request fails.",
+          "$ref": "#/$defs/MultiImageFailurePolicy",
+          "default": "fail_fast"
         },
         "moderation": {
           "description": "Requested moderation behavior.",
@@ -501,6 +523,35 @@
         }
       },
       "additionalProperties": false
+    },
+    "ImageFailure": {
+      "description": "Failure for one output in a best-effort multi-image request.",
+      "type": "object",
+      "properties": {
+        "error": {
+          "description": "Safe structured provider error.",
+          "$ref": "#/$defs/BridgeError"
+        },
+        "generation_ms": {
+          "description": "Provider time spent before the failure.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "index": {
+          "description": "Zero-based requested output index.",
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "index",
+        "error",
+        "generation_ms"
+      ]
     },
     "ImageInput": {
       "description": "One image input plus optional metadata.",
@@ -627,6 +678,7 @@
           "$ref": "#/$defs/GenerationParameters",
           "default": {
             "background": "auto",
+            "failure_policy": "fail_fast",
             "moderation": "auto",
             "n": 1,
             "output_format": "png",
@@ -768,6 +820,13 @@
           "description": "Effective generation parameters.",
           "$ref": "#/$defs/GenerationParameters"
         },
+        "failures": {
+          "description": "Per-output failures returned only by best-effort multi-image requests.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ImageFailure"
+          }
+        },
         "id": {
           "description": "Stable bridge request ID.",
           "type": "string"
@@ -901,6 +960,21 @@
           "description": "Wire value `low`.",
           "type": "string",
           "const": "low"
+        }
+      ]
+    },
+    "MultiImageFailurePolicy": {
+      "description": "Behavior when one output in a multi-image request fails.",
+      "oneOf": [
+        {
+          "description": "Wire value `fail_fast`.",
+          "type": "string",
+          "const": "fail_fast"
+        },
+        {
+          "description": "Wire value `best_effort`.",
+          "type": "string",
+          "const": "best_effort"
         }
       ]
     },

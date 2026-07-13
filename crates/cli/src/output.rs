@@ -72,8 +72,16 @@ impl Output {
             };
             writeln!(
                 stdout,
-                "{payload}\t{}x{}\t{}\t{} bytes\t{}",
-                image.width, image.height, image.format, image.bytes, image.sha256
+                "{}\t{payload}\t{}x{}\t{}\t{} bytes\t{}",
+                image.index, image.width, image.height, image.format, image.bytes, image.sha256
+            )
+            .map_err(|_| output_error("could not write command output"))?;
+        }
+        for failure in &response.failures {
+            writeln!(
+                stdout,
+                "failed[{}]\t{:?}\t{} ms\t{}",
+                failure.index, failure.error.code, failure.generation_ms, failure.error.message
             )
             .map_err(|_| output_error("could not write command output"))?;
         }

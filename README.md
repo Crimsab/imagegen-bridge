@@ -26,8 +26,8 @@ are through TOML, the CLI, or the HTTP/SDK interfaces.
 - `gpt-image-2`, `gpt-image-1.5`, `gpt-image-1`, and
   `gpt-image-1-mini` routing on the experimental Responses transport.
 - Multiple images, size, quality, PNG/JPEG/WebP, compression, background,
-  moderation, negative-prompt policy, and revised-prompt policy where the
-  selected provider reports support.
+  moderation, negative-prompt policy, revised-prompt policy, bounded
+  concurrency, and explicit partial-failure behavior where supported.
 - Independent decoding and verification of format, dimensions, byte length,
   and SHA-256 before an output is returned or stored.
 - Atomic artifact writes, bounded local/remote inputs, retention cleanup, and
@@ -116,6 +116,13 @@ the response's `normalizations` field. `--dry-run` validates and prints the
 request without starting Codex or opening output storage. The current Codex
 transports reject `--user` explicitly because upstream attribution support has
 not been proven; they never silently discard it.
+
+For the Responses adapter, `n > 1` uses at most
+`providers.codex_responses.max_parallel_outputs` simultaneous upstream calls
+(default `2`, maximum `4`). `failure_policy=fail_fast` cancels outstanding work
+on the first failure. `best_effort` returns successful images in requested-index
+order plus structured `failures`; every success and failure includes its output
+index and per-item generation time.
 
 To use the experimental Responses provider, set
 `providers.codex_responses.enabled = true` in the TOML configuration, then

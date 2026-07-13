@@ -26,6 +26,12 @@ The SSE handler emits `started`, bounded provider `progress`/`partial_image`
 events when available, then `completed` or `error`, with heartbeat comments,
 backpressure, and disconnect cancellation.
 
+Native multi-image requests accept `parameters.failure_policy` as `fail_fast`
+or `best_effort`. Results retain the requested `index` and optional
+`generation_ms`; best-effort responses add structured per-index `failures` and
+the `partial_output_failure` warning. If every output fails, the request still
+returns an error rather than an empty success.
+
 ## Authentication
 
 When `server.bearer_token_env` is configured, `/v1/**` and the opt-in

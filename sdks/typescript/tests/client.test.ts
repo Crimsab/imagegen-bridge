@@ -50,6 +50,8 @@ describe("ImagegenBridgeClient", () => {
     const generated = await client.images.generate(generateFixture);
     expect(generated.id).toBe("img_fixture_01");
     expect(generated.data[0]?.width).toBe(1);
+    expect(generated.data[0]?.index).toBe(0);
+    expect(generated.requested.failure_policy).toBe("fail_fast");
     expect(generated.session?.reused).toBeTrue();
 
     const edited = await client.images.edit(editFixture);

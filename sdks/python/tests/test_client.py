@@ -30,6 +30,8 @@ def test_sync_client_matches_shared_http_contract(
         result = client.images.generate(request)
         assert result.id == "img_fixture_01"
         assert result.data[0].width == 1
+        assert result.data[0].index == 0
+        assert result.requested.failure_policy == "fail_fast"
         assert result.session is not None and result.session.reused
         assert result.normalizations[0].field == "parameters.partial_images"
         edited = client.images.edit(ImageRequest.from_dict(edit_fixture_request))

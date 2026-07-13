@@ -14,7 +14,8 @@
     "output_compression": null,
     "background": "opaque",
     "moderation": "auto",
-    "partial_images": 1
+    "partial_images": 1,
+    "failure_policy": "fail_fast"
   },
   "routing": {
     "provider": "codex-app-server",

@@ -298,6 +298,7 @@ mod tests {
             effective: GenerationParameters::default(),
             normalizations: Vec::new(),
             data: Vec::new(),
+            failures: Vec::new(),
             revised_prompt: None,
             usage: None,
             session: None,

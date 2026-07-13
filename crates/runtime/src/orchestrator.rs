@@ -464,9 +464,7 @@ impl ImagegenRuntime {
                 self.materializer.materialize(
                     response,
                     &effective_request.output,
-                    effective_request.parameters.n,
-                    effective_request.parameters.output_format,
-                    &effective_request.parameters.size,
+                    &effective_request.parameters,
                     effective_request.policies.compatibility,
                 ),
                 deadline,
@@ -702,6 +700,7 @@ mod tests {
             let bytes = STANDARD.decode(ONE_PIXEL_PNG).unwrap();
             let metadata = inspect_image(&bytes, ImageLimits::default()).unwrap();
             let image = GeneratedImage {
+                index: 0,
                 payload: ImagePayload::B64Json {
                     b64_json: ONE_PIXEL_PNG.to_owned(),
                 },
@@ -714,6 +713,7 @@ mod tests {
                 } else {
                     metadata.sha256
                 },
+                generation_ms: None,
             };
             Ok(ImageResponse {
                 id: context.request_id,
@@ -727,7 +727,13 @@ mod tests {
                 requested: request.parameters.clone(),
                 effective: request.parameters.clone(),
                 normalizations: Vec::new(),
-                data: vec![image; usize::from(request.parameters.n)],
+                data: (0..request.parameters.n)
+                    .map(|index| GeneratedImage {
+                        index,
+                        ..image.clone()
+                    })
+                    .collect(),
+                failures: Vec::new(),
                 revised_prompt: Some("safe revised prompt".to_owned()),
                 usage: Some(Usage::default()),
                 session: None,

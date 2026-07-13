@@ -584,9 +584,25 @@
             "$ref": "#/components/schemas/OutputFormat",
             "description": "Verified output format."
           },
+          "generation_ms": {
+            "description": "Provider time for this output when measured independently.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "height": {
             "description": "Verified height in pixels.",
             "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "index": {
+            "description": "Zero-based requested output index.",
+            "format": "uint8",
+            "maximum": 255,
             "minimum": 0,
             "type": "integer"
           },
@@ -602,6 +618,7 @@
           }
         },
         "required": [
+          "index",
           "format",
           "width",
           "height",
@@ -630,6 +647,11 @@
             "$ref": "#/components/schemas/Background",
             "default": "auto",
             "description": "Requested background behavior."
+          },
+          "failure_policy": {
+            "$ref": "#/components/schemas/MultiImageFailurePolicy",
+            "default": "fail_fast",
+            "description": "Behavior when one output in a multi-image request fails."
           },
           "moderation": {
             "$ref": "#/components/schemas/Moderation",
@@ -689,6 +711,35 @@
             "description": "Automatic or explicit output size."
           }
         },
+        "type": "object"
+      },
+      "ImageFailure": {
+        "additionalProperties": false,
+        "description": "Failure for one output in a best-effort multi-image request.",
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/BridgeError",
+            "description": "Safe structured provider error."
+          },
+          "generation_ms": {
+            "description": "Provider time spent before the failure.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "index": {
+            "description": "Zero-based requested output index.",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "index",
+          "error",
+          "generation_ms"
+        ],
         "type": "object"
       },
       "ImageInput": {
@@ -875,6 +926,7 @@
             "$ref": "#/components/schemas/GenerationParameters",
             "default": {
               "background": "auto",
+              "failure_policy": "fail_fast",
               "moderation": "auto",
               "n": 1,
               "output_format": "png",
@@ -956,6 +1008,13 @@
           "effective": {
             "$ref": "#/components/schemas/GenerationParameters",
             "description": "Effective generation parameters."
+          },
+          "failures": {
+            "description": "Per-output failures returned only by best-effort multi-image requests.",
+            "items": {
+              "$ref": "#/components/schemas/ImageFailure"
+            },
+            "type": "array"
           },
           "id": {
             "description": "Stable bridge request ID.",
@@ -1089,6 +1148,21 @@
           {
             "const": "low",
             "description": "Wire value `low`.",
+            "type": "string"
+          }
+        ]
+      },
+      "MultiImageFailurePolicy": {
+        "description": "Behavior when one output in a multi-image request fails.",
+        "oneOf": [
+          {
+            "const": "fail_fast",
+            "description": "Wire value `fail_fast`.",
+            "type": "string"
+          },
+          {
+            "const": "best_effort",
+            "description": "Wire value `best_effort`.",
             "type": "string"
           }
         ]
@@ -2145,6 +2219,7 @@
                 },
                 "parameters": {
                   "background": "auto",
+                  "failure_policy": "fail_fast",
                   "moderation": "auto",
                   "n": 1,
                   "output_format": "png",
@@ -2183,8 +2258,10 @@
                     {
                       "bytes": 123456,
                       "format": "png",
+                      "generation_ms": 28000,
                       "height": 1024,
                       "id": "019f-artifact",
+                      "index": 0,
                       "name": "fox-019f.png",
                       "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
                       "type": "artifact",
@@ -2193,6 +2270,7 @@
                   ],
                   "effective": {
                     "background": "auto",
+                    "failure_policy": "fail_fast",
                     "moderation": "auto",
                     "n": 1,
                     "output_format": "png",
@@ -2205,6 +2283,7 @@
                   "provider": "codex-app-server",
                   "requested": {
                     "background": "auto",
+                    "failure_policy": "fail_fast",
                     "moderation": "auto",
                     "n": 1,
                     "output_format": "png",
@@ -2330,6 +2409,7 @@
                   "imagegen_bridge": {
                     "effective": {
                       "background": "auto",
+                      "failure_policy": "fail_fast",
                       "moderation": "auto",
                       "n": 1,
                       "output_format": "png",
@@ -2468,6 +2548,7 @@
                   "imagegen_bridge": {
                     "effective": {
                       "background": "auto",
+                      "failure_policy": "fail_fast",
                       "moderation": "auto",
                       "n": 1,
                       "output_format": "png",
@@ -2576,6 +2657,7 @@
                 },
                 "parameters": {
                   "background": "auto",
+                  "failure_policy": "fail_fast",
                   "moderation": "auto",
                   "n": 1,
                   "output_format": "png",

@@ -9,6 +9,7 @@ export type Quality = "auto" | "low" | "medium" | "high";
 export type OutputFormat = "png" | "jpeg" | "webp";
 export type Background = "auto" | "opaque" | "transparent";
 export type Moderation = "auto" | "low";
+export type MultiImageFailurePolicy = "fail_fast" | "best_effort";
 export type Resolution = "1k" | "2k" | "4k";
 export type ResponseFormat = "b64_json" | "url" | "artifact" | "metadata";
 export type CompatibilityMode = "strict" | "normalize" | "best_effort";
@@ -39,6 +40,7 @@ export interface GenerationParameters {
   background?: Background;
   moderation?: Moderation;
   partial_images?: number;
+  failure_policy?: MultiImageFailurePolicy;
 }
 
 export interface RoutingOptions {
@@ -99,11 +101,13 @@ export interface Normalization {
 }
 
 interface GeneratedImageBase {
+  index: number;
   format: OutputFormat;
   width: number;
   height: number;
   bytes: number;
   sha256: string;
+  generation_ms?: number | null;
 }
 
 export type GeneratedImage =
@@ -141,24 +145,54 @@ export interface ImageResponse {
   requested: Required<
     Pick<
       GenerationParameters,
-      "n" | "size" | "quality" | "output_format" | "background" | "moderation" | "partial_images"
+      | "n"
+      | "size"
+      | "quality"
+      | "output_format"
+      | "background"
+      | "moderation"
+      | "partial_images"
+      | "failure_policy"
     >
   > &
     GenerationParameters;
   effective: Required<
     Pick<
       GenerationParameters,
-      "n" | "size" | "quality" | "output_format" | "background" | "moderation" | "partial_images"
+      | "n"
+      | "size"
+      | "quality"
+      | "output_format"
+      | "background"
+      | "moderation"
+      | "partial_images"
+      | "failure_policy"
     >
   > &
     GenerationParameters;
   normalizations?: Normalization[];
   data: GeneratedImage[];
+  failures?: ImageFailure[];
   revised_prompt?: string | null;
   usage?: Usage | null;
   session?: SessionMetadata | null;
   timings: Timings;
   warnings?: string[];
+}
+
+export interface BridgeErrorData {
+  code: string;
+  message: string;
+  retryable: boolean;
+  provider?: string | null;
+  upstream_request_id?: string | null;
+  details?: Record<string, JsonValue>;
+}
+
+export interface ImageFailure {
+  index: number;
+  error: BridgeErrorData;
+  generation_ms: number;
 }
 
 export interface ProviderDescriptor {

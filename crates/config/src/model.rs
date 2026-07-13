@@ -372,6 +372,8 @@ pub struct CodexResponsesSettings {
     pub responses_model: String,
     /// Image generation tool model.
     pub image_model: String,
+    /// Maximum simultaneous upstream calls within one multi-image request.
+    pub max_parallel_outputs: usize,
 }
 
 impl Default for CodexResponsesSettings {
@@ -381,6 +383,7 @@ impl Default for CodexResponsesSettings {
             endpoint: "https://chatgpt.com/backend-api/codex/responses".to_owned(),
             responses_model: "gpt-5.5".to_owned(),
             image_model: "gpt-image-2".to_owned(),
+            max_parallel_outputs: 2,
         }
     }
 }

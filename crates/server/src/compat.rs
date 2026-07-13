@@ -517,6 +517,7 @@ mod tests {
                 reason: "provider_default".to_owned(),
             }],
             data: vec![GeneratedImage {
+                index: 0,
                 payload: ImagePayload::B64Json {
                     b64_json: "image".to_owned(),
                 },
@@ -525,7 +526,9 @@ mod tests {
                 height: 1,
                 bytes: 1,
                 sha256: "00".repeat(32),
+                generation_ms: None,
             }],
+            failures: Vec::new(),
             revised_prompt: Some("revised".to_owned()),
             usage: Some(Usage::default()),
             session: Some(SessionMetadata {

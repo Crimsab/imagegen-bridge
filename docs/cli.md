@@ -42,7 +42,7 @@ without opening artifact/session storage or starting Codex.
 
 Advanced flags include `--negative-prompt`, `--negative-prompt-mode`,
 `--revised-prompt`, `--aspect-ratio`, `--resolution`, `--compression`,
-`--background`, `--moderation`, `--partial-images`, `--compatibility`,
+`--background`, `--moderation`, `--partial-images`, `--failure-policy`, `--compatibility`,
 `--session`, `--session-key`, `--thread-id`, `--idempotency-key`, and
 `--timeout-ms`. Availability is provider/model-specific; inspect it before
 requesting strict parameters:
@@ -60,6 +60,11 @@ provider work when strict and unsupported. `--compatibility normalize` or
 Both current Codex transports reject it before provider work because neither
 upstream path proves that it consumes this attribution; the field is never
 silently discarded, including in `best_effort` mode.
+
+`--failure-policy fail_fast` is the default for multiple outputs.
+`--failure-policy best_effort` keeps successful outputs and reports failed
+indices in `failures`; this is separate from provider compatibility
+`--compatibility best_effort`.
 
 ## Sessions and server
 

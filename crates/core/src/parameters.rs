@@ -95,6 +95,20 @@ impl Default for Moderation {
 }
 
 string_enum! {
+    /// Behavior when one output in a multi-image request fails.
+    pub enum MultiImageFailurePolicy {
+        FailFast => "fail_fast",
+        BestEffort => "best_effort",
+    }
+}
+
+impl Default for MultiImageFailurePolicy {
+    fn default() -> Self {
+        Self::FailFast
+    }
+}
+
+string_enum! {
     /// Desired output payload representation.
     pub enum ResponseFormat {
         B64Json => "b64_json",

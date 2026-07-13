@@ -75,6 +75,8 @@ const response = await client.images.generate({
 
 Pass `{ signal }` or `{ timeoutMs }` per request. Streaming is an
 `AsyncIterable<StreamEvent>` and cancels the HTTP body when iteration ends.
+Both SDKs expose requested output indices, optional per-item generation time,
+and structured failures from best-effort multi-image requests.
 
 ## Contract verification and packaging
 

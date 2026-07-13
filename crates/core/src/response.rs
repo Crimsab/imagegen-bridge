@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de};
 
-use crate::{GenerationParameters, OutputFormat};
+use crate::{BridgeError, GenerationParameters, OutputFormat};
 
 /// One explicit normalization or fallback applied to a request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -53,6 +53,8 @@ pub enum ImagePayload {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct GeneratedImage {
+    /// Zero-based requested output index.
+    pub index: u8,
     /// Output payload or artifact reference.
     #[serde(flatten)]
     pub payload: ImagePayload,
@@ -66,6 +68,9 @@ pub struct GeneratedImage {
     pub bytes: u64,
     /// Lowercase hexadecimal SHA-256 digest.
     pub sha256: String,
+    /// Provider time for this output when measured independently.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generation_ms: Option<u64>,
 }
 
 impl<'de> Deserialize<'de> for GeneratedImage {
@@ -75,21 +80,41 @@ impl<'de> Deserialize<'de> for GeneratedImage {
     {
         let mut fields = serde_json::Map::<String, serde_json::Value>::deserialize(deserializer)?;
         let format = take_required(&mut fields, "format")?;
+        let index = take_required(&mut fields, "index")?;
         let width = take_required(&mut fields, "width")?;
         let height = take_required(&mut fields, "height")?;
         let bytes = take_required(&mut fields, "bytes")?;
         let sha256 = take_required(&mut fields, "sha256")?;
+        let generation_ms = fields
+            .remove("generation_ms")
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(de::Error::custom)?;
         let payload =
             serde_json::from_value(serde_json::Value::Object(fields)).map_err(de::Error::custom)?;
         Ok(Self {
+            index,
             payload,
             format,
             width,
             height,
             bytes,
             sha256,
+            generation_ms,
         })
     }
+}
+
+/// Failure for one output in a best-effort multi-image request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ImageFailure {
+    /// Zero-based requested output index.
+    pub index: u8,
+    /// Safe structured provider error.
+    pub error: BridgeError,
+    /// Provider time spent before the failure.
+    pub generation_ms: u64,
 }
 
 fn take_required<T, E>(
@@ -175,6 +200,9 @@ pub struct ImageResponse {
     pub normalizations: Vec<Normalization>,
     /// Generated images.
     pub data: Vec<GeneratedImage>,
+    /// Per-output failures returned only by best-effort multi-image requests.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failures: Vec<ImageFailure>,
     /// Revised prompt when available and permitted by policy.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revised_prompt: Option<String>,
@@ -227,6 +255,7 @@ mod tests {
     #[test]
     fn generated_image_round_trips_and_rejects_unknown_fields() {
         let image = GeneratedImage {
+            index: 0,
             payload: ImagePayload::B64Json {
                 b64_json: "aW1hZ2U=".to_owned(),
             },
@@ -235,6 +264,7 @@ mod tests {
             height: 1,
             bytes: 5,
             sha256: "0".repeat(64),
+            generation_ms: Some(12),
         };
         let encoded = serde_json::to_value(&image).unwrap();
         assert_eq!(

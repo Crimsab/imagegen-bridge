@@ -7,8 +7,9 @@ use imagegen_bridge_artifacts::{
     ArtifactStore, ImageLimits, ImageMetadata, RemoteImageFetcher, inspect_image,
 };
 use imagegen_bridge_core::{
-    BridgeError, CompatibilityMode, ErrorCode, GeneratedImage, ImagePayload, ImageResponse,
-    ImageSize, Normalization, OutputFormat, OutputOptions, ResponseFormat,
+    BridgeError, CompatibilityMode, ErrorCode, GeneratedImage, GenerationParameters, ImagePayload,
+    ImageResponse, ImageSize, MultiImageFailurePolicy, Normalization, OutputFormat, OutputOptions,
+    ResponseFormat,
 };
 use url::Url;
 
@@ -91,25 +92,17 @@ impl OutputMaterializer {
         &self,
         mut response: ImageResponse,
         output: &OutputOptions,
-        expected_count: u8,
-        expected_format: OutputFormat,
-        expected_size: &ImageSize,
+        expected: &GenerationParameters,
         compatibility: CompatibilityMode,
     ) -> Result<ImageResponse, BridgeError> {
-        if response.data.len() != usize::from(expected_count) {
-            return Err(protocol_error(
-                "provider returned a different number of images than negotiated",
-            )
-            .with_detail("expected", expected_count)
-            .with_detail("actual", response.data.len()));
-        }
+        Self::validate_output_set(&response, expected.n, expected.failure_policy)?;
 
         let mut verified = Vec::with_capacity(response.data.len());
         for image in &response.data {
-            verified.push(self.verify(image, expected_format).await?);
+            verified.push(self.verify(image, expected.output_format).await?);
         }
 
-        Self::reconcile_dimensions(&mut response, &verified, expected_size, compatibility)?;
+        Self::reconcile_dimensions(&mut response, &verified, &expected.size, compatibility)?;
 
         let mut projected = Vec::with_capacity(verified.len());
         for image in verified {
@@ -117,6 +110,53 @@ impl OutputMaterializer {
         }
         response.data = projected;
         Ok(response)
+    }
+
+    fn validate_output_set(
+        response: &ImageResponse,
+        expected_count: u8,
+        expected_failure_policy: MultiImageFailurePolicy,
+    ) -> Result<(), BridgeError> {
+        let allows_failures = expected_failure_policy == MultiImageFailurePolicy::BestEffort;
+        if !allows_failures && !response.failures.is_empty() {
+            return Err(protocol_error(
+                "provider returned partial failures for a fail-fast request",
+            ));
+        }
+        let actual = response.data.len().saturating_add(response.failures.len());
+        if actual != usize::from(expected_count) {
+            return Err(protocol_error(
+                "provider returned a different number of output results than negotiated",
+            )
+            .with_detail("expected", expected_count)
+            .with_detail("actual", actual));
+        }
+        let mut indices = response
+            .data
+            .iter()
+            .map(|image| image.index)
+            .chain(response.failures.iter().map(|failure| failure.index))
+            .collect::<Vec<_>>();
+        indices.sort_unstable();
+        if indices != (0..expected_count).collect::<Vec<_>>() {
+            return Err(protocol_error(
+                "provider returned duplicate or missing output indices",
+            ));
+        }
+        if !response
+            .data
+            .windows(2)
+            .all(|pair| pair[0].index < pair[1].index)
+            || !response
+                .failures
+                .windows(2)
+                .all(|pair| pair[0].index < pair[1].index)
+        {
+            return Err(protocol_error(
+                "provider returned output results in unstable index order",
+            ));
+        }
+        Ok(())
     }
 
     fn reconcile_dimensions(
@@ -217,7 +257,12 @@ impl OutputMaterializer {
                 "provider output metadata does not match the decoded image",
             ));
         }
-        Ok(VerifiedImage { bytes, metadata })
+        Ok(VerifiedImage {
+            index: image.index,
+            bytes,
+            metadata,
+            generation_ms: image.generation_ms,
+        })
     }
 
     fn project(
@@ -272,19 +317,23 @@ impl OutputMaterializer {
             }
         };
         Ok(GeneratedImage {
+            index: image.index,
             payload,
             format: image.metadata.format,
             width: image.metadata.width,
             height: image.metadata.height,
             bytes: image.metadata.bytes,
             sha256: image.metadata.sha256,
+            generation_ms: image.generation_ms,
         })
     }
 }
 
 struct VerifiedImage {
+    index: u8,
     bytes: Vec<u8>,
     metadata: ImageMetadata,
+    generation_ms: Option<u64>,
 }
 
 fn as_artifact_error(error: BridgeError) -> BridgeError {
@@ -303,4 +352,87 @@ fn configuration_error(message: impl Into<String>) -> BridgeError {
 
 fn protocol_error(message: impl Into<String>) -> BridgeError {
     BridgeError::new(ErrorCode::Protocol, message)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use imagegen_bridge_core::{GenerationParameters, ImageFailure, Timings};
+
+    use super::*;
+
+    fn image(index: u8) -> GeneratedImage {
+        GeneratedImage {
+            index,
+            payload: ImagePayload::Metadata,
+            format: OutputFormat::Png,
+            width: 1,
+            height: 1,
+            bytes: 1,
+            sha256: "0".repeat(64),
+            generation_ms: Some(1),
+        }
+    }
+
+    fn response(data: Vec<GeneratedImage>, failures: Vec<ImageFailure>) -> ImageResponse {
+        ImageResponse {
+            id: "test".to_owned(),
+            created: 0,
+            provider: "test".to_owned(),
+            model: "test".to_owned(),
+            requested: GenerationParameters::default(),
+            effective: GenerationParameters::default(),
+            normalizations: Vec::new(),
+            data,
+            failures,
+            revised_prompt: None,
+            usage: None,
+            session: None,
+            timings: Timings::default(),
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn accepts_complete_indexed_best_effort_results() {
+        let response = response(
+            vec![image(0), image(2)],
+            vec![ImageFailure {
+                index: 1,
+                error: BridgeError::new(ErrorCode::Upstream, "failed"),
+                generation_ms: 1,
+            }],
+        );
+        OutputMaterializer::validate_output_set(&response, 3, MultiImageFailurePolicy::BestEffort)
+            .unwrap();
+    }
+
+    #[test]
+    fn rejects_partial_failures_in_fail_fast_and_duplicate_indices() {
+        let response = response(
+            vec![image(0), image(1)],
+            vec![ImageFailure {
+                index: 1,
+                error: BridgeError::new(ErrorCode::Upstream, "failed"),
+                generation_ms: 1,
+            }],
+        );
+        assert!(
+            OutputMaterializer::validate_output_set(
+                &response,
+                3,
+                MultiImageFailurePolicy::FailFast,
+            )
+            .is_err()
+        );
+        assert!(
+            OutputMaterializer::validate_output_set(
+                &response,
+                3,
+                MultiImageFailurePolicy::BestEffort,
+            )
+            .is_err()
+        );
+    }
 }

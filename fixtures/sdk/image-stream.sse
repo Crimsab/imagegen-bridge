@@ -8,5 +8,4 @@ event: partial_image
 data: {"type":"partial_image","index":0,"partial_index":0,"b64_json":"cGFydGlhbA=="}
 
 event: completed
-data: {"type":"completed","response":{"id":"img_fixture_01","created":1783960000,"provider":"codex-app-server","model":"gpt-5.5","requested":{"n":1,"size":"1024x1024","quality":"medium","output_format":"png","background":"opaque","moderation":"auto","partial_images":1},"effective":{"n":1,"size":"1024x1024","quality":"medium","output_format":"png","background":"opaque","moderation":"auto","partial_images":0},"normalizations":[],"data":[],"revised_prompt":"a tiny bridge fixture, crisp","timings":{"queue_ms":1,"input_ms":2,"provider_ms":30,"artifact_ms":3,"total_ms":36},"warnings":[]}}
-
+data: {"type":"completed","response":{"id":"img_fixture_01","created":1783960000,"provider":"codex-app-server","model":"gpt-5.5","requested":{"n":1,"size":"1024x1024","quality":"medium","output_format":"png","background":"opaque","moderation":"auto","partial_images":1,"failure_policy":"fail_fast"},"effective":{"n":1,"size":"1024x1024","quality":"medium","output_format":"png","background":"opaque","moderation":"auto","partial_images":0,"failure_policy":"fail_fast"},"normalizations":[],"data":[],"failures":[],"revised_prompt":"a tiny bridge fixture, crisp","timings":{"queue_ms":1,"input_ms":2,"provider_ms":30,"artifact_ms":3,"total_ms":36},"warnings":[]}}

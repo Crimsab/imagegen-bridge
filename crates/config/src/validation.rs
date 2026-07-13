@@ -221,6 +221,13 @@ impl BridgeConfig {
                     "Codex Responses model names must not be empty",
                 );
             }
+            if !(1..=4).contains(&responses.max_parallel_outputs) {
+                issue(
+                    "providers.codex_responses.max_parallel_outputs",
+                    "out_of_range",
+                    "parallel output limit must be between 1 and 4",
+                );
+            }
         }
         let openai = &self.providers.openai;
         if openai.enabled {
@@ -433,11 +440,18 @@ mod tests {
         config.providers.codex_responses.endpoint = "http://127.0.0.1:8080/responses".to_owned();
         assert!(config.check().is_empty());
         config.providers.codex_responses.endpoint = "http://example.test/responses".to_owned();
+        config.providers.codex_responses.max_parallel_outputs = 0;
         assert!(
             config
                 .check()
                 .iter()
                 .any(|issue| issue.field == "providers.codex_responses.endpoint")
+        );
+        assert!(
+            config
+                .check()
+                .iter()
+                .any(|issue| { issue.field == "providers.codex_responses.max_parallel_outputs" })
         );
     }
 

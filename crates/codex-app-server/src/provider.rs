@@ -264,12 +264,15 @@ impl AppServerImageProvider {
                 .await;
         }
         let turn = result?;
-        let images = turn
+        let mut images = turn
             .images
             .into_iter()
             .map(|encoded| self.normalized_image(&encoded))
             .collect::<Result<Vec<_>, BridgeError>>()?;
         let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        for image in &mut images {
+            image.generation_ms = Some(elapsed);
+        }
         Ok(ImageResponse {
             id: context.request_id,
             created: SystemTime::now()
@@ -281,6 +284,7 @@ impl AppServerImageProvider {
             effective: request.parameters,
             normalizations: negotiated.normalizations,
             data: images,
+            failures: Vec::new(),
             revised_prompt: turn.revised_prompt,
             usage: None::<Usage>,
             session: Some(SessionMetadata {
@@ -542,6 +546,7 @@ impl AppServerImageProvider {
                 ..error
             })?;
         Ok(GeneratedImage {
+            index: 0,
             payload: ImagePayload::B64Json {
                 b64_json: encoded.to_owned(),
             },
@@ -550,6 +555,7 @@ impl AppServerImageProvider {
             height: metadata.height,
             bytes: metadata.bytes,
             sha256: metadata.sha256,
+            generation_ms: None,
         })
     }
 }

@@ -209,6 +209,9 @@ fn apply_image_args(request: &mut ImageRequest, args: ImageArgs) {
     if let Some(value) = args.partial_images {
         request.parameters.partial_images = value;
     }
+    if let Some(value) = args.failure_policy {
+        request.parameters.failure_policy = value;
+    }
     if let Some(value) = args.response_format {
         request.output.response_format = value;
     }

@@ -10,7 +10,8 @@
     "output_format": "png",
     "background": "opaque",
     "moderation": "auto",
-    "partial_images": 1
+    "partial_images": 1,
+    "failure_policy": "fail_fast"
   },
   "effective": {
     "n": 1,
@@ -19,7 +20,8 @@
     "output_format": "png",
     "background": "opaque",
     "moderation": "auto",
-    "partial_images": 0
+    "partial_images": 0,
+    "failure_policy": "fail_fast"
   },
   "normalizations": [
     {
@@ -32,6 +34,7 @@
   "data": [
     {
       "type": "b64_json",
+      "index": 0,
       "b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAHnOcQAAAAABJRU5ErkJggg==",
       "format": "png",
       "width": 1,
