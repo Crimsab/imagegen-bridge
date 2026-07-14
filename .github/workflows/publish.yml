@@ -269,7 +269,7 @@ jobs:
       - name: Install npm with trusted-publishing support
         run: npm install --global npm@11.18.0
 
-      - name: Publish or stage the npm package
+      - name: Publish the npm package
         working-directory: sdks/typescript
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -285,18 +285,8 @@ jobs:
           if [[ "$package_status" == "200" ]]; then
             echo "imagegen-bridge@$VERSION is already published; skipping."
           elif [[ "$package_status" == "404" ]]; then
-            package_root_status="$(
-              curl --silent --output /dev/null --write-out '%{http_code}' \
-                --max-time 15 --retry 3 --retry-connrefused \
-                https://registry.npmjs.org/imagegen-bridge
-            )"
-            if [[ "$package_root_status" == "404" ]]; then
-              echo "First release: staging the package for 2FA approval on npmjs.com."
-              npm stage publish --access public --provenance
-            elif [[ "$package_root_status" == "200" ]]; then
-              npm publish --access public --provenance
-            else
-              echo "::error::Unexpected registry response: HTTP $package_root_status"
+            if ! npm publish --access public --provenance; then
+              echo "::error::The first publish requires a granular automation token created with Bypass 2FA enabled. After the package exists, configure Trusted Publishing and delete NPM_TOKEN."
               exit 1
             fi
           else
