@@ -12,7 +12,7 @@ const APP_CSS: &str = include_str!("../dashboard/app.css");
 const APP_JS: &str = include_str!("../dashboard/app.js");
 const API_JS: &str = include_str!("../dashboard/api.js");
 const FORM_JS: &str = include_str!("../dashboard/form.js");
-const ICON_SVG: &str = include_str!("../dashboard/icon.svg");
+const ICON_PNG: &[u8] = include_bytes!("../dashboard/icon.png");
 
 const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; img-src 'self' blob: data:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
 
@@ -28,7 +28,7 @@ where
         .route("/dashboard/app.js", get(script))
         .route("/dashboard/api.js", get(api_script))
         .route("/dashboard/form.js", get(form_script))
-        .route("/dashboard/icon.svg", get(icon))
+        .route("/dashboard/icon.png", get(icon))
 }
 
 async fn index() -> Response {
@@ -52,7 +52,9 @@ async fn form_script() -> Response {
 }
 
 async fn icon() -> Response {
-    asset_response(ICON_SVG, "image/svg+xml", false)
+    let mut response = asset_response("", "image/png", false);
+    *response.body_mut() = axum::body::Body::from(ICON_PNG);
+    response
 }
 
 fn asset_response(body: &'static str, content_type: &'static str, document: bool) -> Response {
@@ -113,7 +115,7 @@ mod tests {
         );
         assert!(INDEX_HTML.contains("/dashboard/app.css"));
         assert!(INDEX_HTML.contains("/dashboard/app.js"));
-        assert!(INDEX_HTML.contains("/dashboard/icon.svg"));
+        assert!(INDEX_HTML.contains("/dashboard/icon.png"));
         assert!(INDEX_HTML.contains("type=\"module\""));
         assert!(INDEX_HTML.contains("id=\"detail-message\""));
         assert!(INDEX_HTML.contains("id=\"event-table-body\""));
@@ -127,14 +129,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn icon_is_served_as_svg() {
+    async fn icon_is_served_as_png() {
         let response = icon().await;
-        assert_eq!(response.headers()[header::CONTENT_TYPE], "image/svg+xml");
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "image/png");
         assert_eq!(
             response.headers()[header::X_CONTENT_TYPE_OPTIONS],
             "nosniff"
         );
-        assert!(ICON_SVG.contains("<title id=\"title\">Imagegen Bridge</title>"));
+        assert_eq!(&ICON_PNG[..8], b"\x89PNG\r\n\x1a\n");
     }
 
     #[test]

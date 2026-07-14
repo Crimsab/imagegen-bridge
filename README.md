@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="crates/server/dashboard/icon.svg" alt="Imagegen Bridge logo" width="144">
+  <img src="crates/server/dashboard/icon.png" alt="Imagegen Bridge logo" width="144">
 
 # Imagegen Bridge
 
