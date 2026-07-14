@@ -20,7 +20,7 @@ Configure these GitHub environments before the first tag:
 
 | Environment | Registry configuration |
 | --- | --- |
-| `crates-io` | Add a repository secret named `CARGO_REGISTRY_TOKEN` containing a crates.io token scoped for publishing the Imagegen Bridge crates |
+| `crates-io` | Bootstrap the first publication with a short-lived crates.io token, then use Trusted Publishing as described below |
 | `pypi` | Create a pending PyPI trusted publisher for owner `Crimsab`, repository `imagegen-bridge`, workflow `publish.yml`, environment `pypi` |
 | `npm` | Bootstrap the unscoped `imagegen-bridge` package with a granular `NPM_TOKEN`; then configure its GitHub trusted publisher for workflow `publish.yml`, environment `npm`, and remove the long-lived token |
 
@@ -32,6 +32,29 @@ publication.
 The npm workflow uses Node 22.14 and npm 11.5.1 or newer for OIDC trusted
 publishing. Project dependencies, tests, and builds continue to use Bun. PyPI
 publishing is OIDC-only and does not require a long-lived API token.
+
+### Bootstrap crates.io, then remove the token
+
+crates.io cannot configure a trusted publisher until a crate has been published
+once. Sign in to crates.io with GitHub, verify the account email, and create an
+expiring API token that permits publishing new crates. Store it only as the
+`CARGO_REGISTRY_TOKEN` secret in the GitHub `crates-io` environment. Do not run
+`cargo login` on a workstation or server for the automated release path.
+
+The first package workflow tries OIDC and falls back to that bootstrap secret.
+After all nine Rust packages have been published, add a GitHub trusted publisher
+to each package with these values:
+
+- repository owner: `Crimsab`;
+- repository: `imagegen-bridge`;
+- workflow: `publish.yml`;
+- environment: `crates-io`.
+
+Delete `CARGO_REGISTRY_TOKEN` after the trusted publishers are configured. Future
+releases receive a short-lived token from crates.io through GitHub OIDC, and the
+workflow revokes it automatically when the job ends. Enabling crates.io's
+Trusted Publishing Only mode after verification also prevents traditional API
+tokens from publishing later versions.
 
 ## Cut a release
 
