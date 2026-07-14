@@ -21,7 +21,6 @@ use imagegen_bridge_core::{
 };
 use imagegen_bridge_runtime::{
     ExecutionContext, ImageJobListFilter, ImageJobVisibility, ImagegenRuntime,
-    ProviderReadinessStatus,
 };
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
@@ -41,6 +40,7 @@ use crate::{
     events::{OperatorEventHistory, OperatorEvents, redacted_route},
     metrics::ServerMetrics,
     openapi::openapi_document,
+    readiness::{PublicReadiness, ReadinessCache},
     streaming::stream_image,
 };
 
@@ -61,6 +61,7 @@ pub struct ServerState {
     pub(crate) metrics: Option<Arc<ServerMetrics>>,
     pub(crate) diagnostics: Arc<ConfigurationDiagnostics>,
     pub(crate) events: Arc<OperatorEvents>,
+    pub(crate) readiness: Arc<ReadinessCache>,
 }
 
 impl std::fmt::Debug for ServerState {
@@ -73,6 +74,7 @@ impl std::fmt::Debug for ServerState {
             .field("metrics", &self.metrics.is_some())
             .field("diagnostics", &self.diagnostics)
             .field("events", &self.events.snapshot().items.len())
+            .field("readiness", &self.readiness.status())
             .finish()
     }
 }
@@ -118,6 +120,7 @@ impl ServerState {
             metrics,
             diagnostics: Arc::new(ConfigurationDiagnostics::from_settings(settings)),
             events: Arc::new(OperatorEvents::default()),
+            readiness: Arc::new(ReadinessCache::default()),
         })
     }
 
@@ -160,6 +163,7 @@ impl ServerState {
                 metrics_enabled,
             )),
             events: Arc::new(OperatorEvents::default()),
+            readiness: Arc::new(ReadinessCache::default()),
         }
     }
 }
@@ -176,6 +180,7 @@ impl RequestId {
 
 /// Builds the complete route graph with configured body and concurrency bounds.
 pub fn router(state: ServerState, settings: &ServerSettings) -> Router {
+    state.readiness.start(state.runtime.registry().clone());
     let mut protected = Router::new()
         .route("/v1/images", post(execute_image))
         .route("/v1/images/stream", post(stream_image))
@@ -304,14 +309,10 @@ async fn liveness() -> Json<LiveResponse> {
 #[derive(Serialize)]
 struct ReadinessResponse {
     status: &'static str,
-    providers: Vec<imagegen_bridge_runtime::ProviderReadiness>,
 }
 
 async fn readiness(State(state): State<ServerState>) -> Response {
-    let providers = state.runtime.registry().readiness().await;
-    let ready = providers
-        .iter()
-        .all(|check| matches!(check.status, ProviderReadinessStatus::Ready));
+    let ready = state.readiness.status() == PublicReadiness::Ready;
     let status = if ready {
         StatusCode::OK
     } else {
@@ -321,7 +322,6 @@ async fn readiness(State(state): State<ServerState>) -> Response {
         status,
         Json(ReadinessResponse {
             status: if ready { "ready" } else { "not_ready" },
-            providers,
         }),
     )
         .into_response()
@@ -1140,6 +1140,8 @@ fn decode_job_cursor(value: &str) -> Result<(u64, String), &'static str> {
 mod tests {
     #![allow(clippy::unwrap_used)]
 
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use async_trait::async_trait;
     use axum::{body::Body, http::Request};
     use base64::engine::general_purpose::STANDARD;
@@ -1155,6 +1157,10 @@ mod tests {
     use super::*;
 
     struct ReadyProvider;
+
+    struct CountingReadyProvider {
+        checks: Arc<AtomicUsize>,
+    }
 
     const ONE_PIXEL_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
@@ -1290,6 +1296,33 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl ImageProvider for CountingReadyProvider {
+        fn descriptor(&self) -> ProviderDescriptor {
+            ReadyProvider.descriptor()
+        }
+
+        async fn capabilities(
+            &self,
+            model: Option<&str>,
+        ) -> Result<ProviderCapabilities, BridgeError> {
+            ReadyProvider.capabilities(model).await
+        }
+
+        async fn execute(
+            &self,
+            request: ImageRequest,
+            context: ProviderContext,
+        ) -> Result<ImageResponse, BridgeError> {
+            ReadyProvider.execute(request, context).await
+        }
+
+        async fn check_ready(&self) -> Result<(), BridgeError> {
+            self.checks.fetch_add(1, Ordering::AcqRel);
+            Ok(())
+        }
+    }
+
     fn test_router(token: Option<&str>) -> Router {
         test_router_with_settings(token, &ServerSettings::default())
     }
@@ -1370,6 +1403,45 @@ mod tests {
         let body = authorized.into_body().collect().await.unwrap().to_bytes();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["items"][0]["models"][0], "test-image");
+    }
+
+    #[tokio::test]
+    async fn public_readiness_is_cached_detail_free_and_does_not_probe_per_request() {
+        let checks = Arc::new(AtomicUsize::new(0));
+        let registry = ProviderRegistry::new(
+            [Arc::new(CountingReadyProvider {
+                checks: Arc::clone(&checks),
+            }) as Arc<dyn ImageProvider>],
+            "ready",
+        )
+        .unwrap();
+        let runtime = Arc::new(ImagegenRuntime::new(registry, RuntimeConfig::default()).unwrap());
+        let app = router(
+            ServerState::with_bearer(runtime, Some(SecretString::from("secret".to_owned()))),
+            &ServerSettings::default(),
+        );
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while checks.load(Ordering::Acquire) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(checks.load(Ordering::Acquire), 1);
+
+        for _ in 0..8 {
+            let response = app
+                .clone()
+                .oneshot(Request::get("/health/ready").body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(value, serde_json::json!({"status":"ready"}));
+        }
+        assert_eq!(checks.load(Ordering::Acquire), 1);
     }
 
     #[tokio::test]

@@ -49,7 +49,9 @@ The default layout is:
 ## Health and shutdown
 
 `GET /health/live` is public and content-free for container health checks.
-`GET /health/ready` verifies configured provider authentication/readiness.
+`GET /health/ready` reads a detail-free cached provider snapshot. Provider
+probes run on a bounded background cadence; full per-provider state remains in
+the authenticated `GET /v1/diagnostics` response.
 `GET /metrics` is enabled in the container profile and protected by the bridge
 bearer token. Compose allows 45 seconds for SIGTERM-driven draining, provider
 shutdown, SQLite completion, and Codex child termination before SIGKILL.

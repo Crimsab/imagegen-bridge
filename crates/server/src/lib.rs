@@ -9,6 +9,7 @@ mod events;
 mod jobs;
 mod metrics;
 mod openapi;
+mod readiness;
 mod routes;
 mod serve;
 mod streaming;

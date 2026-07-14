@@ -276,7 +276,7 @@ Important routes:
 | `GET /v1/diagnostics` | Authenticated redaction-safe operator state |
 | `GET /v1/sessions/{key}` | Persistent session lookup |
 | `GET /health/live` | Process liveness |
-| `GET /health/ready` | Provider readiness |
+| `GET /health/ready` | Detail-free cached provider readiness |
 | `GET /v1/openapi.json` | Generated OpenAPI 3.1 document |
 
 Configure `server.bearer_token_env` before exposing the service outside a

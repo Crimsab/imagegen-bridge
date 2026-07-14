@@ -47,8 +47,8 @@ pub fn openapi_document() -> Value {
                     "operationId": "getReadiness",
                     "tags": ["health"],
                     "responses": {
-                        "200": readiness_response("Providers are ready"),
-                        "503": readiness_response("One or more providers are not ready")
+                        "200": readiness_response("Cached provider readiness is fresh and ready"),
+                        "503": readiness_response("Cached provider readiness is unavailable, stale, or not ready")
                     }
                 }
             },
@@ -422,7 +422,7 @@ fn readiness_response(description: &str) -> Value {
     json_response(
         description,
         json!({"$ref":"#/components/schemas/ReadinessResponse"}),
-        json!({"status":"ready","providers":[{"provider":"codex-app-server","status":"ready"}]}),
+        json!({"status":"ready"}),
     )
 }
 
@@ -526,13 +526,14 @@ fn add_compatibility_schemas(schemas: &mut Map<String, Value>) {
             }
         }),
     );
-    schemas.insert("ReadinessResponse".to_owned(), json!({
-        "type":"object","additionalProperties":false,"required":["status","providers"],"properties":{
-            "status":{"enum":["ready","not_ready"]},
-            "providers":{"type":"array","items":{"$ref":"#/components/schemas/ProviderReadiness"}},
-            "events":{"$ref":"#/components/schemas/OperatorEventHistory"}
-        }
-    }));
+    schemas.insert(
+        "ReadinessResponse".to_owned(),
+        json!({
+            "type":"object","additionalProperties":false,"required":["status"],"properties":{
+                "status":{"enum":["ready","not_ready"]}
+            }
+        }),
+    );
     schemas.insert(
         "OperatorEventHistory".to_owned(),
         json!({

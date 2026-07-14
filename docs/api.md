@@ -8,7 +8,7 @@ network clients. Version 1 evolves additively; breaking wire changes use `/v2`.
 | Method | Route | Purpose | Success |
 | --- | --- | --- | --- |
 | `GET` | `/health/live` | Process liveness | `200` |
-| `GET` | `/health/ready` | Per-provider readiness | `200` ready, `503` otherwise |
+| `GET` | `/health/ready` | Detail-free cached provider readiness | `200` ready, `503` otherwise |
 | `GET` | `/metrics` | Opt-in Prometheus exposition | `200` when enabled |
 | `GET` | `/v1/providers` | Cursor-paginated provider inventory | `200` |
 | `GET` | `/v1/providers/{name}/capabilities` | Dynamic model capabilities | `200` |
