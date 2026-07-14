@@ -9,10 +9,10 @@ use std::{
 use async_trait::async_trait;
 use futures_util::{FutureExt as _, StreamExt as _, future::BoxFuture, stream::FuturesUnordered};
 use imagegen_bridge_core::{
-    BatchCapabilities, BatchMode, BridgeError, ErrorCode, ImageFailure, ImageProvider,
-    ImageRequest, ImageResponse, MultiImageFailurePolicy, ProviderCapabilities, ProviderContext,
-    ProviderDescriptor, ProviderEvent, RequestLimits, SessionMetadata, Timings, U8Range, Usage,
-    negotiate_request, validate_request,
+    BatchCapabilities, BatchExecution, BatchMode, BridgeError, ErrorCode, ImageFailure,
+    ImageProvider, ImageRequest, ImageResponse, MultiImageFailurePolicy, ProviderCapabilities,
+    ProviderContext, ProviderDescriptor, ProviderEvent, RequestLimits, SessionMetadata, Timings,
+    U8Range, Usage, negotiate_request, validate_request,
 };
 use sha2::{Digest as _, Sha256};
 use tokio::sync::{Semaphore, mpsc};
@@ -103,11 +103,14 @@ impl OutputFanoutProvider {
         let started = Instant::now();
         let requested_count = request.parameters.n;
         let failure_policy = request.parameters.failure_policy;
-        let batch_parallel = if request.session.mode == imagegen_bridge_core::SessionMode::Isolated
-        {
-            usize::from(self.config.max_parallel_outputs)
-        } else {
-            1
+        let batch_parallel = match request.policies.batch_execution {
+            BatchExecution::Parallel => usize::from(self.config.max_parallel_outputs),
+            BatchExecution::Auto
+                if request.session.mode == imagegen_bridge_core::SessionMode::Isolated =>
+            {
+                usize::from(self.config.max_parallel_outputs)
+            }
+            BatchExecution::Sequential | BatchExecution::Auto => 1,
         };
         let batch_cancellation = context.cancellation.child_token();
         let mut chunks = chunks(requested_count, native_count.max);
@@ -436,6 +439,9 @@ fn aggregate(
     }
     let mut data = Vec::new();
     let mut warnings = BTreeSet::from(["emulated_multi_image_fanout".to_owned()]);
+    if request.policies.batch_execution == BatchExecution::Sequential {
+        warnings.insert("sequential_multi_image_fanout".to_owned());
+    }
     let mut usage = Usage::default();
     let mut has_usage = false;
     let mut revised_prompt = None;
@@ -473,6 +479,7 @@ fn aggregate(
         requested: request.parameters.clone(),
         effective: request.parameters,
         normalizations: Vec::new(),
+        attempts: Vec::new(),
         data,
         failures,
         revised_prompt,

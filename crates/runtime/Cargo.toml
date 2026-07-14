@@ -25,6 +25,7 @@ url = "2"
 uuid = { version = "1", features = ["v7"] }
 
 [dev-dependencies]
+image = { version = "0.25.10", default-features = false, features = ["png"] }
 tempfile = "3.27.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
 

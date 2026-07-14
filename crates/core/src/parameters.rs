@@ -74,6 +74,58 @@ string_enum! {
     }
 }
 
+string_enum! {
+    /// How a transparent-background result is produced.
+    pub enum TransparencyMode {
+        /// Prefer native alpha and otherwise use a local chroma-key matte.
+        Auto => "auto",
+        /// Require provider-native alpha output.
+        Native => "native",
+        /// Generate a flat key background and remove it locally.
+        ChromaKey => "chroma_key",
+    }
+}
+
+impl Default for TransparencyMode {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
+string_enum! {
+    /// Conditions under which an ordered provider fallback may run.
+    pub enum FallbackPolicy {
+        /// Fall back only for unavailable, unsupported, or pre-output failures.
+        OnUnavailable => "on_unavailable",
+        /// Also fall back for known-outcome provider failures, excluding safety and cancellation.
+        OnError => "on_error",
+    }
+}
+
+impl Default for FallbackPolicy {
+    fn default() -> Self {
+        Self::OnUnavailable
+    }
+}
+
+string_enum! {
+    /// Preferred execution shape for bridge-emulated multi-image fan-out.
+    pub enum BatchExecution {
+        /// Use provider/session-aware bridge defaults.
+        Auto => "auto",
+        /// Dispatch one fan-out chunk at a time.
+        Sequential => "sequential",
+        /// Use the provider's configured bounded parallelism.
+        Parallel => "parallel",
+    }
+}
+
+impl Default for BatchExecution {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
 impl Default for Background {
     fn default() -> Self {
         Self::Auto

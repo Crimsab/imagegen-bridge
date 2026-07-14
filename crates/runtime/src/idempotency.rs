@@ -436,6 +436,7 @@ mod tests {
             requested: GenerationParameters::default(),
             effective: GenerationParameters::default(),
             normalizations: Vec::new(),
+            attempts: Vec::new(),
             data: Vec::new(),
             failures: Vec::new(),
             revised_prompt: None,

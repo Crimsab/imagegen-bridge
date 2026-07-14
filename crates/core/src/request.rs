@@ -6,9 +6,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, de};
 
 use crate::{
-    ArtifactCollisionPolicy, ArtifactMetadataPolicy, AspectRatio, Background, CompatibilityMode,
-    ImageAction, ImageSize, InputFidelity, Moderation, MultiImageFailurePolicy, NegativePromptMode,
-    OutputFormat, Quality, Resolution, ResponseFormat, RevisedPromptPolicy, SessionMode,
+    ArtifactCollisionPolicy, ArtifactMetadataPolicy, AspectRatio, Background, BatchExecution,
+    CompatibilityMode, FallbackPolicy, ImageAction, ImageSize, InputFidelity, Moderation,
+    MultiImageFailurePolicy, NegativePromptMode, OutputFormat, Quality, Resolution, ResponseFormat,
+    RevisedPromptPolicy, SessionMode, TransparencyMode,
 };
 
 const COMMON_REQUEST_FIELDS: &[&str] = &[
@@ -452,6 +453,22 @@ pub struct RoutingOptions {
     /// Explicit provider model, or the provider default when absent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Ordered provider/model routes tried after the primary route.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fallbacks: Vec<ProviderRoute>,
+    /// Conditions under which the next fallback route may run.
+    pub fallback_policy: FallbackPolicy,
+}
+
+/// One explicit provider/model fallback route.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderRoute {
+    /// Registered provider name.
+    pub provider: String,
+    /// Optional model override for this provider.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 /// Conversation/session controls.
@@ -487,6 +504,37 @@ pub struct OutputOptions {
     pub collision: ArtifactCollisionPolicy,
     /// Optional portable metadata persistence beside each artifact.
     pub metadata: ArtifactMetadataPolicy,
+    /// Transparent-background implementation and matte controls.
+    pub transparency: TransparencyOptions,
+}
+
+/// Transparent-background implementation and matte controls.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct TransparencyOptions {
+    /// Automatic, provider-native, or local chroma-key transparency.
+    pub mode: TransparencyMode,
+    /// Optional explicit chroma key in `#RRGGBB` form.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_color: Option<String>,
+    /// Per-channel distance at or below which a key pixel becomes transparent.
+    pub transparent_threshold: u8,
+    /// Per-channel distance at or above which a pixel becomes opaque.
+    pub opaque_threshold: u8,
+    /// Remove key-colored spill from partially transparent edges.
+    pub despill: bool,
+}
+
+impl Default for TransparencyOptions {
+    fn default() -> Self {
+        Self {
+            mode: TransparencyMode::Auto,
+            key_color: None,
+            transparent_threshold: 12,
+            opaque_threshold: 96,
+            despill: true,
+        }
+    }
 }
 
 /// Explicit fallback and visibility controls.
@@ -499,4 +547,6 @@ pub struct RequestPolicies {
     pub negative_prompt: NegativePromptMode,
     /// Revised-prompt visibility and requirement behavior.
     pub revised_prompt: RevisedPromptPolicy,
+    /// Automatic, sequential, or bounded-parallel fan-out execution.
+    pub batch_execution: BatchExecution,
 }

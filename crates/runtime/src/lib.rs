@@ -8,6 +8,7 @@ mod orchestrator;
 mod registry;
 mod sqlite_jobs;
 mod sqlite_sessions;
+mod transparency;
 
 pub use fanout::*;
 pub use idempotency::IdempotencyConfig;

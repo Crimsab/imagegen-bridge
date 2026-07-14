@@ -736,6 +736,7 @@ mod tests {
             qualities: BTreeSet::from([Quality::Auto]),
             output_formats: BTreeSet::from([OutputFormat::Png]),
             backgrounds: BTreeSet::from([Background::Auto]),
+            transparent_background: SupportLevel::Unsupported,
             moderation: BTreeSet::from([Moderation::Auto]),
             negative_prompt: SupportLevel::Emulated,
             revised_prompt: SupportLevel::Unsupported,

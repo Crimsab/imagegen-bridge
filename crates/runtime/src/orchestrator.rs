@@ -1,7 +1,7 @@
 //! Shared request orchestration used by every transport and SDK facade.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     future::Future,
     sync::{
         Arc,
@@ -11,7 +11,8 @@ use std::{
 };
 
 use imagegen_bridge_core::{
-    BridgeError, ErrorCode, ImageRequest, ImageResponse, ProviderContext, ProviderEvent,
+    BridgeError, ErrorCode, FallbackPolicy, ImageRequest, ImageResponse, Normalization,
+    ProviderAttempt, ProviderAttemptOutcome, ProviderContext, ProviderEvent, ProviderRoute,
     RequestLimits, RevisedPromptPolicy, negotiate_request, validate_request,
 };
 use tokio::sync::{Mutex, Notify, OwnedSemaphorePermit, mpsc};
@@ -23,6 +24,7 @@ use crate::{
     idempotency::{IdempotencyAction, IdempotencyConfig, IdempotencyCoordinator},
     materialize::{MaterializationConfig, OutputMaterializer},
     registry::ProviderRegistry,
+    transparency::prepare_transparency,
 };
 
 /// One concurrency pool and its bounded waiting room.
@@ -137,6 +139,11 @@ pub struct ImagegenRuntime {
     shutdown: CancellationToken,
     activity: Arc<ActivityTracker>,
     shutdown_result: Mutex<Option<Result<(), BridgeError>>>,
+}
+
+struct RouteExecution {
+    response: ImageResponse,
+    effective_request: ImageRequest,
 }
 
 impl std::fmt::Debug for ImagegenRuntime {
@@ -402,9 +409,6 @@ impl ImagegenRuntime {
         events: Option<mpsc::Sender<ProviderEvent>>,
     ) -> Result<ImageResponse, BridgeError> {
         let total_started = Instant::now();
-        let provider = self.registry.resolve(request.routing.provider.as_deref())?;
-        let descriptor = provider.descriptor();
-
         let queue_started = Instant::now();
         let global_permit = self
             .acquire_controlled(
@@ -414,18 +418,130 @@ impl ImagegenRuntime {
                 operation,
             )
             .await?;
+        let global_queue_ms = elapsed_ms(queue_started);
+        let primary_provider = request
+            .routing
+            .provider
+            .clone()
+            .unwrap_or_else(|| self.registry.default_name().to_owned());
+        let routes = std::iter::once(ProviderRoute {
+            provider: primary_provider.clone(),
+            model: request.routing.model.clone(),
+        })
+        .chain(request.routing.fallbacks.iter().cloned())
+        .collect::<Vec<_>>();
+        let mut unique_routes = BTreeSet::new();
+        for (index, route) in routes.iter().enumerate() {
+            if !unique_routes.insert((route.provider.as_str(), route.model.as_deref())) {
+                return Err(BridgeError::new(
+                    ErrorCode::InvalidRequest,
+                    "provider routing contains a duplicate resolved route",
+                )
+                .with_detail("field", format!("routing.fallbacks[{}]", index - 1))
+                .with_detail("provider", &route.provider)
+                .with_detail("model", route.model.as_deref()));
+            }
+        }
+        let mut attempts = Vec::with_capacity(routes.len());
+        let mut final_error = None;
+
+        for (index, route) in routes.iter().enumerate() {
+            let attempt_started = Instant::now();
+            match self
+                .execute_route(
+                    &request,
+                    &request_id,
+                    route,
+                    deadline,
+                    external_cancellation,
+                    operation,
+                    events.clone(),
+                )
+                .await
+            {
+                Ok(execution) => {
+                    let mut response = execution.response;
+                    attempts.push(ProviderAttempt {
+                        provider: response.provider.clone(),
+                        model: Some(response.model.clone()),
+                        outcome: ProviderAttemptOutcome::Succeeded,
+                        error_code: None,
+                        duration_ms: elapsed_ms(attempt_started),
+                    });
+                    if index > 0 {
+                        response.normalizations.insert(
+                            0,
+                            Normalization {
+                                field: "routing.provider".to_owned(),
+                                requested: Some(serde_json::json!(primary_provider)),
+                                effective: Some(serde_json::json!(response.provider)),
+                                reason: "provider_fallback".to_owned(),
+                            },
+                        );
+                        response.warnings.push("provider_fallback_used".to_owned());
+                    }
+                    if !request.routing.fallbacks.is_empty() {
+                        response.attempts = attempts;
+                    }
+                    response.timings.queue_ms =
+                        response.timings.queue_ms.saturating_add(global_queue_ms);
+                    response.timings.total_ms = elapsed_ms(total_started);
+                    self.materializer.attach_metadata(
+                        &request,
+                        &execution.effective_request,
+                        &mut response,
+                    )?;
+                    drop(global_permit);
+                    return Ok(response);
+                }
+                Err(error) => {
+                    attempts.push(ProviderAttempt {
+                        provider: route.provider.clone(),
+                        model: route.model.clone(),
+                        outcome: ProviderAttemptOutcome::Failed,
+                        error_code: Some(error.code),
+                        duration_ms: elapsed_ms(attempt_started),
+                    });
+                    let has_next = index + 1 < routes.len();
+                    if !has_next || !should_fallback(&error, request.routing.fallback_policy) {
+                        final_error = Some(error);
+                        break;
+                    }
+                    final_error = Some(error);
+                }
+            }
+        }
+        drop(global_permit);
+        Err(final_error
+            .unwrap_or_else(|| configuration_error("provider routing produced no attempts"))
+            .with_detail("attempts", attempts))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn execute_route(
+        &self,
+        request: &ImageRequest,
+        request_id: &str,
+        route: &ProviderRoute,
+        deadline: Instant,
+        external_cancellation: &CancellationToken,
+        operation: &CancellationToken,
+        events: Option<mpsc::Sender<ProviderEvent>>,
+    ) -> Result<RouteExecution, BridgeError> {
+        let provider = self.registry.resolve(Some(&route.provider))?;
+        let descriptor = provider.descriptor();
         let provider_gate = self
             .provider_gates
             .get(&descriptor.name)
             .ok_or_else(|| configuration_error("provider has no configured admission gate"))?;
-        let provider_permit = self
+        let queue_started = Instant::now();
+        let _provider_permit = self
             .acquire_controlled(provider_gate, deadline, external_cancellation, operation)
             .await?;
         let queue_ms = elapsed_ms(queue_started);
-
         let capabilities = self
             .await_controlled(
-                provider.capabilities(request.routing.model.as_deref()),
+                provider.capabilities(route.model.as_deref()),
                 deadline,
                 external_cancellation,
                 operation,
@@ -439,7 +555,13 @@ impl ImagegenRuntime {
             )
             .with_provider(descriptor.name));
         }
-        let negotiated = negotiate_request(&request, &capabilities)?;
+        let mut routed_request = request.clone();
+        routed_request.routing.provider = Some(route.provider.clone());
+        routed_request.routing.model.clone_from(&route.model);
+        routed_request.routing.fallbacks.clear();
+        let prepared = prepare_transparency(&routed_request, &capabilities)?;
+        validate_request(&prepared.provider_request, self.config.request_limits)?;
+        let negotiated = negotiate_request(&prepared.provider_request, &capabilities)?;
         let effective_request = negotiated.effective_request;
 
         let provider_started = Instant::now();
@@ -448,7 +570,7 @@ impl ImagegenRuntime {
                 provider.execute(
                     effective_request.clone(),
                     ProviderContext {
-                        request_id: request_id.clone(),
+                        request_id: request_id.to_owned(),
                         deadline,
                         cancellation: operation.clone(),
                         events,
@@ -462,7 +584,6 @@ impl ImagegenRuntime {
         let provider_ms = elapsed_ms(provider_started);
         let mut response =
             provider_result.map_err(|error| attach_provider(error, &descriptor.name))?;
-
         if let Some(expected_model) = capabilities.model.as_deref()
             && response.model != expected_model
         {
@@ -474,13 +595,23 @@ impl ImagegenRuntime {
             .with_detail("actual_model", response.model));
         }
 
-        response.id = request_id;
+        response.id = request_id.to_owned();
         response.provider = descriptor.name;
-        response.requested = negotiated.requested;
+        response.requested = request.parameters.clone();
         response.effective = effective_request.parameters.clone();
-        response
-            .normalizations
-            .splice(0..0, negotiated.normalizations);
+        if prepared.plan.is_some() {
+            response.effective.background = imagegen_bridge_core::Background::Transparent;
+            response
+                .warnings
+                .push("transparent_background_postprocessed".to_owned());
+        }
+        response.normalizations.splice(
+            0..0,
+            prepared
+                .normalizations
+                .into_iter()
+                .chain(negotiated.normalizations),
+        );
         if effective_request.policies.revised_prompt == RevisedPromptPolicy::Omit {
             response.revised_prompt = None;
         }
@@ -490,7 +621,7 @@ impl ImagegenRuntime {
         response = self
             .await_controlled(
                 self.materializer
-                    .materialize(response, &request, &effective_request),
+                    .materialize(response, request, &effective_request, prepared.plan),
                 deadline,
                 external_cancellation,
                 operation,
@@ -498,12 +629,10 @@ impl ImagegenRuntime {
             )
             .await?;
         response.timings.artifact_ms = elapsed_ms(artifact_started);
-        response.timings.total_ms = elapsed_ms(total_started);
-        self.materializer
-            .attach_metadata(&request, &effective_request, &mut response)?;
-        drop(provider_permit);
-        drop(global_permit);
-        Ok(response)
+        Ok(RouteExecution {
+            response,
+            effective_request,
+        })
     }
 
     async fn acquire_controlled(
@@ -662,6 +791,47 @@ fn attach_provider(mut error: BridgeError, provider: &str) -> BridgeError {
     error
 }
 
+fn should_fallback(error: &BridgeError, policy: FallbackPolicy) -> bool {
+    if error
+        .details
+        .get("outcome")
+        .and_then(serde_json::Value::as_str)
+        == Some("unknown")
+    {
+        return false;
+    }
+    if matches!(
+        error.code,
+        ErrorCode::InvalidRequest
+            | ErrorCode::PermissionDenied
+            | ErrorCode::SafetyRejected
+            | ErrorCode::Cancelled
+            | ErrorCode::Session
+            | ErrorCode::IdempotencyConflict
+    ) {
+        return false;
+    }
+    if matches!(
+        error.code,
+        ErrorCode::Configuration
+            | ErrorCode::Authentication
+            | ErrorCode::UnsupportedCapability
+            | ErrorCode::RateLimited
+            | ErrorCode::Overloaded
+    ) {
+        return true;
+    }
+    policy == FallbackPolicy::OnError
+        && matches!(
+            error.code,
+            ErrorCode::Upstream
+                | ErrorCode::Protocol
+                | ErrorCode::Artifact
+                | ErrorCode::Input
+                | ErrorCode::Internal
+        )
+}
+
 fn elapsed_ms(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
@@ -816,6 +986,7 @@ mod tests {
                 requested: request.parameters.clone(),
                 effective: request.parameters.clone(),
                 normalizations: Vec::new(),
+                attempts: Vec::new(),
                 data: (0..request.parameters.n)
                     .map(|index| GeneratedImage {
                         index,
@@ -825,6 +996,121 @@ mod tests {
                 failures: Vec::new(),
                 revised_prompt: Some("safe revised prompt".to_owned()),
                 usage: Some(Usage::default()),
+                session: None,
+                timings: Timings::default(),
+                warnings: Vec::new(),
+            })
+        }
+
+        async fn check_ready(&self) -> Result<(), BridgeError> {
+            Ok(())
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum RouteFailure {
+        Authentication,
+        KnownUpstream,
+        Safety,
+        UnknownOutcome,
+    }
+
+    struct RouteProvider {
+        name: &'static str,
+        failure: Option<RouteFailure>,
+        execute_calls: AtomicUsize,
+    }
+
+    impl RouteProvider {
+        fn new(name: &'static str, failure: Option<RouteFailure>) -> Self {
+            Self {
+                name,
+                failure,
+                execute_calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ImageProvider for RouteProvider {
+        fn descriptor(&self) -> ProviderDescriptor {
+            ProviderDescriptor {
+                name: self.name.to_owned(),
+                display_name: self.name.to_owned(),
+                version: "test".to_owned(),
+                experimental: false,
+                models: vec!["route-image".to_owned()],
+            }
+        }
+
+        async fn capabilities(
+            &self,
+            model: Option<&str>,
+        ) -> Result<ProviderCapabilities, BridgeError> {
+            if matches!(self.failure, Some(RouteFailure::Authentication)) {
+                return Err(BridgeError::new(
+                    ErrorCode::Authentication,
+                    "test provider is unavailable",
+                ));
+            }
+            let mut capabilities = fake_capabilities(model);
+            capabilities.provider = self.name.to_owned();
+            Ok(capabilities)
+        }
+
+        async fn execute(
+            &self,
+            request: ImageRequest,
+            context: ProviderContext,
+        ) -> Result<ImageResponse, BridgeError> {
+            self.execute_calls.fetch_add(1, Ordering::AcqRel);
+            match self.failure {
+                Some(RouteFailure::Safety) => {
+                    return Err(BridgeError::safety_rejected("test safety rejection"));
+                }
+                Some(RouteFailure::UnknownOutcome) => {
+                    return Err(
+                        BridgeError::new(ErrorCode::Upstream, "test ambiguous failure")
+                            .with_detail("outcome", "unknown"),
+                    );
+                }
+                Some(RouteFailure::KnownUpstream) => {
+                    return Err(BridgeError::new(ErrorCode::Upstream, "test known failure")
+                        .with_detail("outcome", "failed"));
+                }
+                Some(RouteFailure::Authentication) | None => {}
+            }
+            let bytes = STANDARD.decode(ONE_PIXEL_PNG).unwrap();
+            let metadata = inspect_image(&bytes, ImageLimits::default()).unwrap();
+            Ok(ImageResponse {
+                id: context.request_id,
+                created: 0,
+                provider: self.name.to_owned(),
+                model: request
+                    .routing
+                    .model
+                    .clone()
+                    .unwrap_or_else(|| "route-image".to_owned()),
+                requested: request.parameters.clone(),
+                effective: request.parameters.clone(),
+                normalizations: Vec::new(),
+                attempts: Vec::new(),
+                data: vec![GeneratedImage {
+                    index: 0,
+                    payload: ImagePayload::B64Json {
+                        b64_json: ONE_PIXEL_PNG.to_owned(),
+                    },
+                    format: metadata.format,
+                    width: metadata.width,
+                    height: metadata.height,
+                    bytes: metadata.bytes,
+                    sha256: metadata.sha256,
+                    generation_ms: None,
+                    metadata_name: None,
+                }],
+                failures: Vec::new(),
+                revised_prompt: None,
+                usage: None,
                 session: None,
                 timings: Timings::default(),
                 warnings: Vec::new(),
@@ -872,6 +1158,7 @@ mod tests {
             qualities: BTreeSet::from([Quality::Auto]),
             output_formats: BTreeSet::from([OutputFormat::Png]),
             backgrounds: BTreeSet::from([Background::Auto]),
+            transparent_background: SupportLevel::Emulated,
             moderation: BTreeSet::from([Moderation::Auto]),
             negative_prompt: SupportLevel::Emulated,
             revised_prompt: SupportLevel::Native,
@@ -897,6 +1184,21 @@ mod tests {
         let mut config = RuntimeConfig::default();
         mutate(&mut config);
         ImagegenRuntime::new(registry, config).unwrap()
+    }
+
+    fn routing_runtime(
+        primary: &Arc<RouteProvider>,
+        fallback: &Arc<RouteProvider>,
+    ) -> ImagegenRuntime {
+        let registry = ProviderRegistry::new(
+            [
+                Arc::clone(primary) as Arc<dyn ImageProvider>,
+                Arc::clone(fallback) as Arc<dyn ImageProvider>,
+            ],
+            primary.name,
+        )
+        .unwrap();
+        ImagegenRuntime::new(registry, RuntimeConfig::default()).unwrap()
     }
 
     #[tokio::test]
@@ -1079,6 +1381,99 @@ mod tests {
         let first = first.await.unwrap().unwrap();
         assert_eq!(first, second);
         assert_eq!(provider.calls.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn unavailable_primary_falls_back_in_order_and_records_attempts() {
+        let primary = Arc::new(RouteProvider::new(
+            "primary",
+            Some(RouteFailure::Authentication),
+        ));
+        let fallback = Arc::new(RouteProvider::new("fallback", None));
+        let runtime = routing_runtime(&primary, &fallback);
+        let mut request = ImageRequest::generate("test routing");
+        request.routing.fallbacks.push(ProviderRoute {
+            provider: "fallback".to_owned(),
+            model: None,
+        });
+        let response = runtime.execute(request).await.unwrap();
+        assert_eq!(response.provider, "fallback");
+        assert_eq!(response.attempts.len(), 2);
+        assert_eq!(
+            response.attempts[0].error_code,
+            Some(ErrorCode::Authentication)
+        );
+        assert_eq!(
+            response.attempts[1].outcome,
+            ProviderAttemptOutcome::Succeeded
+        );
+        assert!(
+            response
+                .warnings
+                .contains(&"provider_fallback_used".to_owned())
+        );
+        assert_eq!(primary.execute_calls.load(Ordering::Acquire), 0);
+        assert_eq!(fallback.execute_calls.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn fallback_never_bypasses_safety_or_unknown_outcomes() {
+        for failure in [RouteFailure::Safety, RouteFailure::UnknownOutcome] {
+            let primary = Arc::new(RouteProvider::new("primary", Some(failure)));
+            let fallback = Arc::new(RouteProvider::new("fallback", None));
+            let runtime = routing_runtime(&primary, &fallback);
+            let mut request = ImageRequest::generate("test routing guard");
+            request.routing.fallback_policy = FallbackPolicy::OnError;
+            request.routing.fallbacks.push(ProviderRoute {
+                provider: "fallback".to_owned(),
+                model: None,
+            });
+            let error = runtime.execute(request).await.unwrap_err();
+            assert_eq!(fallback.execute_calls.load(Ordering::Acquire), 0);
+            assert_eq!(error.details["attempts"].as_array().unwrap().len(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn on_error_expands_but_does_not_replace_unavailable_policy() {
+        for (policy, expected_calls) in [
+            (FallbackPolicy::OnUnavailable, 0),
+            (FallbackPolicy::OnError, 1),
+        ] {
+            let primary = Arc::new(RouteProvider::new(
+                "primary",
+                Some(RouteFailure::KnownUpstream),
+            ));
+            let fallback = Arc::new(RouteProvider::new("fallback", None));
+            let runtime = routing_runtime(&primary, &fallback);
+            let mut request = ImageRequest::generate("test known outcome policy");
+            request.routing.fallback_policy = policy;
+            request.routing.fallbacks.push(ProviderRoute {
+                provider: "fallback".to_owned(),
+                model: None,
+            });
+            let result = runtime.execute(request).await;
+            assert_eq!(
+                fallback.execute_calls.load(Ordering::Acquire),
+                expected_calls
+            );
+            assert_eq!(result.is_ok(), policy == FallbackPolicy::OnError);
+        }
+    }
+
+    #[tokio::test]
+    async fn implicit_primary_cannot_be_repeated_as_a_fallback() {
+        let primary = Arc::new(RouteProvider::new("primary", None));
+        let fallback = Arc::new(RouteProvider::new("fallback", None));
+        let runtime = routing_runtime(&primary, &fallback);
+        let mut request = ImageRequest::generate("test duplicate route");
+        request.routing.fallbacks.push(ProviderRoute {
+            provider: "primary".to_owned(),
+            model: None,
+        });
+        let error = runtime.execute(request).await.unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidRequest);
+        assert_eq!(primary.execute_calls.load(Ordering::Acquire), 0);
     }
 
     #[tokio::test]

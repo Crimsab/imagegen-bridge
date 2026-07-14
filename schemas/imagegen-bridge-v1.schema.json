@@ -271,6 +271,26 @@
         "max_parallel_outputs"
       ]
     },
+    "BatchExecution": {
+      "description": "Preferred execution shape for bridge-emulated multi-image fan-out.",
+      "oneOf": [
+        {
+          "description": "Use provider/session-aware bridge defaults.\nWire value `auto`.",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "Dispatch one fan-out chunk at a time.\nWire value `sequential`.",
+          "type": "string",
+          "const": "sequential"
+        },
+        {
+          "description": "Use the provider's configured bounded parallelism.\nWire value `parallel`.",
+          "type": "string",
+          "const": "parallel"
+        }
+      ]
+    },
     "BatchMode": {
       "description": "How a provider fulfills a request for more than one output image.",
       "oneOf": [
@@ -436,6 +456,21 @@
           "description": "An unexpected internal failure occurred.",
           "type": "string",
           "const": "internal"
+        }
+      ]
+    },
+    "FallbackPolicy": {
+      "description": "Conditions under which an ordered provider fallback may run.",
+      "oneOf": [
+        {
+          "description": "Fall back only for unavailable, unsupported, or pre-output failures.\nWire value `on_unavailable`.",
+          "type": "string",
+          "const": "on_unavailable"
+        },
+        {
+          "description": "Also fall back for known-outcome provider failures, excluding safety and cancellation.\nWire value `on_error`.",
+          "type": "string",
+          "const": "on_error"
         }
       ]
     },
@@ -1133,7 +1168,13 @@
           "default": {
             "collision": "error",
             "metadata": "none",
-            "response_format": "b64_json"
+            "response_format": "b64_json",
+            "transparency": {
+              "despill": true,
+              "mode": "auto",
+              "opaque_threshold": 96,
+              "transparent_threshold": 12
+            }
           }
         },
         "parameters": {
@@ -1155,6 +1196,7 @@
           "description": "Fallback and compatibility policies.",
           "$ref": "#/$defs/RequestPolicies",
           "default": {
+            "batch_execution": "auto",
             "compatibility": "strict",
             "negative_prompt": "auto",
             "revised_prompt": "include"
@@ -1167,7 +1209,9 @@
         "routing": {
           "description": "Provider and model routing controls.",
           "$ref": "#/$defs/RoutingOptions",
-          "default": {}
+          "default": {
+            "fallback_policy": "on_unavailable"
+          }
         },
         "session": {
           "description": "Session behavior for providers that support conversations.",
@@ -1267,6 +1311,13 @@
       "description": "Complete normalized response.",
       "type": "object",
       "properties": {
+        "attempts": {
+          "description": "Ordered provider attempts, included when fallback routing was requested or used.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProviderAttempt"
+          }
+        },
         "created": {
           "description": "Unix timestamp at completion.",
           "type": "integer",
@@ -1566,9 +1617,78 @@
           "description": "Response payload representation.",
           "$ref": "#/$defs/ResponseFormat",
           "default": "b64_json"
+        },
+        "transparency": {
+          "description": "Transparent-background implementation and matte controls.",
+          "$ref": "#/$defs/TransparencyOptions",
+          "default": {
+            "despill": true,
+            "mode": "auto",
+            "opaque_threshold": 96,
+            "transparent_threshold": 12
+          }
         }
       },
       "additionalProperties": false
+    },
+    "ProviderAttempt": {
+      "description": "Redaction-safe execution trace for one provider route.",
+      "type": "object",
+      "properties": {
+        "duration_ms": {
+          "description": "Time spent on capability discovery, admission, and execution.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "error_code": {
+          "description": "Stable error code for a failed attempt.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "description": "Requested or discovered model when known.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outcome": {
+          "description": "Whether this attempt succeeded or failed.",
+          "$ref": "#/$defs/ProviderAttemptOutcome"
+        },
+        "provider": {
+          "description": "Registered provider name.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "outcome",
+        "duration_ms"
+      ]
+    },
+    "ProviderAttemptOutcome": {
+      "description": "Outcome of one ordered provider route attempt.",
+      "oneOf": [
+        {
+          "description": "The route produced the returned response.",
+          "type": "string",
+          "const": "succeeded"
+        },
+        {
+          "description": "The route failed and routing continued.",
+          "type": "string",
+          "const": "failed"
+        }
+      ]
     },
     "ProviderCapabilities": {
       "description": "Complete capability declaration for one provider/model pair.",
@@ -1701,6 +1821,10 @@
           "description": "Supported size behavior.",
           "$ref": "#/$defs/SizeCapabilities"
         },
+        "transparent_background": {
+          "description": "Native or bridge-emulated transparent-background support.",
+          "$ref": "#/$defs/SupportLevel"
+        },
         "user_attribution": {
           "description": "Opaque end-user attribution support.",
           "$ref": "#/$defs/SupportLevel"
@@ -1721,6 +1845,7 @@
         "qualities",
         "output_formats",
         "backgrounds",
+        "transparent_background",
         "moderation",
         "negative_prompt",
         "revised_prompt",
@@ -1864,6 +1989,27 @@
         }
       ]
     },
+    "ProviderRoute": {
+      "description": "One explicit provider/model fallback route.",
+      "type": "object",
+      "properties": {
+        "model": {
+          "description": "Optional model override for this provider.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider": {
+          "description": "Registered provider name.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "provider"
+      ]
+    },
     "Quality": {
       "description": "Requested generation quality.",
       "oneOf": [
@@ -1893,6 +2039,11 @@
       "description": "Explicit fallback and visibility controls.",
       "type": "object",
       "properties": {
+        "batch_execution": {
+          "description": "Automatic, sequential, or bounded-parallel fan-out execution.",
+          "$ref": "#/$defs/BatchExecution",
+          "default": "auto"
+        },
         "compatibility": {
           "description": "Provider capability compatibility behavior.",
           "$ref": "#/$defs/CompatibilityMode",
@@ -1980,6 +2131,18 @@
       "description": "Provider selection controls.",
       "type": "object",
       "properties": {
+        "fallback_policy": {
+          "description": "Conditions under which the next fallback route may run.",
+          "$ref": "#/$defs/FallbackPolicy",
+          "default": "on_unavailable"
+        },
+        "fallbacks": {
+          "description": "Ordered provider/model routes tried after the primary route.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProviderRoute"
+          }
+        },
         "model": {
           "description": "Explicit provider model, or the provider default when absent.",
           "type": [
@@ -2208,6 +2371,66 @@
           "type": "integer",
           "format": "uint64",
           "default": 0,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "TransparencyMode": {
+      "description": "How a transparent-background result is produced.",
+      "oneOf": [
+        {
+          "description": "Prefer native alpha and otherwise use a local chroma-key matte.\nWire value `auto`.",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "Require provider-native alpha output.\nWire value `native`.",
+          "type": "string",
+          "const": "native"
+        },
+        {
+          "description": "Generate a flat key background and remove it locally.\nWire value `chroma_key`.",
+          "type": "string",
+          "const": "chroma_key"
+        }
+      ]
+    },
+    "TransparencyOptions": {
+      "description": "Transparent-background implementation and matte controls.",
+      "type": "object",
+      "properties": {
+        "despill": {
+          "description": "Remove key-colored spill from partially transparent edges.",
+          "type": "boolean",
+          "default": true
+        },
+        "key_color": {
+          "description": "Optional explicit chroma key in `#RRGGBB` form.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mode": {
+          "description": "Automatic, provider-native, or local chroma-key transparency.",
+          "$ref": "#/$defs/TransparencyMode",
+          "default": "auto"
+        },
+        "opaque_threshold": {
+          "description": "Per-channel distance at or above which a pixel becomes opaque.",
+          "type": "integer",
+          "format": "uint8",
+          "default": 96,
+          "maximum": 255,
+          "minimum": 0
+        },
+        "transparent_threshold": {
+          "description": "Per-channel distance at or below which a key pixel becomes transparent.",
+          "type": "integer",
+          "format": "uint8",
+          "default": 12,
+          "maximum": 255,
           "minimum": 0
         }
       },

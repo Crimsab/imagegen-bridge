@@ -125,6 +125,26 @@
         ],
         "type": "object"
       },
+      "BatchExecution": {
+        "description": "Preferred execution shape for bridge-emulated multi-image fan-out.",
+        "oneOf": [
+          {
+            "const": "auto",
+            "description": "Use provider/session-aware bridge defaults.\nWire value `auto`.",
+            "type": "string"
+          },
+          {
+            "const": "sequential",
+            "description": "Dispatch one fan-out chunk at a time.\nWire value `sequential`.",
+            "type": "string"
+          },
+          {
+            "const": "parallel",
+            "description": "Use the provider's configured bounded parallelism.\nWire value `parallel`.",
+            "type": "string"
+          }
+        ]
+      },
       "BatchMode": {
         "description": "How a provider fulfills a request for more than one output image.",
         "oneOf": [
@@ -675,6 +695,21 @@
           {
             "const": "internal",
             "description": "An unexpected internal failure occurred.",
+            "type": "string"
+          }
+        ]
+      },
+      "FallbackPolicy": {
+        "description": "Conditions under which an ordered provider fallback may run.",
+        "oneOf": [
+          {
+            "const": "on_unavailable",
+            "description": "Fall back only for unavailable, unsupported, or pre-output failures.\nWire value `on_unavailable`.",
+            "type": "string"
+          },
+          {
+            "const": "on_error",
+            "description": "Also fall back for known-outcome provider failures, excluding safety and cancellation.\nWire value `on_error`.",
             "type": "string"
           }
         ]
@@ -1432,7 +1467,13 @@
             "default": {
               "collision": "error",
               "metadata": "none",
-              "response_format": "b64_json"
+              "response_format": "b64_json",
+              "transparency": {
+                "despill": true,
+                "mode": "auto",
+                "opaque_threshold": 96,
+                "transparent_threshold": 12
+              }
             },
             "description": "Output delivery and artifact controls."
           },
@@ -1454,6 +1495,7 @@
           "policies": {
             "$ref": "#/components/schemas/RequestPolicies",
             "default": {
+              "batch_execution": "auto",
               "compatibility": "strict",
               "negative_prompt": "auto",
               "revised_prompt": "include"
@@ -1466,7 +1508,9 @@
           },
           "routing": {
             "$ref": "#/components/schemas/RoutingOptions",
-            "default": {},
+            "default": {
+              "fallback_policy": "on_unavailable"
+            },
             "description": "Provider and model routing controls."
           },
           "session": {
@@ -1507,6 +1551,13 @@
         "additionalProperties": false,
         "description": "Complete normalized response.",
         "properties": {
+          "attempts": {
+            "description": "Ordered provider attempts, included when fallback routing was requested or used.",
+            "items": {
+              "$ref": "#/components/schemas/ProviderAttempt"
+            },
+            "type": "array"
+          },
           "created": {
             "description": "Unix timestamp at completion.",
             "format": "uint64",
@@ -2051,9 +2102,78 @@
             "$ref": "#/components/schemas/ResponseFormat",
             "default": "b64_json",
             "description": "Response payload representation."
+          },
+          "transparency": {
+            "$ref": "#/components/schemas/TransparencyOptions",
+            "default": {
+              "despill": true,
+              "mode": "auto",
+              "opaque_threshold": 96,
+              "transparent_threshold": 12
+            },
+            "description": "Transparent-background implementation and matte controls."
           }
         },
         "type": "object"
+      },
+      "ProviderAttempt": {
+        "additionalProperties": false,
+        "description": "Redaction-safe execution trace for one provider route.",
+        "properties": {
+          "duration_ms": {
+            "description": "Time spent on capability discovery, admission, and execution.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorCode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Stable error code for a failed attempt."
+          },
+          "model": {
+            "description": "Requested or discovered model when known.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/ProviderAttemptOutcome",
+            "description": "Whether this attempt succeeded or failed."
+          },
+          "provider": {
+            "description": "Registered provider name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "outcome",
+          "duration_ms"
+        ],
+        "type": "object"
+      },
+      "ProviderAttemptOutcome": {
+        "description": "Outcome of one ordered provider route attempt.",
+        "oneOf": [
+          {
+            "const": "succeeded",
+            "description": "The route produced the returned response.",
+            "type": "string"
+          },
+          {
+            "const": "failed",
+            "description": "The route failed and routing continued.",
+            "type": "string"
+          }
+        ]
       },
       "ProviderCapabilities": {
         "additionalProperties": false,
@@ -2186,6 +2306,10 @@
             "$ref": "#/components/schemas/SizeCapabilities",
             "description": "Supported size behavior."
           },
+          "transparent_background": {
+            "$ref": "#/components/schemas/SupportLevel",
+            "description": "Native or bridge-emulated transparent-background support."
+          },
           "user_attribution": {
             "$ref": "#/components/schemas/SupportLevel",
             "description": "Opaque end-user attribution support."
@@ -2205,6 +2329,7 @@
           "qualities",
           "output_formats",
           "backgrounds",
+          "transparent_background",
           "moderation",
           "negative_prompt",
           "revised_prompt",
@@ -2388,6 +2513,27 @@
         ],
         "type": "object"
       },
+      "ProviderRoute": {
+        "additionalProperties": false,
+        "description": "One explicit provider/model fallback route.",
+        "properties": {
+          "model": {
+            "description": "Optional model override for this provider.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider": {
+            "description": "Registered provider name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider"
+        ],
+        "type": "object"
+      },
       "Quality": {
         "description": "Requested generation quality.",
         "oneOf": [
@@ -2432,6 +2578,11 @@
         "additionalProperties": false,
         "description": "Explicit fallback and visibility controls.",
         "properties": {
+          "batch_execution": {
+            "$ref": "#/components/schemas/BatchExecution",
+            "default": "auto",
+            "description": "Automatic, sequential, or bounded-parallel fan-out execution."
+          },
           "compatibility": {
             "$ref": "#/components/schemas/CompatibilityMode",
             "default": "strict",
@@ -2519,6 +2670,18 @@
         "additionalProperties": false,
         "description": "Provider selection controls.",
         "properties": {
+          "fallback_policy": {
+            "$ref": "#/components/schemas/FallbackPolicy",
+            "default": "on_unavailable",
+            "description": "Conditions under which the next fallback route may run."
+          },
+          "fallbacks": {
+            "description": "Ordered provider/model routes tried after the primary route.",
+            "items": {
+              "$ref": "#/components/schemas/ProviderRoute"
+            },
+            "type": "array"
+          },
           "model": {
             "description": "Explicit provider model, or the provider default when absent.",
             "type": [
@@ -2767,6 +2930,66 @@
             "default": 0,
             "description": "Total request time.",
             "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "TransparencyMode": {
+        "description": "How a transparent-background result is produced.",
+        "oneOf": [
+          {
+            "const": "auto",
+            "description": "Prefer native alpha and otherwise use a local chroma-key matte.\nWire value `auto`.",
+            "type": "string"
+          },
+          {
+            "const": "native",
+            "description": "Require provider-native alpha output.\nWire value `native`.",
+            "type": "string"
+          },
+          {
+            "const": "chroma_key",
+            "description": "Generate a flat key background and remove it locally.\nWire value `chroma_key`.",
+            "type": "string"
+          }
+        ]
+      },
+      "TransparencyOptions": {
+        "additionalProperties": false,
+        "description": "Transparent-background implementation and matte controls.",
+        "properties": {
+          "despill": {
+            "default": true,
+            "description": "Remove key-colored spill from partially transparent edges.",
+            "type": "boolean"
+          },
+          "key_color": {
+            "description": "Optional explicit chroma key in `#RRGGBB` form.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode": {
+            "$ref": "#/components/schemas/TransparencyMode",
+            "default": "auto",
+            "description": "Automatic, provider-native, or local chroma-key transparency."
+          },
+          "opaque_threshold": {
+            "default": 96,
+            "description": "Per-channel distance at or above which a pixel becomes opaque.",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "transparent_threshold": {
+            "default": 12,
+            "description": "Per-channel distance at or below which a key pixel becomes transparent.",
+            "format": "uint8",
+            "maximum": 255,
             "minimum": 0,
             "type": "integer"
           }

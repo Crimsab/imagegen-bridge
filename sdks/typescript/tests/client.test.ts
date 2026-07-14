@@ -157,6 +157,7 @@ describe("ImagegenBridgeClient", () => {
     expect(capabilities.persistent_sessions).toBeTrue();
     expect(capabilities.count.max).toBe(4);
     expect(capabilities.batching.mode).toBe("fan_out");
+    expect(capabilities.transparent_background).toBe("emulated");
     expect(capabilities.batching.native_count.max).toBe(1);
     expect(capabilities.batching.max_parallel_outputs).toBe(2);
     expect(capabilities.input_fidelities).toEqual(["high"]);

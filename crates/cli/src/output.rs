@@ -137,6 +137,21 @@ impl Output {
             )
             .map_err(|_| output_error("could not write command output"))?;
         }
+        if response.attempts.len() > 1 {
+            for attempt in &response.attempts {
+                writeln!(
+                    stdout,
+                    "provider attempt\t{}\t{:?}\t{} ms{}",
+                    terminal_safe(&attempt.provider),
+                    attempt.outcome,
+                    attempt.duration_ms,
+                    attempt
+                        .error_code
+                        .map_or_else(String::new, |code| format!("\t{code:?}"))
+                )
+                .map_err(|_| output_error("could not write command output"))?;
+            }
+        }
         if let Some(revised) = response.revised_prompt.as_deref()
             && self.mode == OutputMode::Human
         {

@@ -287,6 +287,7 @@ impl CodexResponsesProvider {
             requested: negotiated.requested,
             effective: request.parameters.clone(),
             normalizations: negotiated.normalizations,
+            attempts: Vec::new(),
             data: images,
             failures,
             revised_prompt,
@@ -670,6 +671,11 @@ fn capabilities(
         qualities: BTreeSet::from([Quality::Auto, Quality::Low, Quality::Medium, Quality::High]),
         output_formats: BTreeSet::from([OutputFormat::Png, OutputFormat::Jpeg, OutputFormat::Webp]),
         backgrounds,
+        transparent_background: if model == "gpt-image-2" {
+            SupportLevel::Emulated
+        } else {
+            SupportLevel::Native
+        },
         moderation: BTreeSet::from([Moderation::Auto, Moderation::Low]),
         negative_prompt: SupportLevel::Emulated,
         revised_prompt: SupportLevel::Native,

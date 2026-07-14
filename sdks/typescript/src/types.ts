@@ -22,6 +22,9 @@ export type RevisedPromptPolicy = "include" | "omit" | "require";
 export type SessionMode = "isolated" | "persistent" | "thread";
 export type SupportLevel = "unsupported" | "emulated" | "native";
 export type BatchMode = "native" | "fan_out";
+export type TransparencyMode = "auto" | "native" | "chroma_key";
+export type FallbackPolicy = "on_unavailable" | "on_error";
+export type BatchExecution = "auto" | "sequential" | "parallel";
 
 interface InputMetadata {
   media_type?: string | null;
@@ -53,6 +56,13 @@ export interface GenerationParameters {
 export interface RoutingOptions {
   provider?: string | null;
   model?: string | null;
+  fallbacks?: ProviderRoute[];
+  fallback_policy?: FallbackPolicy;
+}
+
+export interface ProviderRoute {
+  provider: string;
+  model?: string | null;
 }
 
 export interface SessionOptions {
@@ -68,12 +78,22 @@ export interface OutputOptions {
   filename?: string | null;
   collision?: ArtifactCollisionPolicy;
   metadata?: ArtifactMetadataPolicy;
+  transparency?: TransparencyOptions;
+}
+
+export interface TransparencyOptions {
+  mode?: TransparencyMode;
+  key_color?: string | null;
+  transparent_threshold?: number;
+  opaque_threshold?: number;
+  despill?: boolean;
 }
 
 export interface RequestPolicies {
   compatibility?: CompatibilityMode;
   negative_prompt?: NegativePromptMode;
   revised_prompt?: RevisedPromptPolicy;
+  batch_execution?: BatchExecution;
 }
 
 interface ImageRequestBase {
@@ -109,6 +129,14 @@ export interface Normalization {
   reason: string;
   requested?: JsonValue;
   effective?: JsonValue;
+}
+
+export interface ProviderAttempt {
+  provider: string;
+  model?: string | null;
+  outcome: "succeeded" | "failed";
+  error_code?: string | null;
+  duration_ms: number;
 }
 
 interface GeneratedImageBase {
@@ -185,6 +213,7 @@ export interface ImageResponse {
   > &
     GenerationParameters;
   normalizations?: Normalization[];
+  attempts?: ProviderAttempt[];
   data: GeneratedImage[];
   failures?: ImageFailure[];
   revised_prompt?: string | null;
@@ -382,6 +411,7 @@ export interface ProviderCapabilities {
   qualities: Quality[];
   output_formats: OutputFormat[];
   backgrounds: Background[];
+  transparent_background: SupportLevel;
   moderation: Moderation[];
   negative_prompt: SupportLevel;
   revised_prompt: SupportLevel;

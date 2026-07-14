@@ -13,6 +13,7 @@
   "qualities": ["auto"],
   "output_formats": ["png"],
   "backgrounds": ["auto"],
+  "transparent_background": "emulated",
   "moderation": ["auto"],
   "negative_prompt": "emulated",
   "revised_prompt": "emulated",

@@ -197,6 +197,60 @@ pub fn validation_issues(request: &ImageRequest, limits: RequestLimits) -> Vec<V
         limits,
         &mut issue,
     );
+    if request.routing.fallbacks.len() > 4 {
+        issue(
+            "routing.fallbacks",
+            "too_many",
+            "at most four fallback routes may be configured",
+        );
+    }
+    let mut fallback_names = std::collections::BTreeSet::new();
+    for (index, route) in request.routing.fallbacks.iter().enumerate() {
+        validate_identifier(
+            Some(&route.provider),
+            &format!("routing.fallbacks[{index}].provider"),
+            limits,
+            &mut issue,
+        );
+        validate_identifier(
+            route.model.as_deref(),
+            &format!("routing.fallbacks[{index}].model"),
+            limits,
+            &mut issue,
+        );
+        if !fallback_names.insert((&route.provider, route.model.as_deref())) {
+            issue(
+                &format!("routing.fallbacks[{index}]"),
+                "duplicate",
+                "fallback routes must be unique",
+            );
+        }
+        if request.routing.provider.as_deref() == Some(route.provider.as_str())
+            && request.routing.model.as_deref() == route.model.as_deref()
+        {
+            issue(
+                &format!("routing.fallbacks[{index}]"),
+                "duplicate",
+                "a fallback route must differ from the explicit primary route",
+            );
+        }
+    }
+    if !request.routing.fallbacks.is_empty() && request.session.mode != SessionMode::Isolated {
+        issue(
+            "routing.fallbacks",
+            "incompatible",
+            "provider fallback is supported only for isolated sessions",
+        );
+    }
+    if request.policies.batch_execution == crate::BatchExecution::Parallel
+        && request.session.mode != SessionMode::Isolated
+    {
+        issue(
+            "policies.batch_execution",
+            "incompatible",
+            "parallel batch execution requires an isolated session",
+        );
+    }
     validate_identifier(
         request.idempotency_key.as_deref(),
         "idempotency_key",
@@ -204,6 +258,25 @@ pub fn validation_issues(request: &ImageRequest, limits: RequestLimits) -> Vec<V
         &mut issue,
     );
     validate_identifier(request.user.as_deref(), "user", limits, &mut issue);
+
+    if request.output.transparency.transparent_threshold
+        >= request.output.transparency.opaque_threshold
+    {
+        issue(
+            "output.transparency.transparent_threshold",
+            "out_of_range",
+            "transparent threshold must be lower than opaque threshold",
+        );
+    }
+    if let Some(key) = request.output.transparency.key_color.as_deref()
+        && !valid_hex_color(key)
+    {
+        issue(
+            "output.transparency.key_color",
+            "invalid_format",
+            "chroma key must be a hex RGB color like #00ff00",
+        );
+    }
 
     match request.session.mode {
         SessionMode::Isolated => {
@@ -463,6 +536,11 @@ pub fn validation_issues(request: &ImageRequest, limits: RequestLimits) -> Vec<V
             .then(left.code.cmp(&right.code))
     });
     issues
+}
+
+fn valid_hex_color(value: &str) -> bool {
+    let value = value.strip_prefix('#').unwrap_or(value);
+    value.len() == 6 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn valid_portable_directory(value: &str) -> bool {
@@ -771,6 +849,36 @@ mod tests {
             validation_issues(&request, RequestLimits::default())
                 .iter()
                 .any(|item| item.field == "output.metadata" && item.code == "too_large")
+        );
+    }
+
+    #[test]
+    fn validates_fallback_isolation_and_transparency_controls() {
+        let mut request = ImageRequest::generate("test");
+        request.routing.fallbacks.push(crate::ProviderRoute {
+            provider: "fallback".to_owned(),
+            model: Some("gpt-image-2".to_owned()),
+        });
+        request.session.mode = SessionMode::Persistent;
+        request.session.key = Some("character".to_owned());
+        request.output.transparency.key_color = Some("not-a-color".to_owned());
+        request.output.transparency.transparent_threshold = 100;
+        request.output.transparency.opaque_threshold = 50;
+        let issues = validation_issues(&request, RequestLimits::default());
+        assert!(
+            issues
+                .iter()
+                .any(|item| item.field == "routing.fallbacks" && item.code == "incompatible")
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|item| item.field == "output.transparency.key_color")
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|item| { item.field == "output.transparency.transparent_threshold" })
         );
     }
 }

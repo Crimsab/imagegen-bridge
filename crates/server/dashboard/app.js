@@ -297,6 +297,7 @@ function renderCapabilityMatrix(rows, readiness) {
 					"—",
 					"—",
 					"—",
+					"—",
 					error instanceof Error ? error.message : "Capability error",
 				]
 			: [
@@ -308,6 +309,7 @@ function renderCapabilityMatrix(rows, readiness) {
 					`${capabilities.count?.min ?? "?"}–${capabilities.count?.max ?? "?"}`,
 					formatBatching(capabilities),
 					joinValues(capabilities.output_formats),
+					capabilities.transparent_background || "Unsupported",
 					capabilities.persistent_sessions
 						? capabilities.explicit_threads
 							? "Keys + threads"
@@ -325,7 +327,7 @@ function renderCapabilityMatrix(rows, readiness) {
 	if (rendered.length === 0) {
 		const row = document.createElement("tr");
 		const cell = create("td", "", "No providers are registered.");
-		cell.colSpan = 10;
+		cell.colSpan = 11;
 		row.append(cell);
 		rendered.push(row);
 	}
@@ -879,6 +881,16 @@ function renderDetail(job) {
 					job.result.normalizations.map(
 						(item) =>
 							`${item.field}: ${displayValue(item.requested)} → ${displayValue(item.effective)} (${item.reason})`,
+					),
+				),
+			);
+		if (job.result.attempts?.length)
+			primary.append(
+				messageList(
+					"Provider attempts",
+					job.result.attempts.map(
+						(item) =>
+							`${item.provider}${item.model ? ` (${item.model})` : ""}: ${item.outcome}${item.error_code ? ` · ${item.error_code}` : ""} · ${formatDuration(item.duration_ms)}`,
 					),
 				),
 			);

@@ -1162,6 +1162,7 @@ mod tests {
             requested: imagegen_bridge_core::GenerationParameters::default(),
             effective: imagegen_bridge_core::GenerationParameters::default(),
             normalizations: Vec::new(),
+            attempts: Vec::new(),
             data: Vec::new(),
             failures: Vec::new(),
             revised_prompt: None,

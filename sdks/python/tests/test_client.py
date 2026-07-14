@@ -145,6 +145,7 @@ def test_sync_client_matches_shared_http_contract(
         assert capabilities.persistent_sessions
         assert capabilities.count.max == 4
         assert capabilities.batching.mode == "fan_out"
+        assert capabilities.transparent_background == "emulated"
         assert capabilities.batching.native_count.max == 1
         assert capabilities.batching.max_parallel_outputs == 2
         assert capabilities.input_fidelities == ("high",)

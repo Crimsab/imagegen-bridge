@@ -23,6 +23,10 @@ RevisedPromptPolicy: TypeAlias = Literal["include", "omit", "require"]
 SessionMode: TypeAlias = Literal["isolated", "persistent", "thread"]
 SupportLevel: TypeAlias = Literal["unsupported", "emulated", "native"]
 BatchMode: TypeAlias = Literal["native", "fan_out"]
+TransparencyMode: TypeAlias = Literal["auto", "native", "chroma_key"]
+FallbackPolicy: TypeAlias = Literal["on_unavailable", "on_error"]
+ProviderAttemptOutcome: TypeAlias = Literal["succeeded", "failed"]
+BatchExecution: TypeAlias = Literal["auto", "sequential", "parallel"]
 ImageJobStatus: TypeAlias = Literal[
     "queued", "running", "succeeded", "failed", "cancelled", "interrupted"
 ]
@@ -116,9 +120,39 @@ class GenerationParameters:
 
 
 @dataclass(frozen=True, slots=True)
+class ProviderRoute:
+    provider: str
+    model: str | None = None
+
+    def to_dict(self) -> dict[str, JSONValue]:
+        value: dict[str, JSONValue] = {"provider": self.provider}
+        if self.model is not None:
+            value["model"] = self.model
+        return value
+
+
+@dataclass(frozen=True, slots=True)
 class RoutingOptions:
     provider: str | None = None
     model: str | None = None
+    fallbacks: tuple[ProviderRoute, ...] = ()
+    fallback_policy: FallbackPolicy = "on_unavailable"
+
+    def to_dict(self) -> dict[str, JSONValue]:
+        value: dict[str, JSONValue] = {"provider": self.provider, "model": self.model}
+        if self.fallbacks:
+            value["fallbacks"] = [_wire(item) for item in self.fallbacks]
+            value["fallback_policy"] = self.fallback_policy
+        return value
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> RoutingOptions:
+        return cls(
+            provider=value.get("provider"),
+            model=value.get("model"),
+            fallbacks=tuple(ProviderRoute(**item) for item in value.get("fallbacks", [])),
+            fallback_policy=value.get("fallback_policy", "on_unavailable"),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +163,15 @@ class SessionOptions:
 
 
 @dataclass(frozen=True, slots=True)
+class TransparencyOptions:
+    mode: TransparencyMode = "auto"
+    key_color: str | None = None
+    transparent_threshold: int = 12
+    opaque_threshold: int = 96
+    despill: bool = True
+
+
+@dataclass(frozen=True, slots=True)
 class OutputOptions:
     response_format: ResponseFormat = "b64_json"
     filename_prefix: str | None = None
@@ -136,6 +179,20 @@ class OutputOptions:
     filename: str | None = None
     collision: ArtifactCollisionPolicy = "error"
     metadata: ArtifactMetadataPolicy = "none"
+    transparency: TransparencyOptions = field(default_factory=TransparencyOptions)
+
+    def to_dict(self) -> dict[str, JSONValue]:
+        value = cast(dict[str, JSONValue], asdict(self))
+        value.pop("transparency")
+        if self.transparency != TransparencyOptions():
+            value["transparency"] = _wire(asdict(self.transparency))
+        return value
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> OutputOptions:
+        fields = dict(value)
+        fields["transparency"] = TransparencyOptions(**fields.get("transparency", {}))
+        return cls(**fields)
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,6 +200,17 @@ class RequestPolicies:
     compatibility: CompatibilityMode = "strict"
     negative_prompt: NegativePromptMode = "auto"
     revised_prompt: RevisedPromptPolicy = "include"
+    batch_execution: BatchExecution = "auto"
+
+    def to_dict(self) -> dict[str, JSONValue]:
+        value: dict[str, JSONValue] = {
+            "compatibility": self.compatibility,
+            "negative_prompt": self.negative_prompt,
+            "revised_prompt": self.revised_prompt,
+        }
+        if self.batch_execution != "auto":
+            value["batch_execution"] = self.batch_execution
+        return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,10 +252,10 @@ class ImageRequest:
             "operation": self.operation,
             "reference_images": [_wire(item) for item in self.reference_images],
             "parameters": _wire(self.parameters),
-            "routing": _wire(asdict(self.routing)),
+            "routing": _wire(self.routing),
             "session": _wire(asdict(self.session)),
-            "output": _wire(asdict(self.output)),
-            "policies": _wire(asdict(self.policies)),
+            "output": _wire(self.output),
+            "policies": _wire(self.policies),
             "idempotency_key": self.idempotency_key,
             "timeout_ms": self.timeout_ms,
             "user": self.user,
@@ -210,9 +278,9 @@ class ImageRequest:
             images=tuple(ImageInput.from_dict(item) for item in value.get("images", [])),
             mask=ImageInput.from_dict(value["mask"]) if value.get("mask") else None,
             parameters=GenerationParameters.from_dict(value.get("parameters", {})),
-            routing=RoutingOptions(**value.get("routing", {})),
+            routing=RoutingOptions.from_dict(value.get("routing", {})),
             session=SessionOptions(**value.get("session", {})),
-            output=OutputOptions(**value.get("output", {})),
+            output=OutputOptions.from_dict(value.get("output", {})),
             policies=RequestPolicies(**value.get("policies", {})),
             idempotency_key=value.get("idempotency_key"),
             timeout_ms=value.get("timeout_ms"),
@@ -226,6 +294,15 @@ class Normalization:
     reason: str
     requested: JSONValue = None
     effective: JSONValue = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderAttempt:
+    provider: str
+    outcome: ProviderAttemptOutcome
+    duration_ms: int
+    model: str | None = None
+    error_code: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -314,6 +391,7 @@ class ImageResponse:
     timings: Timings
     failures: tuple[ImageFailure, ...] = ()
     normalizations: tuple[Normalization, ...] = ()
+    attempts: tuple[ProviderAttempt, ...] = ()
     revised_prompt: str | None = None
     usage: Usage | None = None
     session: SessionMetadata | None = None
@@ -332,6 +410,7 @@ class ImageResponse:
             timings=Timings(**value["timings"]),
             failures=tuple(ImageFailure.from_dict(item) for item in value.get("failures", [])),
             normalizations=tuple(Normalization(**item) for item in value.get("normalizations", [])),
+            attempts=tuple(ProviderAttempt(**item) for item in value.get("attempts", [])),
             revised_prompt=value.get("revised_prompt"),
             usage=Usage(**value["usage"]) if value.get("usage") is not None else None,
             session=SessionMetadata.from_dict(value["session"])
@@ -644,6 +723,7 @@ class ProviderCapabilities:
     partial_images: U8Range
     persistent_sessions: bool
     explicit_threads: bool
+    transparent_background: SupportLevel = "unsupported"
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> ProviderCapabilities:

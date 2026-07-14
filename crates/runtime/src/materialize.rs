@@ -5,7 +5,8 @@ use std::sync::Arc;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use imagegen_bridge_artifacts::{
     ArtifactPublication, ArtifactStore, ImageLimits, ImageMetadata, MAX_EMBEDDED_METADATA_BYTES,
-    RemoteImageFetcher, StoredArtifactContent, embed_image_metadata, inspect_image, thumbnail_png,
+    RemoteImageFetcher, StoredArtifactContent, detect_border_chroma_key, embed_image_metadata,
+    inspect_image, inspect_transparent_alpha, remove_chroma_key, thumbnail_png,
 };
 use imagegen_bridge_core::{
     BridgeError, CompatibilityMode, ErrorCode, GeneratedImage, GenerationParameters,
@@ -14,6 +15,8 @@ use imagegen_bridge_core::{
 };
 use serde::Serialize;
 use url::Url;
+
+use crate::transparency::TransparencyPlan;
 
 /// Output verification, remote retrieval, and artifact delivery configuration.
 #[derive(Clone)]
@@ -128,6 +131,7 @@ impl OutputMaterializer {
         mut response: ImageResponse,
         original: &ImageRequest,
         effective: &ImageRequest,
+        transparency: Option<TransparencyPlan>,
     ) -> Result<ImageResponse, BridgeError> {
         Self::validate_output_set(
             &response,
@@ -140,9 +144,45 @@ impl OutputMaterializer {
         let provider_images = std::mem::take(&mut response.data);
         let mut verified = Vec::with_capacity(provider_images.len());
         for image in provider_images {
-            let image = self
+            let mut image = self
                 .verify(&image, effective.parameters.output_format)
                 .await?;
+            if let Some(plan) = transparency {
+                let detected_key = detect_border_chroma_key(&image.bytes, self.config.image_limits)
+                    .map_err(as_artifact_error)?;
+                let mut chroma = plan.chroma;
+                chroma.key = detected_key;
+                let processed = remove_chroma_key(
+                    &image.bytes,
+                    effective.parameters.output_format,
+                    chroma,
+                    self.config.image_limits,
+                )
+                .map_err(as_artifact_error)?;
+                response.normalizations.push(Normalization {
+                    field: format!("data[{}].transparency.key_color", image.index),
+                    requested: Some(serde_json::json!(plan.chroma.key.hex())),
+                    effective: Some(serde_json::json!(detected_key.hex())),
+                    reason: "sampled_provider_output_border".to_owned(),
+                });
+                response.normalizations.push(alpha_normalization(
+                    image.index,
+                    processed.alpha,
+                    "validated_chroma_key_alpha",
+                ));
+                image.bytes = processed.bytes;
+                image.metadata = processed.metadata;
+            } else if effective.parameters.background
+                == imagegen_bridge_core::Background::Transparent
+            {
+                let alpha = inspect_transparent_alpha(&image.bytes, self.config.image_limits)
+                    .map_err(as_artifact_error)?;
+                response.normalizations.push(alpha_normalization(
+                    image.index,
+                    alpha,
+                    "validated_native_alpha",
+                ));
+            }
             aggregate_bytes = aggregate_bytes
                 .checked_add(image.bytes.len())
                 .ok_or_else(|| protocol_error("aggregate response size overflowed"))?;
@@ -233,6 +273,7 @@ impl OutputMaterializer {
                 requested: &snapshot.requested,
                 effective: &snapshot.effective,
                 normalizations: &snapshot.normalizations,
+                attempts: &snapshot.attempts,
                 revised_prompt: snapshot.revised_prompt.as_deref(),
                 usage: snapshot.usage.as_ref(),
                 session: snapshot.session.as_ref(),
@@ -478,6 +519,25 @@ impl OutputMaterializer {
     }
 }
 
+fn alpha_normalization(
+    index: u8,
+    alpha: imagegen_bridge_artifacts::AlphaSummary,
+    reason: &str,
+) -> Normalization {
+    Normalization {
+        field: format!("data[{index}].transparency.alpha"),
+        requested: None,
+        effective: Some(serde_json::json!({
+            "total_pixels": alpha.total_pixels,
+            "transparent_pixels": alpha.transparent_pixels,
+            "partial_pixels": alpha.partial_pixels,
+            "opaque_pixels": alpha.opaque_pixels,
+            "transparent_corners": alpha.transparent_corners,
+        })),
+        reason: reason.to_owned(),
+    }
+}
+
 #[derive(Serialize)]
 struct ArtifactMetadataSidecar<'a> {
     version: u8,
@@ -494,6 +554,8 @@ struct ArtifactMetadataSidecar<'a> {
     requested: &'a GenerationParameters,
     effective: &'a GenerationParameters,
     normalizations: &'a [Normalization],
+    #[serde(skip_serializing_if = "slice_is_empty")]
+    attempts: &'a [imagegen_bridge_core::ProviderAttempt],
     #[serde(skip_serializing_if = "Option::is_none")]
     revised_prompt: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -750,6 +812,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::transparency::TransparencyPlan;
 
     const ONE_PIXEL_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
@@ -767,6 +830,68 @@ mod tests {
         }
     }
 
+    fn keyed_image() -> GeneratedImage {
+        let mut rgba = image::RgbaImage::from_pixel(20, 20, image::Rgba([0, 255, 0, 255]));
+        for y in 5..15 {
+            for x in 5..15 {
+                rgba.put_pixel(x, y, image::Rgba([220, 30, 20, 255]));
+            }
+        }
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(rgba)
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+        let bytes = encoded.into_inner();
+        let metadata = inspect_image(&bytes, ImageLimits::default()).unwrap();
+        GeneratedImage {
+            index: 0,
+            payload: ImagePayload::B64Json {
+                b64_json: STANDARD.encode(bytes),
+            },
+            format: metadata.format,
+            width: metadata.width,
+            height: metadata.height,
+            bytes: metadata.bytes,
+            sha256: metadata.sha256,
+            generation_ms: None,
+            metadata_name: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn chroma_postprocessing_is_applied_before_projection() {
+        let materializer = OutputMaterializer::new(MaterializationConfig::default()).unwrap();
+        let mut request = ImageRequest::generate("isolated red square");
+        request.parameters.background = imagegen_bridge_core::Background::Transparent;
+        let projected = materializer
+            .materialize(
+                response(vec![keyed_image()], Vec::new()),
+                &request,
+                &request,
+                Some(TransparencyPlan {
+                    chroma: imagegen_bridge_artifacts::ChromaKeyOptions::default(),
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            projected.data[0].payload,
+            ImagePayload::B64Json { .. }
+        ));
+        let ImagePayload::B64Json { b64_json } = &projected.data[0].payload else {
+            return;
+        };
+        let decoded = image::load_from_memory(&STANDARD.decode(b64_json).unwrap())
+            .unwrap()
+            .to_rgba8();
+        assert_eq!(decoded.get_pixel(0, 0).0, [0, 0, 0, 0]);
+        assert_eq!(decoded.get_pixel(10, 10).0, [220, 30, 20, 255]);
+        assert!(projected.normalizations.iter().any(|item| {
+            item.field == "data[0].transparency.alpha"
+                && item.reason == "validated_chroma_key_alpha"
+        }));
+    }
+
     fn response(data: Vec<GeneratedImage>, failures: Vec<ImageFailure>) -> ImageResponse {
         ImageResponse {
             id: "test".to_owned(),
@@ -776,6 +901,7 @@ mod tests {
             requested: GenerationParameters::default(),
             effective: GenerationParameters::default(),
             normalizations: Vec::new(),
+            attempts: Vec::new(),
             data,
             failures,
             revised_prompt: None,
@@ -857,6 +983,7 @@ mod tests {
                 response(vec![generated(0), generated(1)], Vec::new()),
                 &request,
                 &request,
+                None,
             )
             .await
             .unwrap_err();
@@ -946,7 +1073,7 @@ mod tests {
         request.output.metadata = ArtifactMetadataPolicy::Embedded;
 
         let projected = materializer
-            .materialize(provider_response, &request, &request)
+            .materialize(provider_response, &request, &request, None)
             .await
             .unwrap();
         let b64_json = match &projected.data[0].payload {
@@ -1011,7 +1138,7 @@ mod tests {
         provider_response.provider = "codex-app-server".to_owned();
         provider_response.model = "gpt-image-2".to_owned();
         let mut projected = materializer
-            .materialize(provider_response, &request, &request)
+            .materialize(provider_response, &request, &request, None)
             .await
             .unwrap();
         materializer

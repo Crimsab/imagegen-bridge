@@ -1217,6 +1217,7 @@ mod tests {
                     .collect(),
                 output_formats: [OutputFormat::Png].into_iter().collect(),
                 backgrounds: [Background::Auto, Background::Opaque].into_iter().collect(),
+                transparent_background: SupportLevel::Emulated,
                 moderation: [Moderation::Auto, Moderation::Low].into_iter().collect(),
                 negative_prompt: SupportLevel::Native,
                 revised_prompt: SupportLevel::Native,
@@ -1273,6 +1274,7 @@ mod tests {
                 requested: request.parameters.clone(),
                 effective: request.parameters,
                 normalizations: Vec::new(),
+                attempts: Vec::new(),
                 data: vec![GeneratedImage {
                     index: 0,
                     payload: ImagePayload::B64Json {

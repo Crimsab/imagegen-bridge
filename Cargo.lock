@@ -1121,6 +1121,7 @@ dependencies = [
  "async-trait",
  "base64",
  "futures-util",
+ "image",
  "imagegen-bridge-artifacts",
  "imagegen-bridge-codex-app-server",
  "imagegen-bridge-core",

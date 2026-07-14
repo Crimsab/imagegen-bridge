@@ -143,6 +143,30 @@
                 </select>
               </label>
               <label class="field">
+                <span>Transparency strategy</span>
+                <select id="transparency" name="transparency">
+                  <option value="auto">Automatic</option>
+                  <option value="native">Provider-native alpha</option>
+                  <option value="chroma_key">Local chroma key</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Chroma key</span>
+                <input id="chroma-key" name="chroma-key" type="text" placeholder="Prompt-aware automatic key" pattern="#?[0-9A-Fa-f]{6}" autocomplete="off">
+              </label>
+              <label class="field">
+                <span>Transparent threshold</span>
+                <input id="chroma-transparent-threshold" name="chroma-transparent-threshold" type="number" min="0" max="254" value="12" inputmode="numeric">
+              </label>
+              <label class="field">
+                <span>Opaque threshold</span>
+                <input id="chroma-opaque-threshold" name="chroma-opaque-threshold" type="number" min="1" max="255" value="96" inputmode="numeric">
+              </label>
+              <label class="field check-filter">
+                <input id="despill" name="despill" type="checkbox" checked>
+                <span>Clean chroma spill</span>
+              </label>
+              <label class="field">
                 <span>Moderation</span>
                 <select id="moderation" name="moderation">
                   <option value="auto">Auto</option>
@@ -177,6 +201,14 @@
                 </select>
               </label>
               <label class="field">
+                <span>Batch execution</span>
+                <select id="batch-execution" name="batch-execution">
+                  <option value="auto">Automatic</option>
+                  <option value="parallel">Bounded parallel</option>
+                  <option value="sequential">Sequential</option>
+                </select>
+              </label>
+              <label class="field">
                 <span>Compatibility</span>
                 <select id="compatibility" name="compatibility">
                   <option value="best_effort">Best effort</option>
@@ -199,6 +231,17 @@
                   <option value="include">Include when available</option>
                   <option value="omit">Hide</option>
                   <option value="require">Require</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Fallback routes</span>
+                <input id="fallback-routes" name="fallback-routes" type="text" placeholder="provider[:model], provider[:model]" autocomplete="off">
+              </label>
+              <label class="field">
+                <span>Fallback policy</span>
+                <select id="fallback-policy" name="fallback-policy">
+                  <option value="on_unavailable">Unavailable or unsupported only</option>
+                  <option value="on_error">Known-outcome provider errors</option>
                 </select>
               </label>
               <label class="field">
@@ -375,6 +418,7 @@
                   <th scope="col">Count</th>
                   <th scope="col">Batching</th>
                   <th scope="col">Formats</th>
+                  <th scope="col">Transparency</th>
                   <th scope="col">Sessions</th>
                   <th scope="col">Notes</th>
                 </tr>

@@ -7,6 +7,34 @@ use serde::{Deserialize, Serialize, de};
 
 use crate::{BridgeError, GenerationParameters, OutputFormat};
 
+/// Outcome of one ordered provider route attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderAttemptOutcome {
+    /// The route produced the returned response.
+    Succeeded,
+    /// The route failed and routing continued.
+    Failed,
+}
+
+/// Redaction-safe execution trace for one provider route.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderAttempt {
+    /// Registered provider name.
+    pub provider: String,
+    /// Requested or discovered model when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Whether this attempt succeeded or failed.
+    pub outcome: ProviderAttemptOutcome,
+    /// Stable error code for a failed attempt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<crate::ErrorCode>,
+    /// Time spent on capability discovery, admission, and execution.
+    pub duration_ms: u64,
+}
+
 /// One explicit normalization or fallback applied to a request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -207,6 +235,9 @@ pub struct ImageResponse {
     /// Explicit normalizations and fallbacks.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub normalizations: Vec<Normalization>,
+    /// Ordered provider attempts, included when fallback routing was requested or used.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attempts: Vec<ProviderAttempt>,
     /// Generated images.
     pub data: Vec<GeneratedImage>,
     /// Per-output failures returned only by best-effort multi-image requests.

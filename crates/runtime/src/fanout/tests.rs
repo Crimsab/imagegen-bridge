@@ -105,6 +105,7 @@ impl ImageProvider for FakeProvider {
             requested: request.parameters.clone(),
             effective: request.parameters.clone(),
             normalizations: Vec::new(),
+            attempts: Vec::new(),
             data: (0..request.parameters.n)
                 .map(|index| GeneratedImage {
                     index,
@@ -179,6 +180,7 @@ fn native_capabilities() -> ProviderCapabilities {
         qualities: BTreeSet::from([Quality::Auto]),
         output_formats: BTreeSet::from([OutputFormat::Png]),
         backgrounds: BTreeSet::from([Background::Auto]),
+        transparent_background: SupportLevel::Emulated,
         moderation: BTreeSet::from([Moderation::Auto]),
         negative_prompt: SupportLevel::Emulated,
         revised_prompt: SupportLevel::Emulated,
@@ -292,6 +294,23 @@ async fn persistent_sessions_are_serialized_within_a_batch() {
     assert_eq!(response.data.len(), 3);
     assert_eq!(fake.max_active.load(Ordering::Acquire), 1);
     assert_eq!(response.session.unwrap().key.as_deref(), Some("campaign"));
+}
+
+#[tokio::test]
+async fn isolated_batches_can_explicitly_run_sequentially() {
+    let fake = Arc::new(FakeProvider::new(None));
+    let provider = provider(Arc::clone(&fake));
+    let mut request = ImageRequest::generate("sequential variations");
+    request.parameters.n = 3;
+    request.policies.batch_execution = BatchExecution::Sequential;
+    let response = provider.execute(request, context(None)).await.unwrap();
+    assert_eq!(response.data.len(), 3);
+    assert_eq!(fake.max_active.load(Ordering::Acquire), 1);
+    assert!(
+        response
+            .warnings
+            .contains(&"sequential_multi_image_fanout".to_owned())
+    );
 }
 
 #[tokio::test]

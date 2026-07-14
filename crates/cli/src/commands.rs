@@ -23,8 +23,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     args::{
-        ArtifactCommand, Cli, Command, ConfigCommand, EditArgs, GenerateArgs, ImageArgs,
-        PresentationArgs, ProviderCommand, SchemaArgs, SchemaKind, SessionCommand,
+        ArtifactCommand, BackgroundCommand, Cli, Command, ConfigCommand, EditArgs, GenerateArgs,
+        ImageArgs, PresentationArgs, ProviderCommand, SchemaArgs, SchemaKind, SessionCommand,
     },
     dashboard, doctor,
     output::Output,
@@ -57,13 +57,16 @@ pub(crate) async fn run(cli: Cli, output: &Output) -> Result<(), BridgeError> {
                 "setup does not accept --set/--unset; use --state-root, --output-root, or edit the generated config",
             ));
         }
-        return setup::run(cli.config.as_deref(), args, output).await;
+        return Box::pin(setup::run(cli.config.as_deref(), args, output)).await;
     }
     let (resolved, config_path) = resolve_config(&cli)?;
     match cli.command {
-        Command::Doctor(args) => doctor::run(config_path.as_deref(), resolved, &args, output).await,
+        Command::Doctor(args) => {
+            Box::pin(doctor::run(config_path.as_deref(), resolved, &args, output)).await
+        }
         Command::Generate(args) => Box::pin(generate(args, &resolved, output)).await,
         Command::Edit(args) => Box::pin(edit(args, &resolved, output)).await,
+        Command::Background(args) => background(args.command, &resolved, output).await,
         Command::Serve(args) => serve_command(args.bind, resolved, output).await,
         Command::Dashboard(args) => dashboard::run(args, resolved, output).await,
         Command::Providers(args) => providers(args.command, resolved, output).await,
@@ -75,6 +78,100 @@ pub(crate) async fn run(cli: Cli, output: &Output) -> Result<(), BridgeError> {
             unreachable!()
         }
     }
+}
+
+async fn background(
+    command: BackgroundCommand,
+    resolved: &ResolvedConfig,
+    output: &Output,
+) -> Result<(), BridgeError> {
+    let BackgroundCommand::Remove {
+        input,
+        output: destination,
+        key,
+        transparent_threshold,
+        opaque_threshold,
+        no_despill,
+        force,
+    } = command;
+    let configured = resolved.config.artifacts.image;
+    let limits = imagegen_bridge::artifacts::ImageLimits {
+        max_encoded_bytes: configured.max_encoded_bytes,
+        max_edge: configured.max_edge,
+        max_pixels: configured.max_pixels,
+        max_decode_alloc: configured.max_decode_alloc,
+    };
+    let metadata = tokio::fs::metadata(&input)
+        .await
+        .map_err(|_| invalid("background input is not a readable regular file"))?;
+    if !metadata.is_file() || metadata.len() > limits.max_encoded_bytes {
+        return Err(invalid(
+            "background input is not a regular image within the configured size limit",
+        ));
+    }
+    let bytes = tokio::fs::read(&input)
+        .await
+        .map_err(|_| invalid("background input could not be read"))?;
+    let key = if key == "auto" {
+        imagegen_bridge::artifacts::detect_border_chroma_key(&bytes, limits)?
+    } else {
+        imagegen_bridge::artifacts::ChromaKey::parse(&key)?
+    };
+    let format = match destination
+        .extension()
+        .and_then(OsStr::to_str)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("png") => imagegen_bridge::core::OutputFormat::Png,
+        Some("webp") => imagegen_bridge::core::OutputFormat::Webp,
+        _ => return Err(invalid("background output must end in .png or .webp")),
+    };
+    if destination.exists() && !force {
+        return Err(invalid(
+            "background output already exists; pass --force to replace it",
+        ));
+    }
+    let result = imagegen_bridge::artifacts::remove_chroma_key(
+        &bytes,
+        format,
+        imagegen_bridge::artifacts::ChromaKeyOptions {
+            key,
+            transparent_threshold,
+            opaque_threshold,
+            despill: !no_despill,
+        },
+        limits,
+    )?;
+    let parent = destination
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    tokio::fs::create_dir_all(parent)
+        .await
+        .map_err(|_| invalid("background output directory could not be created"))?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .map_err(|_| invalid("temporary background output could not be created"))?;
+    temporary
+        .write_all(&result.bytes)
+        .and_then(|()| temporary.flush())
+        .map_err(|_| invalid("temporary background output could not be written"))?;
+    temporary
+        .persist(&destination)
+        .map_err(|_| invalid("background output could not be published atomically"))?;
+    output.value(&json!({
+        "output": destination,
+        "format": result.metadata.format,
+        "width": result.metadata.width,
+        "height": result.metadata.height,
+        "bytes": result.metadata.bytes,
+        "sha256": result.metadata.sha256,
+        "key_color": key.hex(),
+        "transparent_pixels": result.alpha.transparent_pixels,
+        "partial_pixels": result.alpha.partial_pixels,
+        "opaque_pixels": result.alpha.opaque_pixels,
+        "transparent_corners": result.alpha.transparent_corners,
+    }))
 }
 
 fn resolve_config(cli: &Cli) -> Result<(ResolvedConfig, Option<PathBuf>), BridgeError> {
@@ -125,7 +222,14 @@ async fn generate(
         request
     };
     presentation::prepare_request(&mut request, presentation, allow_implicit_artifact, output)?;
-    execute_or_preview(request, args.dry_run, presentation, resolved, output).await
+    Box::pin(execute_or_preview(
+        request,
+        args.dry_run,
+        presentation,
+        resolved,
+        output,
+    ))
+    .await
 }
 
 async fn edit(
@@ -164,7 +268,14 @@ async fn edit(
         request
     };
     presentation::prepare_request(&mut request, presentation, allow_implicit_artifact, output)?;
-    execute_or_preview(request, args.dry_run, presentation, resolved, output).await
+    Box::pin(execute_or_preview(
+        request,
+        args.dry_run,
+        presentation,
+        resolved,
+        output,
+    ))
+    .await
 }
 
 fn ensure_request_only(has_operation_fields: bool, image: &ImageArgs) -> Result<(), BridgeError> {
@@ -235,6 +346,10 @@ fn apply_image_args(
     request.negative_prompt = args.negative_prompt;
     request.routing.provider = args.provider;
     request.routing.model = args.model;
+    request.routing.fallbacks = args.fallbacks;
+    if let Some(value) = args.fallback_policy {
+        request.routing.fallback_policy = value;
+    }
     if let Some(value) = args.count {
         request.parameters.n = value;
     }
@@ -253,6 +368,19 @@ fn apply_image_args(
     if let Some(value) = args.background {
         request.parameters.background = value;
     }
+    if let Some(value) = args.transparency {
+        request.output.transparency.mode = value;
+    }
+    request.output.transparency.key_color = args.chroma_key;
+    if let Some(value) = args.chroma_transparent_threshold {
+        request.output.transparency.transparent_threshold = value;
+    }
+    if let Some(value) = args.chroma_opaque_threshold {
+        request.output.transparency.opaque_threshold = value;
+    }
+    if args.no_despill {
+        request.output.transparency.despill = false;
+    }
     if let Some(value) = args.moderation {
         request.parameters.moderation = value;
     }
@@ -261,6 +389,9 @@ fn apply_image_args(
     }
     if let Some(value) = args.failure_policy {
         request.parameters.failure_policy = value;
+    }
+    if let Some(value) = args.batch_execution {
+        request.policies.batch_execution = value;
     }
     request.parameters.input_fidelity = args.input_fidelity;
     if let Some(value) = args.action {

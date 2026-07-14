@@ -12,6 +12,27 @@ function optionalInteger(form, name) {
 	return raw === "" ? undefined : Number.parseInt(raw, 10);
 }
 
+function checked(form, name) {
+	return Boolean(form.elements.namedItem(name)?.checked);
+}
+
+function fallbackRoutes(form) {
+	const raw = value(form, "fallback-routes");
+	if (!raw) return [];
+	return raw.split(",").map((entry) => {
+		const route = entry.trim();
+		const separator = route.indexOf(":");
+		const provider = separator < 0 ? route : route.slice(0, separator).trim();
+		const model = separator < 0 ? "" : route.slice(separator + 1).trim();
+		if (!provider || (separator >= 0 && !model)) {
+			throw new Error(
+				"Fallback routes must use provider or provider:model syntax.",
+			);
+		}
+		return { provider, model: model || undefined };
+	});
+}
+
 async function fileInput(input) {
 	return Promise.all([...input.files].map(fileToImageInput));
 }
@@ -77,6 +98,19 @@ export async function buildRequest(form) {
 	}
 
 	const sessionMode = value(form, "session-mode") || "isolated";
+	const fallbacks = fallbackRoutes(form);
+	if (fallbacks.length > 0 && sessionMode !== "isolated") {
+		throw new Error("Provider fallback requires an isolated session.");
+	}
+	const transparentThreshold = integer(
+		form,
+		"chroma-transparent-threshold",
+		12,
+	);
+	const opaqueThreshold = integer(form, "chroma-opaque-threshold", 96);
+	if (transparentThreshold >= opaqueThreshold) {
+		throw new Error("Transparent threshold must be lower than opaque threshold.");
+	}
 
 	const request = {
 		prompt: value(form, "prompt"),
@@ -86,6 +120,8 @@ export async function buildRequest(form) {
 		routing: {
 			provider: value(form, "provider") || undefined,
 			model: value(form, "model") || undefined,
+			fallbacks,
+			fallback_policy: value(form, "fallback-policy") || "on_unavailable",
 		},
 		session: {
 			mode: sessionMode,
@@ -105,11 +141,19 @@ export async function buildRequest(form) {
 			filename: filename || undefined,
 			collision: value(form, "collision") || "error",
 			metadata: value(form, "metadata") || "sidecar",
+			transparency: {
+				mode: value(form, "transparency") || "auto",
+				key_color: value(form, "chroma-key") || undefined,
+				transparent_threshold: transparentThreshold,
+				opaque_threshold: opaqueThreshold,
+				despill: checked(form, "despill"),
+			},
 		},
 		policies: {
 			compatibility: value(form, "compatibility") || "best_effort",
 			negative_prompt: value(form, "negative-policy") || "auto",
 			revised_prompt: value(form, "revised-prompt") || "include",
+			batch_execution: value(form, "batch-execution") || "auto",
 		},
 		idempotency_key: value(form, "idempotency-key") || undefined,
 		timeout_ms: optionalInteger(form, "timeout-ms"),
@@ -173,10 +217,10 @@ export function applyCapabilities(form, capabilities) {
 		form.elements.namedItem("format"),
 		capabilities?.output_formats,
 	);
-	constrainOptions(
-		form.elements.namedItem("background"),
-		capabilities?.backgrounds,
-	);
+	const backgrounds = capabilities?.backgrounds
+		? [...new Set([...capabilities.backgrounds, "transparent"])]
+		: undefined;
+	constrainOptions(form.elements.namedItem("background"), backgrounds);
 	constrainOptions(
 		form.elements.namedItem("moderation"),
 		capabilities?.moderation,

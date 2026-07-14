@@ -534,6 +534,7 @@ mod tests {
                 effective: Some(json!("auto")),
                 reason: "provider_default".to_owned(),
             }],
+            attempts: Vec::new(),
             data: vec![GeneratedImage {
                 index: 0,
                 payload: ImagePayload::B64Json {

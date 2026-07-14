@@ -3,9 +3,10 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 use imagegen_bridge::core::{
-    ArtifactCollisionPolicy, ArtifactMetadataPolicy, AspectRatio, Background, CompatibilityMode,
-    ImageAction, ImageSize, InputFidelity, Moderation, MultiImageFailurePolicy, NegativePromptMode,
-    OutputFormat, Quality, Resolution, ResponseFormat, RevisedPromptPolicy, SessionMode,
+    ArtifactCollisionPolicy, ArtifactMetadataPolicy, AspectRatio, Background, BatchExecution,
+    CompatibilityMode, FallbackPolicy, ImageAction, ImageSize, InputFidelity, Moderation,
+    MultiImageFailurePolicy, NegativePromptMode, OutputFormat, ProviderRoute, Quality, Resolution,
+    ResponseFormat, RevisedPromptPolicy, SessionMode, TransparencyMode,
 };
 
 #[derive(Debug, Parser)]
@@ -88,6 +89,8 @@ pub(crate) enum Command {
     Generate(GenerateArgs),
     /// Edit one or more source images.
     Edit(EditArgs),
+    /// Detect and remove a flat image background without calling a provider.
+    Background(BackgroundArgs),
     /// Run the bounded HTTP API until interrupted.
     Serve(ServeArgs),
     /// Open, attach to, or start the local embedded dashboard.
@@ -108,6 +111,39 @@ pub(crate) enum Command {
     Completions(CompletionsArgs),
     /// Generate a manual page.
     Man(ManArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct BackgroundArgs {
+    #[command(subcommand)]
+    pub command: BackgroundCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum BackgroundCommand {
+    /// Convert a chroma-key background to validated PNG/WebP alpha.
+    Remove {
+        /// Source PNG, JPEG, or WebP image.
+        input: PathBuf,
+        /// Destination `.png` or `.webp` file.
+        #[arg(long, short = 'o')]
+        output: PathBuf,
+        /// `auto` samples the border; otherwise use #RRGGBB.
+        #[arg(long, default_value = "auto")]
+        key: String,
+        /// Chroma distance at or below which pixels become transparent.
+        #[arg(long, default_value_t = 12, value_parser = clap::value_parser!(u8).range(0..=254))]
+        transparent_threshold: u8,
+        /// Chroma distance at or above which pixels become opaque.
+        #[arg(long, default_value_t = 96, value_parser = clap::value_parser!(u8).range(1..=255))]
+        opaque_threshold: u8,
+        /// Preserve key-color spill on antialiased edges.
+        #[arg(long)]
+        no_despill: bool,
+        /// Atomically replace an existing destination.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -248,6 +284,12 @@ pub(crate) struct ImageArgs {
     /// Provider-specific model selection.
     #[arg(long)]
     pub model: Option<String>,
+    /// Ordered fallback route as PROVIDER or PROVIDER:MODEL. Repeatable.
+    #[arg(long = "fallback", value_name = "PROVIDER[:MODEL]", value_parser = parse_provider_route)]
+    pub fallbacks: Vec<ProviderRoute>,
+    /// Conditions under which the next fallback route may run.
+    #[arg(long, value_parser = parse_fallback_policy)]
+    pub fallback_policy: Option<FallbackPolicy>,
     /// Number of images.
     #[arg(long = "count", short = 'n', value_parser = clap::value_parser!(u8).range(1..))]
     pub count: Option<u8>,
@@ -272,6 +314,21 @@ pub(crate) struct ImageArgs {
     /// Background behavior.
     #[arg(long, value_parser = parse_background)]
     pub background: Option<Background>,
+    /// Transparent result strategy: auto, native, or `chroma_key`.
+    #[arg(long, value_parser = parse_transparency_mode)]
+    pub transparency: Option<TransparencyMode>,
+    /// Explicit chroma key as #RRGGBB; otherwise selected from the prompt.
+    #[arg(long, value_name = "#RRGGBB")]
+    pub chroma_key: Option<String>,
+    /// Chroma distance at or below which pixels become transparent.
+    #[arg(long, value_parser = clap::value_parser!(u8).range(0..=254))]
+    pub chroma_transparent_threshold: Option<u8>,
+    /// Chroma distance at or above which pixels become opaque.
+    #[arg(long, value_parser = clap::value_parser!(u8).range(1..=255))]
+    pub chroma_opaque_threshold: Option<u8>,
+    /// Preserve key-color spill instead of cleaning antialiased edges.
+    #[arg(long)]
+    pub no_despill: bool,
     /// Moderation behavior.
     #[arg(long, value_parser = parse_moderation)]
     pub moderation: Option<Moderation>,
@@ -281,6 +338,9 @@ pub(crate) struct ImageArgs {
     /// Behavior when one output in a multi-image request fails.
     #[arg(long, value_parser = parse_failure_policy)]
     pub failure_policy: Option<MultiImageFailurePolicy>,
+    /// Automatic, sequential, or bounded-parallel fan-out execution.
+    #[arg(long, value_parser = parse_batch_execution)]
+    pub batch_execution: Option<BatchExecution>,
     /// Input-image fidelity for edit/reference operations.
     #[arg(long, value_parser = parse_input_fidelity)]
     pub input_fidelity: Option<InputFidelity>,
@@ -344,6 +404,8 @@ impl ImageArgs {
         self.negative_prompt.is_none()
             && self.provider.is_none()
             && self.model.is_none()
+            && self.fallbacks.is_empty()
+            && self.fallback_policy.is_none()
             && self.count.is_none()
             && self.size.is_none()
             && self.aspect_ratio.is_none()
@@ -352,9 +414,15 @@ impl ImageArgs {
             && self.format.is_none()
             && self.compression.is_none()
             && self.background.is_none()
+            && self.transparency.is_none()
+            && self.chroma_key.is_none()
+            && self.chroma_transparent_threshold.is_none()
+            && self.chroma_opaque_threshold.is_none()
+            && !self.no_despill
             && self.moderation.is_none()
             && self.partial_images.is_none()
             && self.failure_policy.is_none()
+            && self.batch_execution.is_none()
             && self.input_fidelity.is_none()
             && self.action.is_none()
             && self.response_format.is_none()
@@ -544,6 +612,22 @@ enum_parser!(parse_resolution, Resolution);
 enum_parser!(parse_quality, Quality);
 enum_parser!(parse_format, OutputFormat);
 enum_parser!(parse_background, Background);
+enum_parser!(parse_transparency_mode, TransparencyMode);
+enum_parser!(parse_fallback_policy, FallbackPolicy);
+enum_parser!(parse_batch_execution, BatchExecution);
+
+fn parse_provider_route(value: &str) -> Result<ProviderRoute, String> {
+    let (provider, model) = value
+        .split_once(':')
+        .map_or((value, None), |(provider, model)| (provider, Some(model)));
+    if provider.is_empty() || model.is_some_and(str::is_empty) {
+        return Err("fallback must use PROVIDER or PROVIDER:MODEL syntax".to_owned());
+    }
+    Ok(ProviderRoute {
+        provider: provider.to_owned(),
+        model: model.map(str::to_owned),
+    })
+}
 enum_parser!(parse_moderation, Moderation);
 enum_parser!(parse_failure_policy, MultiImageFailurePolicy);
 enum_parser!(parse_input_fidelity, InputFidelity);

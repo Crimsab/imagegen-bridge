@@ -140,6 +140,8 @@ pub struct ProviderCapabilities {
     pub output_formats: BTreeSet<OutputFormat>,
     /// Supported backgrounds.
     pub backgrounds: BTreeSet<Background>,
+    /// Native or bridge-emulated transparent-background support.
+    pub transparent_background: SupportLevel,
     /// Supported moderation values.
     pub moderation: BTreeSet<Moderation>,
     /// Negative prompt support.
@@ -194,6 +196,28 @@ impl ProviderCapabilities {
             return Err(invalid_capability(
                 self,
                 "provider partial-image capability range is invalid",
+            ));
+        }
+        let declares_native = self.backgrounds.contains(&Background::Transparent);
+        if declares_native != (self.transparent_background == SupportLevel::Native) {
+            return Err(invalid_capability(
+                self,
+                "provider transparent-background capability is inconsistent",
+            ));
+        }
+        if self.transparent_background == SupportLevel::Emulated
+            && (!self
+                .backgrounds
+                .iter()
+                .any(|background| matches!(background, Background::Auto | Background::Opaque))
+                || !self
+                    .output_formats
+                    .iter()
+                    .any(|format| matches!(format, OutputFormat::Png | OutputFormat::Webp)))
+        {
+            return Err(invalid_capability(
+                self,
+                "emulated transparent output requires a keyable background and alpha format",
             ));
         }
         Ok(())

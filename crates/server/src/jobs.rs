@@ -299,7 +299,7 @@ impl JobManager {
     fn schedule(self: &Arc<Self>, auth_scope: String, id: String) {
         let manager = Arc::clone(self);
         tokio::spawn(async move {
-            if let Err(error) = manager.run(auth_scope, id.clone()).await {
+            if let Err(error) = Box::pin(manager.run(auth_scope, id.clone())).await {
                 tracing::warn!(job_id = %id, error_code = ?error.code, "durable job worker failed");
             }
         });
