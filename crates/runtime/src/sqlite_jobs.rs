@@ -15,6 +15,7 @@ use tokio_rusqlite::{
 };
 
 const CURRENT_MIGRATION: u32 = 3;
+const ACTIVE_RESULT_RESERVE_BYTES: u64 = 256 * 1024;
 
 /// Result of atomically submitting a durable job.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,6 +87,8 @@ pub struct SqliteJobStatistics {
     pub hidden: u64,
     /// Main `SQLite` database pages multiplied by page size, excluding WAL files.
     pub database_bytes: u64,
+    /// Logical job-row bytes used for admission and retention accounting.
+    pub logical_bytes: u64,
 }
 
 /// Inspects job storage without creating or migrating it.
@@ -292,6 +295,7 @@ impl SqliteImageJobStore {
         request: &ImageRequest,
         now: u64,
         max_pending: usize,
+        max_database_bytes: u64,
     ) -> Result<SqliteJobSubmission, BridgeError> {
         validate_auth_scope(auth_scope)?;
         let mut persisted_request = request.clone();
@@ -315,6 +319,15 @@ impl SqliteImageJobStore {
         let id = id.to_owned();
         let now = to_i64(now)?;
         let max_pending = i64::try_from(max_pending).unwrap_or(i64::MAX);
+        let max_database_bytes = i64::try_from(max_database_bytes).unwrap_or(i64::MAX);
+        let new_job_bytes = logical_new_job_bytes(
+            &id,
+            &auth_scope,
+            &request_json,
+            &prompt_search,
+            submission_key_hash.as_deref(),
+            request_fingerprint.as_deref(),
+        )?;
         let outcome = self
             .connection
             .call(move |connection| {
@@ -346,6 +359,11 @@ impl SqliteImageJobStore {
                     |row| row.get(0),
                 )?;
                 if pending >= max_pending {
+                    return Ok(CreateOutcome::Full);
+                }
+                let logical_bytes: i64 =
+                    transaction.query_row(logical_bytes_query(), [], |row| row.get(0))?;
+                if logical_bytes.saturating_add(new_job_bytes) > max_database_bytes {
                     return Ok(CreateOutcome::Full);
                 }
                 transaction.execute(
@@ -418,15 +436,22 @@ impl SqliteImageJobStore {
                         ))
                     },
                 )?;
+                let logical_bytes: i64 =
+                    connection.query_row(logical_bytes_query(), [], |row| row.get(0))?;
                 let page_count: i64 =
                     connection.query_row("PRAGMA page_count", [], |row| row.get(0))?;
                 let page_size: i64 =
                     connection.query_row("PRAGMA page_size", [], |row| row.get(0))?;
-                Ok::<_, tokio_rusqlite::rusqlite::Error>((counts, page_count, page_size))
+                Ok::<_, tokio_rusqlite::rusqlite::Error>((
+                    counts,
+                    logical_bytes,
+                    page_count,
+                    page_size,
+                ))
             })
             .await
             .map_err(|_| job_error("could not inspect job database statistics"))
-            .and_then(|(counts, page_count, page_size)| {
+            .and_then(|(counts, logical_bytes, page_count, page_size)| {
                 let convert = |value: i64| {
                     u64::try_from(value)
                         .map_err(|_| job_error("job database returned invalid statistics"))
@@ -441,6 +466,7 @@ impl SqliteImageJobStore {
                     interrupted: convert(counts.6)?,
                     hidden: convert(counts.7)?,
                     database_bytes: convert(page_count)?.saturating_mul(convert(page_size)?),
+                    logical_bytes: convert(logical_bytes)?,
                 })
             })
     }
@@ -557,6 +583,12 @@ impl SqliteImageJobStore {
     ) -> Result<(), BridgeError> {
         let encoded = serde_json::to_string(response)
             .map_err(|_| job_error("could not encode job result"))?;
+        if encoded.len() > usize::try_from(ACTIVE_RESULT_RESERVE_BYTES).unwrap_or(usize::MAX) {
+            return Err(BridgeError::new(
+                ErrorCode::Artifact,
+                "durable job result metadata exceeds the storage reserve",
+            ));
+        }
         self.finish(
             auth_scope,
             id,
@@ -583,8 +615,15 @@ impl SqliteImageJobStore {
         ) {
             return Err(job_error("invalid terminal job failure status"));
         }
-        let encoded =
+        let mut encoded =
             serde_json::to_string(error).map_err(|_| job_error("could not encode job error"))?;
+        if encoded.len() > usize::try_from(ACTIVE_RESULT_RESERVE_BYTES).unwrap_or(usize::MAX) {
+            encoded = serde_json::to_string(&BridgeError::new(
+                ErrorCode::Internal,
+                "durable job failed with oversized error metadata",
+            ))
+            .map_err(|_| job_error("could not encode bounded job error"))?;
+        }
         self.finish(auth_scope, id, status, None, Some(encoded), now)
             .await
     }
@@ -823,9 +862,11 @@ impl SqliteImageJobStore {
         now: u64,
         retention_secs: u64,
         max_retained: usize,
+        max_retained_bytes: u64,
     ) -> Result<usize, BridgeError> {
         let cutoff = to_i64(now.saturating_sub(retention_secs))?;
         let maximum = i64::try_from(max_retained).unwrap_or(i64::MAX);
+        let maximum_bytes = i64::try_from(max_retained_bytes).unwrap_or(i64::MAX);
         self.connection
             .call(move |connection| {
                 let transaction = connection.transaction()?;
@@ -837,13 +878,26 @@ impl SqliteImageJobStore {
                     [cutoff],
                 )?;
                 let excess = transaction.execute(
-                    "DELETE FROM image_jobs WHERE id IN (
-                       SELECT id FROM image_jobs
+                    "WITH retained AS (
+                       SELECT id,
+                         ROW_NUMBER() OVER (ORDER BY created_at DESC,id DESC) AS ordinal,
+                         SUM(
+                           length(CAST(id AS BLOB)) + length(CAST(auth_scope AS BLOB))
+                           + length(CAST(request_json AS BLOB))
+                           + length(CAST(prompt_search AS BLOB))
+                           + length(CAST(COALESCE(submission_key_hash,'') AS BLOB))
+                           + length(CAST(COALESCE(request_fingerprint,'') AS BLOB))
+                           + length(CAST(COALESCE(response_json,'') AS BLOB))
+                           + length(CAST(COALESCE(error_json,'') AS BLOB)) + 128
+                         ) OVER (ORDER BY created_at DESC,id DESC) AS cumulative_bytes
+                       FROM image_jobs
                        WHERE status IN ('succeeded','failed','cancelled','interrupted')
                          AND favorite=0
-                       ORDER BY created_at DESC, id DESC LIMIT -1 OFFSET ?1
+                     )
+                     DELETE FROM image_jobs WHERE id IN (
+                       SELECT id FROM retained WHERE ordinal > ?1 OR cumulative_bytes > ?2
                      )",
-                    [maximum],
+                    params![maximum, maximum_bytes],
                 )?;
                 transaction.commit()?;
                 Ok::<usize, tokio_rusqlite::rusqlite::Error>(expired + excess)
@@ -1015,6 +1069,39 @@ fn literal_like_pattern(value: &str) -> String {
     pattern
 }
 
+const fn logical_bytes_query() -> &'static str {
+    "SELECT COALESCE(SUM(
+       length(CAST(id AS BLOB)) + length(CAST(auth_scope AS BLOB))
+       + length(CAST(request_json AS BLOB)) + length(CAST(prompt_search AS BLOB))
+       + length(CAST(COALESCE(submission_key_hash,'') AS BLOB))
+       + length(CAST(COALESCE(request_fingerprint,'') AS BLOB))
+       + CASE WHEN status IN ('queued','running') THEN 262144 ELSE
+           length(CAST(COALESCE(response_json,'') AS BLOB))
+           + length(CAST(COALESCE(error_json,'') AS BLOB)) END
+       + 128
+     ),0) FROM image_jobs"
+}
+
+fn logical_new_job_bytes(
+    id: &str,
+    auth_scope: &str,
+    request_json: &str,
+    prompt_search: &str,
+    submission_key_hash: Option<&str>,
+    request_fingerprint: Option<&str>,
+) -> Result<i64, BridgeError> {
+    let bytes = id
+        .len()
+        .saturating_add(auth_scope.len())
+        .saturating_add(request_json.len())
+        .saturating_add(prompt_search.len())
+        .saturating_add(submission_key_hash.map_or(0, str::len))
+        .saturating_add(request_fingerprint.map_or(0, str::len))
+        .saturating_add(usize::try_from(ACTIVE_RESULT_RESERVE_BYTES).unwrap_or(usize::MAX))
+        .saturating_add(128);
+    i64::try_from(bytes).map_err(|_| job_error("durable job is too large to account"))
+}
+
 fn durable_request_fingerprint(request: &ImageRequest) -> Result<String, BridgeError> {
     let mut canonical = request.clone();
     canonical.idempotency_key = None;
@@ -1064,6 +1151,7 @@ mod tests {
     use super::*;
 
     const SCOPE: &str = "test-scope";
+    const MAX_BYTES: u64 = 1024 * 1024 * 1024;
 
     fn fixture_response(id: &str) -> ImageResponse {
         ImageResponse {
@@ -1096,6 +1184,7 @@ mod tests {
                 &ImageRequest::generate("first"),
                 10,
                 10,
+                MAX_BYTES,
             )
             .await
             .unwrap();
@@ -1106,6 +1195,7 @@ mod tests {
                 &ImageRequest::generate("second"),
                 11,
                 10,
+                MAX_BYTES,
             )
             .await
             .unwrap();
@@ -1158,7 +1248,14 @@ mod tests {
             .await
             .unwrap();
         store
-            .create(SCOPE, "019f-job", &ImageRequest::generate("test"), 10, 10)
+            .create(
+                SCOPE,
+                "019f-job",
+                &ImageRequest::generate("test"),
+                10,
+                10,
+                MAX_BYTES,
+            )
             .await
             .unwrap();
         store.claim(SCOPE, "019f-job", 11).await.unwrap();
@@ -1175,7 +1272,14 @@ mod tests {
             .await
             .unwrap();
         store
-            .create(SCOPE, "019f-job", &ImageRequest::generate("test"), 10, 10)
+            .create(
+                SCOPE,
+                "019f-job",
+                &ImageRequest::generate("test"),
+                10,
+                10,
+                MAX_BYTES,
+            )
             .await
             .unwrap();
         let job = store.request_cancel(SCOPE, "019f-job", 11).await.unwrap();
@@ -1199,7 +1303,14 @@ mod tests {
             .await
             .unwrap();
         store
-            .create(SCOPE, "019f-job-a", &ImageRequest::generate("first"), 10, 1)
+            .create(
+                SCOPE,
+                "019f-job-a",
+                &ImageRequest::generate("first"),
+                10,
+                1,
+                MAX_BYTES,
+            )
             .await
             .unwrap();
         let error = store
@@ -1209,12 +1320,83 @@ mod tests {
                 &ImageRequest::generate("second"),
                 11,
                 1,
+                MAX_BYTES,
             )
             .await
             .unwrap_err();
         assert_eq!(error.code, ErrorCode::Overloaded);
         assert!(error.retryable);
         assert!(store.get(SCOPE, "019f-job-b").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn logical_database_budget_rejects_before_persistence() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SqliteImageJobStore::open(&directory.path().join("jobs.sqlite3"))
+            .await
+            .unwrap();
+        let error = store
+            .create(
+                SCOPE,
+                "019f-too-large",
+                &ImageRequest::generate("bounded"),
+                10,
+                10,
+                ACTIVE_RESULT_RESERVE_BYTES - 1,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::Overloaded);
+        assert_eq!(store.statistics().await.unwrap().total, 0);
+    }
+
+    #[tokio::test]
+    async fn pruning_enforces_terminal_logical_byte_budget() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SqliteImageJobStore::open(&directory.path().join("jobs.sqlite3"))
+            .await
+            .unwrap();
+        store
+            .create(
+                SCOPE,
+                "019f-job-a",
+                &ImageRequest::generate("first retained request"),
+                10,
+                10,
+                MAX_BYTES,
+            )
+            .await
+            .unwrap();
+        assert!(store.claim(SCOPE, "019f-job-a", 11).await.unwrap());
+        store
+            .succeed(SCOPE, "019f-job-a", &fixture_response("019f-job-a"), 12)
+            .await
+            .unwrap();
+        let one_job_bytes = store.statistics().await.unwrap().logical_bytes;
+
+        store
+            .create(
+                SCOPE,
+                "019f-job-b",
+                &ImageRequest::generate("second retained request"),
+                13,
+                10,
+                MAX_BYTES,
+            )
+            .await
+            .unwrap();
+        assert!(store.claim(SCOPE, "019f-job-b", 14).await.unwrap());
+        store
+            .succeed(SCOPE, "019f-job-b", &fixture_response("019f-job-b"), 15)
+            .await
+            .unwrap();
+
+        let two_job_bytes = store.statistics().await.unwrap().logical_bytes;
+        let byte_budget = one_job_bytes.max(two_job_bytes.saturating_sub(one_job_bytes));
+        assert_eq!(store.prune(15, 100, 10, byte_budget).await.unwrap(), 1);
+        assert!(store.get(SCOPE, "019f-job-a").await.is_err());
+        assert!(store.get(SCOPE, "019f-job-b").await.is_ok());
+        assert!(store.statistics().await.unwrap().logical_bytes <= byte_budget);
     }
 
     #[tokio::test]
@@ -1226,7 +1408,7 @@ mod tests {
         request.idempotency_key = Some("durable-key".to_owned());
 
         let first = store
-            .create("scope-a", "019f-job-a", &request, 10, 1)
+            .create("scope-a", "019f-job-a", &request, 10, 1, MAX_BYTES)
             .await
             .unwrap();
         assert!(first.created);
@@ -1234,14 +1416,14 @@ mod tests {
         assert_eq!(first.job.request.idempotency_key, None);
 
         let replay = store
-            .create("scope-a", "019f-job-b", &request, 11, 1)
+            .create("scope-a", "019f-job-b", &request, 11, 1, MAX_BYTES)
             .await
             .unwrap();
         assert!(!replay.created);
         assert_eq!(replay.job.summary.id, "019f-job-a");
 
         let other_scope = store
-            .create("scope-b", "019f-job-c", &request, 12, 2)
+            .create("scope-b", "019f-job-c", &request, 12, 2, MAX_BYTES)
             .await
             .unwrap();
         assert!(other_scope.created);
@@ -1250,7 +1432,7 @@ mod tests {
         let mut conflict = request.clone();
         conflict.prompt = "different request".to_owned();
         let error = store
-            .create("scope-a", "019f-job-d", &conflict, 13, 2)
+            .create("scope-a", "019f-job-d", &conflict, 13, 2, MAX_BYTES)
             .await
             .unwrap_err();
         assert_eq!(error.code, ErrorCode::IdempotencyConflict);
@@ -1258,7 +1440,7 @@ mod tests {
 
         let reopened = SqliteImageJobStore::open(&path).await.unwrap();
         let replay = reopened
-            .create("scope-a", "019f-job-e", &request, 14, 1)
+            .create("scope-a", "019f-job-e", &request, 14, 1, MAX_BYTES)
             .await
             .unwrap();
         assert!(!replay.created);
@@ -1278,6 +1460,7 @@ mod tests {
                 &ImageRequest::generate("private"),
                 10,
                 10,
+                MAX_BYTES,
             )
             .await
             .unwrap();
@@ -1329,8 +1512,8 @@ mod tests {
         );
         let mut request = ImageRequest::generate("concurrent request");
         request.idempotency_key = Some("concurrent-key".to_owned());
-        let first = store.create("scope-a", "019f-first", &request, 10, 10);
-        let second = store.create("scope-a", "019f-second", &request, 10, 10);
+        let first = store.create("scope-a", "019f-first", &request, 10, 10, MAX_BYTES);
+        let second = store.create("scope-a", "019f-second", &request, 10, 10, MAX_BYTES);
         let (first, second) = tokio::join!(first, second);
         let first = first.unwrap();
         let second = second.unwrap();
@@ -1360,7 +1543,14 @@ mod tests {
             .await
             .unwrap();
         store
-            .create(SCOPE, "019f-job", &ImageRequest::generate("test"), 10, 10)
+            .create(
+                SCOPE,
+                "019f-job",
+                &ImageRequest::generate("test"),
+                10,
+                10,
+                MAX_BYTES,
+            )
             .await
             .unwrap();
         let error = store
@@ -1397,12 +1587,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(restored.summary.deleted, None);
-        assert_eq!(store.prune(100, 1, 1).await.unwrap(), 0);
+        assert_eq!(store.prune(100, 1, 1, MAX_BYTES).await.unwrap(), 0);
         store
             .update_history(SCOPE, "019f-job", Some(false), None, 101)
             .await
             .unwrap();
-        assert_eq!(store.prune(102, 1, 1).await.unwrap(), 1);
+        assert_eq!(store.prune(102, 1, 1, MAX_BYTES).await.unwrap(), 1);
     }
 
     #[tokio::test]
@@ -1417,7 +1607,14 @@ mod tests {
             ("019f-job-c", "ČERVENÁ liška", 12),
         ] {
             store
-                .create(SCOPE, id, &ImageRequest::generate(prompt), created, 10)
+                .create(
+                    SCOPE,
+                    id,
+                    &ImageRequest::generate(prompt),
+                    created,
+                    10,
+                    MAX_BYTES,
+                )
                 .await
                 .unwrap();
             assert!(store.claim(SCOPE, id, created + 1).await.unwrap());

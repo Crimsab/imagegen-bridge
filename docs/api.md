@@ -73,6 +73,13 @@ running jobs settle after cooperative cancellation. On restart, queued jobs
 resume, while previously running jobs become `interrupted`. They are never
 retried automatically because provider completion and billing may be
 ambiguous. Retention is bounded by both age and terminal-record count.
+`server.jobs.max_retained_bytes` also bounds the logical size of ordinary
+terminal history, while `server.jobs.max_database_bytes` is an admission budget
+covering queued, running, terminal, hidden, and favorite rows. Active jobs
+reserve bounded result-metadata space before acceptance, so completion cannot
+silently escape the global budget. Diagnostics report both logical accounting
+and the physical main SQLite file size; WAL pages and reusable free pages mean
+those two values are intentionally not identical.
 
 `GET /v1/jobs?limit=20&cursor=...&status=succeeded` uses an opaque, stable
 newest-first cursor. `limit` is `1..=100`. Optional `visibility` selects

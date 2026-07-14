@@ -298,7 +298,10 @@ impl BridgeConfig {
                 || self.server.jobs.max_pending == 0
                 || self.server.jobs.max_running == 0
                 || self.server.jobs.retention_secs == 0
-                || self.server.jobs.max_retained == 0)
+                || self.server.jobs.max_retained == 0
+                || self.server.jobs.max_retained_bytes == 0
+                || self.server.jobs.max_database_bytes == 0
+                || self.server.jobs.max_retained_bytes > self.server.jobs.max_database_bytes)
         {
             issue(
                 "server.jobs",

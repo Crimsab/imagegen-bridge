@@ -95,7 +95,7 @@ pub fn openapi_document() -> Value {
                             "configuration":{"version":1,"default_provider":"codex-app-server","listener_scope":"loopback","listener_port":8787,"authentication_required":true,"metrics_enabled":false,"jobs_enabled":true,"max_connections":256,"max_body_bytes":83_886_080,"read_timeout_ms":30000,"write_timeout_ms":30000,"provenance":[]},
                             "artifact_storage_enabled":true,
                             "runtime":{"global_queued":0,"providers_queued":{"codex-app-server":0}},
-                            "jobs":{"total":12,"queued":0,"running":1,"succeeded":10,"failed":1,"cancelled":0,"interrupted":0,"hidden":0,"database_bytes":40960,"active_workers":1,"max_pending":1000,"max_running":4,"retention_secs":604_800,"max_retained":10000},
+                            "jobs":{"total":12,"queued":0,"running":1,"succeeded":10,"failed":1,"cancelled":0,"interrupted":0,"hidden":0,"database_bytes":40960,"logical_bytes":1_048_576,"active_workers":1,"max_pending":1000,"max_running":4,"retention_secs":604_800,"max_retained":10000,"max_retained_bytes":268_435_456,"max_database_bytes":1_073_741_824},
                             "providers":[{"provider":"codex-app-server","status":"ready"}],
                             "events":{"capacity":256,"dropped":0,"items":[]}
                         })),
@@ -604,7 +604,7 @@ fn add_compatibility_schemas(schemas: &mut Map<String, Value>) {
     }));
     schemas.insert("JobManagerDiagnostics".to_owned(), json!({
         "type":"object","additionalProperties":false,
-        "required":["total","queued","running","succeeded","failed","cancelled","interrupted","hidden","database_bytes","active_workers","max_pending","max_running","retention_secs","max_retained"],
+        "required":["total","queued","running","succeeded","failed","cancelled","interrupted","hidden","database_bytes","logical_bytes","active_workers","max_pending","max_running","retention_secs","max_retained","max_retained_bytes","max_database_bytes"],
         "properties":{
             "total":{"type":"integer","minimum":0},
             "queued":{"type":"integer","minimum":0},
@@ -615,11 +615,14 @@ fn add_compatibility_schemas(schemas: &mut Map<String, Value>) {
             "interrupted":{"type":"integer","minimum":0},
             "hidden":{"type":"integer","minimum":0},
             "database_bytes":{"type":"integer","minimum":0},
+            "logical_bytes":{"type":"integer","minimum":0},
             "active_workers":{"type":"integer","minimum":0},
             "max_pending":{"type":"integer","minimum":1},
             "max_running":{"type":"integer","minimum":1},
             "retention_secs":{"type":"integer","minimum":1},
-            "max_retained":{"type":"integer","minimum":1}
+            "max_retained":{"type":"integer","minimum":1},
+            "max_retained_bytes":{"type":"integer","minimum":1},
+            "max_database_bytes":{"type":"integer","minimum":1}
         }
     }));
     schemas.insert(

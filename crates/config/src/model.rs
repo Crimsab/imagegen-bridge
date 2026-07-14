@@ -487,6 +487,10 @@ pub struct JobSettings {
     pub retention_secs: u64,
     /// Maximum terminal jobs retained after cleanup.
     pub max_retained: usize,
+    /// Maximum logical bytes retained across non-favorite terminal jobs.
+    pub max_retained_bytes: u64,
+    /// Maximum logical bytes admitted across every durable job row.
+    pub max_database_bytes: u64,
 }
 
 impl Default for JobSettings {
@@ -498,6 +502,8 @@ impl Default for JobSettings {
             max_running: 4,
             retention_secs: 7 * 24 * 60 * 60,
             max_retained: 10_000,
+            max_retained_bytes: 256 * 1024 * 1024,
+            max_database_bytes: 1024 * 1024 * 1024,
         }
     }
 }

@@ -1652,11 +1652,23 @@
             "minimum": 0,
             "type": "integer"
           },
+          "logical_bytes": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_database_bytes": {
+            "minimum": 1,
+            "type": "integer"
+          },
           "max_pending": {
             "minimum": 1,
             "type": "integer"
           },
           "max_retained": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_retained_bytes": {
             "minimum": 1,
             "type": "integer"
           },
@@ -1695,11 +1707,14 @@
           "interrupted",
           "hidden",
           "database_bytes",
+          "logical_bytes",
           "active_workers",
           "max_pending",
           "max_running",
           "retention_secs",
-          "max_retained"
+          "max_retained",
+          "max_retained_bytes",
+          "max_database_bytes"
         ],
         "type": "object"
       },
@@ -3104,8 +3119,11 @@
                     "failed": 1,
                     "hidden": 0,
                     "interrupted": 0,
+                    "logical_bytes": 1048576,
+                    "max_database_bytes": 1073741824,
                     "max_pending": 1000,
                     "max_retained": 10000,
+                    "max_retained_bytes": 268435456,
                     "max_running": 4,
                     "queued": 0,
                     "retention_secs": 604800,
@@ -3852,8 +3870,19 @@
         ]
       },
       "post": {
-        "description": "Persists and schedules an image operation. Durable jobs always use artifact delivery.",
+        "description": "Persists and schedules an image operation. Durable jobs always use artifact delivery. Replaying the same Idempotency-Key in the same authorization scope with an identical request returns the original job without scheduling duplicate provider work.",
         "operationId": "createImageJob",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "schema": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -3952,6 +3981,10 @@
           "401": {
             "$ref": "#/components/responses/ErrorResponse",
             "description": "Bridge authentication required"
+          },
+          "409": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Idempotency key conflicts with a different request"
           },
           "422": {
             "$ref": "#/components/responses/ErrorResponse",

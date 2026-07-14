@@ -68,6 +68,10 @@ pub struct JobManagerDiagnostics {
     pub retention_secs: u64,
     /// Maximum terminal rows retained after pruning.
     pub max_retained: usize,
+    /// Maximum logical bytes retained across ordinary terminal history.
+    pub max_retained_bytes: u64,
+    /// Maximum logical bytes admitted across every durable row.
+    pub max_database_bytes: u64,
 }
 
 impl std::fmt::Debug for JobManager {
@@ -93,6 +97,7 @@ impl JobManager {
                 unix_timestamp(),
                 settings.retention_secs,
                 settings.max_retained,
+                settings.max_retained_bytes,
             )
             .await?;
         let manager = Arc::new(Self {
@@ -148,6 +153,7 @@ impl JobManager {
                 &request,
                 unix_timestamp(),
                 self.settings.max_pending,
+                self.settings.max_database_bytes,
             )
             .await?;
         if job.created {
@@ -228,6 +234,8 @@ impl JobManager {
             max_running: self.settings.max_running,
             retention_secs: self.settings.retention_secs,
             max_retained: self.settings.max_retained,
+            max_retained_bytes: self.settings.max_retained_bytes,
+            max_database_bytes: self.settings.max_database_bytes,
         })
     }
 
@@ -273,6 +281,7 @@ impl JobManager {
                 unix_timestamp(),
                 self.settings.retention_secs,
                 self.settings.max_retained,
+                self.settings.max_retained_bytes,
             )
             .await
         {
@@ -324,9 +333,21 @@ impl JobManager {
 
         match result {
             Ok(response) => {
-                self.store
+                if let Err(error) = self
+                    .store
                     .succeed(&auth_scope, &id, &response, unix_timestamp())
-                    .await?;
+                    .await
+                {
+                    self.store
+                        .fail(
+                            &auth_scope,
+                            &id,
+                            ImageJobStatus::Failed,
+                            &error,
+                            unix_timestamp(),
+                        )
+                        .await?;
+                }
                 self.enforce_retention().await
             }
             Err(error) => {
