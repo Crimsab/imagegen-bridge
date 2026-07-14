@@ -16,16 +16,16 @@ categories.workspace = true
 base64 = "0.22"
 clap = { version = "4.5.60", features = ["derive", "env", "wrap_help"] }
 clap_complete = "4.5.66"
-clap_mangen = "0.2.33"
+clap_mangen = "0.3.0"
 imagegen-bridge = { path = "../imagegen-bridge", version = "0.1.0", features = ["codex-responses"] }
 imagegen-bridge-server = { path = "../server", version = "0.1.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 tempfile = "3.27.0"
 tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "process", "rt-multi-thread", "signal", "time"] }
 tokio-util = { version = "0.7", features = ["rt"] }
-toml = "0.9"
+toml = "1.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json"] }
 
