@@ -340,12 +340,19 @@ fn dispatch_message(
         .get("method")
         .and_then(Value::as_str)
         .ok_or_else(|| protocol_error("app-server notification has no method"))?;
+    if !is_forwarded_notification(method) {
+        return Ok(());
+    }
     let notification = RpcNotification {
         method: method.to_owned(),
         params: object.get("params").cloned().unwrap_or(Value::Null),
     };
     let _ = notifications.send(notification);
     Ok(())
+}
+
+fn is_forwarded_notification(method: &str) -> bool {
+    matches!(method, "item/completed" | "turn/completed")
 }
 
 fn rpc_response_error(value: &Value) -> BridgeError {
@@ -530,11 +537,34 @@ mod tests {
         let (rpc, mut server) = initialized_connection().await;
         let mut notifications = rpc.subscribe();
         server
-            .send(json!({"method": "turn/started", "params": {"threadId": "t"}}).to_string())
+            .send(json!({"method": "turn/completed", "params": {"threadId": "t"}}).to_string())
             .await
             .unwrap();
         let notification = notifications.recv().await.unwrap();
-        assert_eq!(notification.method, "turn/started");
+        assert_eq!(notification.method, "turn/completed");
+        assert_eq!(notification.params["threadId"], "t");
+    }
+
+    #[tokio::test]
+    async fn ignores_high_volume_notifications_that_no_consumer_uses() {
+        let (rpc, mut server) = initialized_connection().await;
+        let mut notifications = rpc.subscribe();
+        for index in 0..128 {
+            server
+                .send(
+                    json!({"method": "item/agentMessage/delta", "params": {"index": index}})
+                        .to_string(),
+                )
+                .await
+                .unwrap();
+        }
+        server
+            .send(json!({"method": "turn/completed", "params": {"threadId": "t"}}).to_string())
+            .await
+            .unwrap();
+
+        let notification = notifications.recv().await.unwrap();
+        assert_eq!(notification.method, "turn/completed");
         assert_eq!(notification.params["threadId"], "t");
     }
 
