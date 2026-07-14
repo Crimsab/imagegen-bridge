@@ -136,6 +136,11 @@ pub(crate) async fn run(
             action: "create_private_state_directory",
             target: effective_state_root.clone(),
         });
+    } else if private_directory_needs_repair(&effective_state_root)? {
+        changes.push(SetupChange {
+            action: "repair_private_state_directory",
+            target: effective_state_root.clone(),
+        });
     }
     if config.server.jobs.enabled
         && job_state_root != effective_state_root
@@ -143,6 +148,14 @@ pub(crate) async fn run(
     {
         changes.push(SetupChange {
             action: "create_private_job_state_directory",
+            target: job_state_root.clone(),
+        });
+    } else if config.server.jobs.enabled
+        && job_state_root != effective_state_root
+        && private_directory_needs_repair(&job_state_root)?
+    {
+        changes.push(SetupChange {
+            action: "repair_private_job_state_directory",
             target: job_state_root.clone(),
         });
     }
@@ -399,14 +412,14 @@ fn temporary_path(path: &Path) -> PathBuf {
 }
 
 fn create_directory(path: &Path, private: bool) -> Result<(), BridgeError> {
-    let existed = match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_dir() => true,
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_dir() => {}
         Ok(_) => return Err(input("setup directory path must not be a file or symlink")),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(_) => return Err(input("could not inspect setup directory")),
-    };
+    }
     fs::create_dir_all(path).map_err(|_| input("could not create setup directory"))?;
-    if private && !existed {
+    if private {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
@@ -415,6 +428,23 @@ fn create_directory(path: &Path, private: bool) -> Result<(), BridgeError> {
         }
     }
     Ok(())
+}
+
+fn private_directory_needs_repair(path: &Path) -> Result<bool, BridgeError> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|_| input("could not inspect setup directory permissions"))?;
+    if !metadata.file_type().is_dir() {
+        return Err(input("setup directory path must not be a file or symlink"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        Ok(metadata.permissions().mode() & 0o777 != 0o700)
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(false)
+    }
 }
 
 pub(crate) async fn probe_codex(executable: &Path) -> CodexStatus {
@@ -528,5 +558,24 @@ mod tests {
         std::os::unix::fs::symlink(&target, &link).unwrap();
         let error = create_directory(&link, true).unwrap_err();
         assert_eq!(error.code, ErrorCode::Input);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn setup_repairs_existing_private_directory_permissions() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory = tempfile::tempdir().unwrap();
+        let state = directory.path().join("state");
+        fs::create_dir(&state).unwrap();
+        fs::set_permissions(&state, fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(private_directory_needs_repair(&state).unwrap());
+
+        create_directory(&state, true).unwrap();
+        assert_eq!(
+            fs::metadata(&state).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert!(!private_directory_needs_repair(&state).unwrap());
     }
 }
