@@ -88,6 +88,9 @@ submit generation and edit requests, attach local edit/reference images as data
 URLs, discover provider capabilities, poll durable jobs, and manage favorite,
 hidden, restored, and cancelled states. Artifact previews are fetched as blobs
 through authenticated requests, so bearer tokens never appear in image URLs.
+Result details can copy the portable output directory from an artifact name.
+This deliberately copies `.` or a relative directory: the API does not expose
+the server's configured artifact root or offer a remote file-manager action.
 
 The dashboard shell is intentionally public because browser navigation cannot
 attach an Authorization header. It contains no prompt, history, provider result,

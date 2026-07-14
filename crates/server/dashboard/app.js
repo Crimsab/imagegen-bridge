@@ -64,6 +64,7 @@ const elements = {
 	jobDetail: document.querySelector("#job-detail"),
 	detailTitle: document.querySelector("#detail-title"),
 	detailKicker: document.querySelector("#detail-kicker"),
+	detailMessage: document.querySelector("#detail-message"),
 	closeDetail: document.querySelector("#close-detail-button"),
 };
 
@@ -643,6 +644,7 @@ function summaryFromJob(job) {
 
 async function showJob(id) {
 	elements.detailTitle.textContent = "Loading operation";
+	setMessage(elements.detailMessage);
 	elements.jobDetail.replaceChildren(create("div", "skeleton"));
 	elements.jobDialog.showModal();
 	try {
@@ -675,15 +677,22 @@ function renderDetail(job) {
 		open.append(image);
 		open.addEventListener("click", () => openArtifact(output.id));
 		const caption = create("figcaption");
+		const imageActions = create("span", "detail-image-actions");
+		imageActions.append(
+			makeButton("Copy folder", "secondary compact", () =>
+				copyArtifactFolder(output),
+			),
+			makeButton("Download", "secondary compact detail-download", () =>
+				downloadArtifact(output),
+			),
+		);
 		caption.append(
 			create(
 				"span",
 				"",
 				`${output.width} x ${output.height} · ${output.format.toUpperCase()} · ${formatBytes(output.bytes)}`,
 			),
-			makeButton("Download", "secondary compact detail-download", () =>
-				downloadArtifact(output),
-			),
+			imageActions,
 		);
 		figure.append(open, caption);
 		images.append(figure);
@@ -833,6 +842,48 @@ async function downloadArtifact(output) {
 	} catch (error) {
 		handleError(error);
 	}
+}
+
+async function copyArtifactFolder(output) {
+	const name = typeof output.name === "string" ? output.name : "";
+	const parts = name.split("/").filter(Boolean);
+	const folder = parts.length > 1 ? parts.slice(0, -1).join("/") : ".";
+	try {
+		await copyText(folder);
+		setMessage(
+			elements.detailMessage,
+			`Copied portable output folder: ${folder}`,
+			"ready",
+		);
+	} catch {
+		setMessage(
+			elements.detailMessage,
+			`Could not copy the portable output folder. Folder: ${folder}`,
+			"error",
+		);
+	}
+}
+
+async function copyText(value) {
+	if (navigator.clipboard?.writeText) {
+		try {
+			await navigator.clipboard.writeText(value);
+			return;
+		} catch {
+			// Fall through for browsers that expose but deny the async clipboard API.
+		}
+	}
+	const input = create("textarea");
+	input.value = value;
+	input.readOnly = true;
+	input.setAttribute("aria-hidden", "true");
+	input.style.position = "fixed";
+	input.style.opacity = "0";
+	document.body.append(input);
+	input.select();
+	const copied = document.execCommand("copy");
+	input.remove();
+	if (!copied) throw new Error("clipboard unavailable");
 }
 
 async function submitGeneration(event) {

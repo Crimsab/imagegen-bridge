@@ -201,8 +201,10 @@ same Rust process and needs no Node runtime, static-file server, CDN, or build
 step. It supports generation and edit uploads, provider/model selection,
 capability-aware controls, durable queue progress, cancellation confirmations,
 server-side prompt search, favorites, hide/restore, verified thumbnails,
-full-image viewing and download, timings, revised prompts, and raw retained
-metadata. When bridge bearer authentication is enabled, enter the
+full-image viewing and download, portable output-folder copy, timings, revised
+prompts, and raw retained metadata. The copied folder is relative to the
+configured artifact root; the browser never receives a host filesystem path.
+When bridge bearer authentication is enabled, enter the
 token in the Connection dialog; it is kept in `sessionStorage` for that browser
 tab and is never placed in a URL. The HTML shell contains no job or prompt data.
 

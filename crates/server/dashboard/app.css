@@ -932,7 +932,13 @@
 		padding: 0.55rem;
 	}
 
-	.detail-image .detail-download {
+	.detail-image-actions {
+		display: flex;
+		flex: 0 0 auto;
+		gap: 0.35rem;
+	}
+
+	.detail-image-actions .button {
 		font-family: var(--font-body);
 		font-size: 0.72rem;
 		inline-size: auto;

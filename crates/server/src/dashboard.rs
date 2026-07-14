@@ -108,6 +108,8 @@ mod tests {
         assert!(INDEX_HTML.contains("/dashboard/app.css"));
         assert!(INDEX_HTML.contains("/dashboard/app.js"));
         assert!(INDEX_HTML.contains("type=\"module\""));
+        assert!(INDEX_HTML.contains("id=\"detail-message\""));
+        assert!(APP_JS.contains("copyArtifactFolder"));
         assert!(!INDEX_HTML.contains("<script>"));
         assert!(!INDEX_HTML.contains("style=\""));
     }
