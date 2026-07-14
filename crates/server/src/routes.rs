@@ -33,6 +33,7 @@ use crate::{
     ApiError, JobManager,
     auth::{AuthPolicy, AuthScope, authorize},
     compat::{edit_compatible, generate_compatible},
+    dashboard_router,
     metrics::ServerMetrics,
     openapi::openapi_document,
     streaming::stream_image,
@@ -178,13 +179,17 @@ pub fn router(state: ServerState, settings: &ServerSettings) -> Router {
             .route("/v1/artifacts/{id}/thumbnail", get(get_artifact_thumbnail));
     }
     let protected = protected.route_layer(middleware::from_fn_with_state(state.clone(), authorize));
-    Router::new()
+    let mut public = Router::new()
         .route("/health/live", get(liveness))
         .route("/health/ready", get(readiness))
         .route(
             "/v1/openapi.json",
             get(|| async { Json(openapi_document()) }),
-        )
+        );
+    if state.jobs.is_some() {
+        public = public.merge(dashboard_router());
+    }
+    public
         .merge(protected)
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(not_found)
@@ -1318,6 +1323,34 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        jobs.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn embedded_dashboard_is_available_only_with_durable_jobs() {
+        let directory = tempfile::tempdir().unwrap();
+        let (app, jobs) = test_job_router(directory.path()).await;
+        for (path, content_type) in [
+            ("/dashboard", "text/html; charset=utf-8"),
+            ("/dashboard/", "text/html; charset=utf-8"),
+            ("/dashboard/app.css", "text/css; charset=utf-8"),
+            ("/dashboard/app.js", "text/javascript; charset=utf-8"),
+            ("/dashboard/api.js", "text/javascript; charset=utf-8"),
+            ("/dashboard/form.js", "text/javascript; charset=utf-8"),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(Request::get(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            assert_eq!(response.headers()[header::CONTENT_TYPE], content_type);
+        }
+        let disabled = test_router(None)
+            .oneshot(Request::get("/dashboard").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(disabled.status(), StatusCode::NOT_FOUND);
         jobs.shutdown().await;
     }
 

@@ -15,9 +15,8 @@ The project has two Codex transports:
   notice.
 
 The repository is pre-release. Build it from source; no crates, Python wheels,
-npm packages, binaries, or container images are published yet. A guided setup
-and deep diagnostic command are included. The embedded dashboard is not
-implemented yet.
+npm packages, binaries, or container images are published yet. A guided setup,
+deep diagnostic command, and embedded browser dashboard are included.
 
 ## What is implemented
 
@@ -39,6 +38,8 @@ implemented yet.
 - A native JSON API plus OpenAI-familiar generation and multipart edit routes.
 - Durable asynchronous jobs with a bounded SQLite queue, restart-safe history,
   cancellation, progress snapshots, artifact-only results, and cursor pagination.
+- A dependency-free embedded dashboard for generation, edits, reference images,
+  advanced controls, authenticated previews, metadata, and history management.
 - Optional bridge bearer authentication, readiness checks, JSON tracing, and
   Prometheus metrics.
 - Rust library facade and typed Python and TypeScript HTTP clients.
@@ -183,6 +184,15 @@ Start the server on loopback:
 imagegen-bridge serve --bind 127.0.0.1:8787
 ```
 
+Then open `http://127.0.0.1:8787/dashboard`. The dashboard is served by the
+same Rust process and needs no Node runtime, static-file server, CDN, or build
+step. It supports generation and edit uploads, provider/model selection,
+capability-aware controls, durable queue progress, cancellation, favorites,
+hide/restore, verified thumbnails, full images, timings, revised prompts, and
+raw retained metadata. When bridge bearer authentication is enabled, enter the
+token in the Connection dialog; it is kept in `sessionStorage` for that browser
+tab and is never placed in a URL. The HTML shell contains no job or prompt data.
+
 Minimal native request:
 
 ```sh
@@ -221,6 +231,7 @@ Important routes:
 
 | Route | Purpose |
 | --- | --- |
+| `GET /dashboard` | Embedded dependency-free generation and history UI |
 | `POST /v1/images` | Lossless native generation/edit contract |
 | `POST /v1/images/generations` | OpenAI-familiar JSON generation |
 | `POST /v1/images/edits` | OpenAI-familiar multipart editing |
@@ -297,8 +308,8 @@ or exposing the API on a network.
 ## Testing
 
 The ordinary test suite uses fake Codex processes, mock HTTP servers, golden SSE
-fixtures, and independently decoded image fixtures. It does not generate paid
-images.
+fixtures, and independently decoded image fixtures. The shared mock server also
+mounts the real embedded dashboard for browser QA without paid generation.
 
 ```sh
 cargo fmt --all --check

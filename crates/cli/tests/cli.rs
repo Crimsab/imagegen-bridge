@@ -588,6 +588,17 @@ database = "{root}/jobs.sqlite3"
         "daemon never served liveness"
     );
 
+    let mut dashboard_stream = std::net::TcpStream::connect(address).expect("dashboard connection");
+    dashboard_stream
+        .write_all(b"GET /dashboard HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        .expect("write dashboard request");
+    let mut dashboard = String::new();
+    dashboard_stream
+        .read_to_string(&mut dashboard)
+        .expect("read dashboard response");
+    assert!(dashboard.contains("200 OK"));
+    assert!(dashboard.contains("<title>Imagegen Bridge</title>"));
+
     let request_body =
         r#"{"prompt":"trace-secret prompt","operation":"generate","parameters":{"n":0}}"#;
     let mut stream = std::net::TcpStream::connect(address).expect("generation connection");

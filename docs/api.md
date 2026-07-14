@@ -65,6 +65,24 @@ image decode, and return only verified PNG/JPEG/WebP bytes. Thumbnail requests
 run off the async reactor, accept a `32..=2048` maximum edge, preserve aspect
 ratio, and always return a verified PNG with private immutable caching.
 
+## Embedded dashboard
+
+When durable jobs are enabled, `GET /dashboard` serves a static HTML, CSS, and
+native JavaScript application embedded in the server binary. It adds no runtime
+process, package manager, CDN request, or writable static directory. The UI can
+submit generation and edit requests, attach local edit/reference images as data
+URLs, discover provider capabilities, poll durable jobs, and manage favorite,
+hidden, restored, and cancelled states. Artifact previews are fetched as blobs
+through authenticated requests, so bearer tokens never appear in image URLs.
+
+The dashboard shell is intentionally public because browser navigation cannot
+attach an Authorization header. It contains no prompt, history, provider result,
+credential, or artifact data. Every data API and artifact request remains under
+the normal bridge bearer policy. A token entered in the Connection dialog is
+stored only in the tab's `sessionStorage`. Responses use a self-only content
+security policy, deny framing, disable referrers, and do not permit inline script
+or style execution. Disabling `server.jobs.enabled` removes all dashboard routes.
+
 Native multi-image requests accept `parameters.failure_policy` as `fail_fast`
 or `best_effort`. Results retain the requested `index` and optional
 `generation_ms`; best-effort responses add structured per-index `failures` and

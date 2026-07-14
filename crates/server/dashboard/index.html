@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="description" content="Local operations dashboard for Imagegen Bridge">
+    <title>Imagegen Bridge</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/dashboard/app.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#workspace">Skip to workspace</a>
+    <header class="app-header">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">IB</span>
+        <div>
+          <p>Imagegen Bridge</p>
+          <h1>Generation desk</h1>
+        </div>
+      </div>
+      <div class="header-actions">
+        <output id="connection-status" class="connection-status" aria-live="polite">Connecting</output>
+        <button id="connection-button" class="button secondary" type="button">Connection</button>
+        <button id="refresh-button" class="button secondary" type="button">Refresh</button>
+      </div>
+    </header>
+
+    <main id="workspace" class="workspace">
+      <section class="composer" aria-labelledby="composer-title">
+        <div class="section-heading">
+          <div>
+            <p class="kicker">New operation</p>
+            <h2 id="composer-title">Create with Codex</h2>
+          </div>
+          <span id="provider-note" class="quiet">Provider default</span>
+        </div>
+
+        <form id="generation-form">
+          <label class="field prompt-field">
+            <span>Prompt</span>
+            <textarea id="prompt" name="prompt" rows="5" required maxlength="131072" placeholder="Describe the image you want to create"></textarea>
+          </label>
+
+          <div class="field-grid compact-grid">
+            <label class="field">
+              <span>Operation</span>
+              <select id="operation" name="operation">
+                <option value="generate">Generate</option>
+                <option value="edit">Edit</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Provider</span>
+              <select id="provider" name="provider">
+                <option value="">Default</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Images</span>
+              <input id="count" name="count" type="number" min="1" max="16" value="1" inputmode="numeric">
+            </label>
+          </div>
+
+          <div id="image-inputs" class="input-files" hidden>
+            <label id="edit-images-field" class="field" hidden>
+              <span>Images to edit</span>
+              <input id="edit-images" name="edit-images" type="file" accept="image/png,image/jpeg,image/webp" multiple>
+            </label>
+            <label id="mask-field" class="field" hidden>
+              <span>Mask</span>
+              <input id="mask" name="mask" type="file" accept="image/png,image/webp">
+            </label>
+            <label class="field">
+              <span>Reference images</span>
+              <input id="reference-images" name="reference-images" type="file" accept="image/png,image/jpeg,image/webp" multiple>
+            </label>
+          </div>
+
+          <details class="advanced">
+            <summary>Advanced controls</summary>
+            <div class="advanced-body">
+              <label class="field field-wide">
+                <span>Negative prompt</span>
+                <textarea id="negative-prompt" name="negative-prompt" rows="2" maxlength="65536" placeholder="Optional exclusions or constraints"></textarea>
+              </label>
+              <label class="field">
+                <span>Model</span>
+                <input id="model" name="model" type="text" list="known-models" placeholder="Provider default" autocomplete="off">
+                <datalist id="known-models">
+                  <option value="gpt-image-2"></option>
+                  <option value="gpt-image-1.5"></option>
+                  <option value="gpt-image-1"></option>
+                  <option value="gpt-image-1-mini"></option>
+                </datalist>
+              </label>
+              <label class="field">
+                <span>Size</span>
+                <select id="size" name="size">
+                  <option value="auto">Auto</option>
+                  <option value="1024x1024">1024 x 1024</option>
+                  <option value="1536x1024">1536 x 1024</option>
+                  <option value="1024x1536">1024 x 1536</option>
+                  <option value="512x512">512 x 512</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Aspect ratio</span>
+                <input id="aspect-ratio" name="aspect-ratio" type="text" placeholder="For example 16:9" pattern="[1-9][0-9]*:[1-9][0-9]*" autocomplete="off">
+              </label>
+              <label class="field">
+                <span>Resolution</span>
+                <select id="resolution" name="resolution">
+                  <option value="">Automatic</option>
+                  <option value="1k">1K</option>
+                  <option value="2k">2K</option>
+                  <option value="4k">4K</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Quality</span>
+                <select id="quality" name="quality">
+                  <option value="auto">Auto</option>
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Format</span>
+                <select id="format" name="format">
+                  <option value="png">PNG</option>
+                  <option value="jpeg">JPEG</option>
+                  <option value="webp">WebP</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Compression</span>
+                <input id="compression" name="compression" type="number" min="0" max="100" placeholder="Provider default" inputmode="numeric">
+              </label>
+              <label class="field">
+                <span>Background</span>
+                <select id="background" name="background">
+                  <option value="auto">Auto</option>
+                  <option value="opaque">Opaque</option>
+                  <option value="transparent">Transparent</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Moderation</span>
+                <select id="moderation" name="moderation">
+                  <option value="auto">Auto</option>
+                  <option value="low">Low</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Partial images</span>
+                <input id="partial-images" name="partial-images" type="number" min="0" max="3" value="0" inputmode="numeric">
+              </label>
+              <label class="field">
+                <span>Input fidelity</span>
+                <select id="input-fidelity" name="input-fidelity">
+                  <option value="">Automatic</option>
+                  <option value="low">Low</option>
+                  <option value="high">High</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Failure policy</span>
+                <select id="failure-policy" name="failure-policy">
+                  <option value="fail_fast">Fail fast</option>
+                  <option value="best_effort">Best effort</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Compatibility</span>
+                <select id="compatibility" name="compatibility">
+                  <option value="best_effort">Best effort</option>
+                  <option value="normalize">Normalize</option>
+                  <option value="strict">Strict</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Negative prompt policy</span>
+                <select id="negative-policy" name="negative-policy">
+                  <option value="auto">Auto</option>
+                  <option value="native">Native</option>
+                  <option value="merge">Merge</option>
+                  <option value="reject">Reject</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Revised prompt</span>
+                <select id="revised-prompt" name="revised-prompt">
+                  <option value="include">Include when available</option>
+                  <option value="omit">Hide</option>
+                  <option value="require">Require</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Artifact directory</span>
+                <input id="directory" name="directory" type="text" placeholder="dashboard" autocomplete="off">
+              </label>
+              <label class="field">
+                <span>Filename prefix</span>
+                <input id="filename-prefix" name="filename-prefix" type="text" placeholder="Optional prefix" autocomplete="off">
+              </label>
+              <label class="field">
+                <span>Exact filename</span>
+                <input id="filename" name="filename" type="text" placeholder="Single output only" autocomplete="off">
+              </label>
+              <label class="field">
+                <span>Filename collision</span>
+                <select id="collision" name="collision">
+                  <option value="error">Return an error</option>
+                  <option value="suffix">Allocate a suffix</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Metadata</span>
+                <select id="metadata" name="metadata">
+                  <option value="sidecar">Sidecar JSON</option>
+                  <option value="none">None</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Session mode</span>
+                <select id="session-mode" name="session-mode">
+                  <option value="isolated">Isolated</option>
+                  <option value="persistent">Persistent key</option>
+                  <option value="thread">Existing thread</option>
+                </select>
+              </label>
+              <label id="session-key-field" class="field" hidden>
+                <span>Session key</span>
+                <input id="session-key" name="session-key" type="text" autocomplete="off">
+              </label>
+              <label id="thread-id-field" class="field" hidden>
+                <span>Thread ID</span>
+                <input id="thread-id" name="thread-id" type="text" autocomplete="off">
+              </label>
+              <label class="field">
+                <span>Timeout in milliseconds</span>
+                <input id="timeout-ms" name="timeout-ms" type="number" min="1" placeholder="Runtime default" inputmode="numeric">
+              </label>
+              <label class="field">
+                <span>Idempotency key</span>
+                <input id="idempotency-key" name="idempotency-key" type="text" autocomplete="off">
+              </label>
+              <label class="field">
+                <span>User identifier</span>
+                <input id="user" name="user" type="text" autocomplete="off">
+              </label>
+            </div>
+          </details>
+
+          <div class="submit-row">
+            <p id="form-message" class="form-message" role="status" aria-live="polite"></p>
+            <button id="submit-button" class="button primary" type="submit">Queue operation</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="library" aria-labelledby="library-title">
+        <div class="section-heading library-heading">
+          <div>
+            <p class="kicker">Durable history</p>
+            <h2 id="library-title">Recent work</h2>
+          </div>
+          <div class="filters" aria-label="History filters">
+            <label>
+              <span class="sr-only">Filter by status</span>
+              <select id="status-filter">
+                <option value="">All statuses</option>
+                <option value="queued">Queued</option>
+                <option value="running">Running</option>
+                <option value="succeeded">Succeeded</option>
+                <option value="failed">Failed</option>
+                <option value="cancelled">Cancelled</option>
+                <option value="interrupted">Interrupted</option>
+              </select>
+            </label>
+            <label class="check-filter"><input id="favorites-filter" type="checkbox"> Favorites</label>
+            <label class="check-filter"><input id="deleted-filter" type="checkbox"> Hidden only</label>
+          </div>
+        </div>
+
+        <div id="library-message" class="library-message" role="status" aria-live="polite"></div>
+        <div id="job-grid" class="job-grid" aria-busy="true"></div>
+        <div class="load-more-row">
+          <button id="load-more-button" class="button secondary" type="button" hidden>Load older</button>
+        </div>
+      </section>
+    </main>
+
+    <dialog id="connection-dialog" class="dialog connection-dialog" aria-labelledby="connection-title">
+      <form method="dialog" class="dialog-body">
+        <div class="dialog-heading">
+          <div>
+            <p class="kicker">Local access</p>
+            <h2 id="connection-title">Connection</h2>
+          </div>
+          <button class="button secondary compact" value="cancel" type="submit">Close</button>
+        </div>
+        <p class="quiet">If bridge bearer authentication is enabled, enter the token here. It is kept only for this browser tab.</p>
+        <label class="field">
+          <span>Bearer token</span>
+          <input id="bearer-token" type="password" autocomplete="off" spellcheck="false">
+        </label>
+        <div class="dialog-actions">
+          <button id="clear-token-button" class="button secondary" type="button">Clear</button>
+          <button id="save-token-button" class="button primary" value="default" type="submit">Save and connect</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="job-dialog" class="dialog job-dialog" aria-labelledby="detail-title">
+      <div class="dialog-body">
+        <div class="dialog-heading">
+          <div>
+            <p id="detail-kicker" class="kicker">Job detail</p>
+            <h2 id="detail-title">Operation</h2>
+          </div>
+          <button id="close-detail-button" class="button secondary compact" type="button">Close</button>
+        </div>
+        <div id="job-detail"></div>
+      </div>
+    </dialog>
+
+    <script type="module" src="/dashboard/app.js"></script>
+  </body>
+</html>

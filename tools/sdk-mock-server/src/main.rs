@@ -10,6 +10,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use bytes::Bytes;
 use serde_json::{Value, json};
 
@@ -23,6 +24,9 @@ const CAPABILITIES_RESPONSE: &str =
     include_str!("../../../fixtures/sdk/capabilities-response.json");
 const SESSION_RESPONSE: &str = include_str!("../../../fixtures/sdk/session-response.json");
 const IMAGE_STREAM: &str = include_str!("../../../fixtures/sdk/image-stream.sse");
+const ONE_PIXEL_PNG: &str =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+const ARTIFACT_ID: &str = "019f0000-0000-7000-8000-000000000002";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -41,7 +45,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/v1/providers", get(providers))
         .route("/v1/providers/{provider}/capabilities", get(capabilities))
-        .route("/v1/sessions/{key}", get(session).delete(delete_session));
+        .route("/v1/sessions/{key}", get(session).delete(delete_session))
+        .route("/v1/artifacts/{id}", get(artifact))
+        .route("/v1/artifacts/{id}/thumbnail", get(artifact))
+        .merge(imagegen_bridge_server::dashboard_router());
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
@@ -147,7 +154,9 @@ async fn create_job(headers: HeaderMap, Json(request): Json<Value>) -> Response 
             "shared request fixture is invalid",
         );
     };
-    if request != expected {
+    let dashboard_request =
+        serde_json::from_value::<imagegen_bridge_core::ImageRequest>(request.clone()).is_ok();
+    if request != expected && !dashboard_request {
         return error(
             StatusCode::UNPROCESSABLE_ENTITY,
             "job request did not match fixture",
@@ -201,7 +210,14 @@ async fn update_job(
     if id != "019f0000-0000-7000-8000-000000000001" {
         return error(StatusCode::NOT_FOUND, "job was not found");
     }
-    if update != json!({"favorite": true, "deleted": false}) {
+    let valid = update.as_object().is_some_and(|fields| {
+        !fields.is_empty()
+            && fields
+                .keys()
+                .all(|key| matches!(key.as_str(), "favorite" | "deleted"))
+            && fields.values().all(Value::is_boolean)
+    });
+    if !valid {
         return error(
             StatusCode::UNPROCESSABLE_ENTITY,
             "job update did not match fixture",
@@ -210,7 +226,12 @@ async fn update_job(
     let Some(mut job) = job_value("succeeded", true) else {
         return error(StatusCode::INTERNAL_SERVER_ERROR, "job fixture is invalid");
     };
-    job["favorite"] = Value::Bool(true);
+    if let Some(favorite) = update.get("favorite") {
+        job["favorite"] = favorite.clone();
+    }
+    if update.get("deleted").and_then(Value::as_bool) == Some(true) {
+        job["deleted"] = Value::Number(1_783_960_002_u64.into());
+    }
     fixture_response(StatusCode::OK, &job.to_string(), "application/json")
 }
 
@@ -240,7 +261,7 @@ fn job_value(status: &str, include_detail: bool) -> Option<Value> {
         result["id"] = value["id"].clone();
         result["data"][0] = json!({
             "type":"artifact",
-            "id":"019f0000-0000-7000-8000-000000000002",
+            "id":ARTIFACT_ID,
             "name":"fixture.png",
             "index":0,
             "format":"png",
@@ -287,6 +308,22 @@ async fn delete_session(headers: HeaderMap, Path(key): Path<String>) -> Response
         return error(StatusCode::NOT_FOUND, "session was not found");
     }
     response_with_headers(StatusCode::NO_CONTENT, Body::empty(), "application/json")
+}
+
+async fn artifact(headers: HeaderMap, Path(id): Path<String>) -> Response {
+    if let Some(response) = authenticate(&headers) {
+        return response;
+    }
+    if id != ARTIFACT_ID {
+        return error(StatusCode::NOT_FOUND, "artifact was not found");
+    }
+    let Ok(bytes) = STANDARD.decode(ONE_PIXEL_PNG) else {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "artifact fixture is invalid",
+        );
+    };
+    response_with_headers(StatusCode::OK, Body::from(bytes), "image/png")
 }
 
 fn authenticate(headers: &HeaderMap) -> Option<Response> {

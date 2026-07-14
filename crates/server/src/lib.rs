@@ -2,6 +2,7 @@
 
 mod auth;
 mod compat;
+mod dashboard;
 mod error;
 mod jobs;
 mod metrics;
@@ -10,6 +11,7 @@ mod routes;
 mod serve;
 mod streaming;
 
+pub use dashboard::dashboard_router;
 pub use error::*;
 pub use jobs::*;
 pub use openapi::*;

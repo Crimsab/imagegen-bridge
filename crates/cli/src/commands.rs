@@ -493,6 +493,9 @@ async fn serve_command(
         ServerState::from_settings(application.runtime().clone(), &resolved.config.server).await?;
     let jobs = state.jobs.clone();
     output.status(&format!("listening on http://{local}"))?;
+    if resolved.config.server.jobs.enabled {
+        output.status(&format!("dashboard at http://{local}/dashboard"))?;
+    }
     let result = serve(
         listener,
         router(state, &resolved.config.server),

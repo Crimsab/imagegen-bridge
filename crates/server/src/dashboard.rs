@@ -1,0 +1,114 @@
+//! Embedded, dependency-free browser dashboard assets.
+
+use axum::{
+    Router,
+    http::{HeaderMap, HeaderValue, header},
+    response::{IntoResponse, Response},
+    routing::get,
+};
+
+const INDEX_HTML: &str = include_str!("../dashboard/index.html");
+const APP_CSS: &str = include_str!("../dashboard/app.css");
+const APP_JS: &str = include_str!("../dashboard/app.js");
+const API_JS: &str = include_str!("../dashboard/api.js");
+const FORM_JS: &str = include_str!("../dashboard/form.js");
+
+const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; img-src 'self' blob: data:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
+
+/// Returns the self-contained dashboard route graph for same-origin bridge APIs.
+pub fn dashboard_router<S>() -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/dashboard", get(index))
+        .route("/dashboard/", get(index))
+        .route("/dashboard/app.css", get(stylesheet))
+        .route("/dashboard/app.js", get(script))
+        .route("/dashboard/api.js", get(api_script))
+        .route("/dashboard/form.js", get(form_script))
+}
+
+async fn index() -> Response {
+    asset_response(INDEX_HTML, "text/html; charset=utf-8", true)
+}
+
+async fn stylesheet() -> Response {
+    asset_response(APP_CSS, "text/css; charset=utf-8", false)
+}
+
+async fn script() -> Response {
+    asset_response(APP_JS, "text/javascript; charset=utf-8", false)
+}
+
+async fn api_script() -> Response {
+    asset_response(API_JS, "text/javascript; charset=utf-8", false)
+}
+
+async fn form_script() -> Response {
+    asset_response(FORM_JS, "text/javascript; charset=utf-8", false)
+}
+
+fn asset_response(body: &'static str, content_type: &'static str, document: bool) -> Response {
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, max-age=0"),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    headers.insert(
+        "cross-origin-resource-policy",
+        HeaderValue::from_static("same-origin"),
+    );
+    if document {
+        headers.insert(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(CONTENT_SECURITY_POLICY),
+        );
+        headers.insert("x-frame-options", HeaderValue::from_static("DENY"));
+        headers.insert(
+            "permissions-policy",
+            HeaderValue::from_static(
+                "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+            ),
+        );
+    }
+    (headers, body).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    #[tokio::test]
+    async fn document_has_strict_headers_and_external_assets() {
+        let response = index().await;
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            "text/html; charset=utf-8"
+        );
+        assert_eq!(
+            response.headers()[header::X_CONTENT_TYPE_OPTIONS],
+            "nosniff"
+        );
+        assert_eq!(
+            response.headers()[header::CONTENT_SECURITY_POLICY],
+            CONTENT_SECURITY_POLICY
+        );
+        assert!(INDEX_HTML.contains("/dashboard/app.css"));
+        assert!(INDEX_HTML.contains("/dashboard/app.js"));
+        assert!(INDEX_HTML.contains("type=\"module\""));
+        assert!(!INDEX_HTML.contains("<script>"));
+        assert!(!INDEX_HTML.contains("style=\""));
+    }
+}

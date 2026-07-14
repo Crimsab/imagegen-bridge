@@ -163,7 +163,8 @@ imagegen-bridge serve --bind 127.0.0.1:9000
 
 Session deletion and artifact cleanup require `--force`; their `--dry-run`
 forms are non-mutating. `serve` reports its listener on stderr and stops
-gracefully on Ctrl-C/SIGINT.
+gracefully on Ctrl-C/SIGINT. With durable jobs enabled it also reports the
+embedded dashboard URL, normally `http://127.0.0.1:8787/dashboard`.
 
 ## Configuration, diagnostics, and schemas
 
