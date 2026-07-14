@@ -9,6 +9,8 @@ use crate::{
 };
 
 const MAX_EMBEDDED_REQUEST_TEXT_BYTES: usize = 12 * 1024;
+const MAX_VALIDATION_ISSUES: usize = 64;
+const MAX_DETAILED_INPUT_VALIDATIONS: usize = 64;
 
 /// Configurable limits applied before provider negotiation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -74,13 +76,18 @@ pub fn validate_request(request: &ImageRequest, limits: RequestLimits) -> Result
 /// Returns all intrinsic issues in deterministic field order.
 #[must_use]
 pub fn validation_issues(request: &ImageRequest, limits: RequestLimits) -> Vec<ValidationIssue> {
-    let mut issues = Vec::new();
+    let mut issues = Vec::with_capacity(MAX_VALIDATION_ISSUES);
+    let mut issues_truncated = false;
     let mut issue = |field: &str, code: &str, message: &str| {
-        issues.push(ValidationIssue {
-            field: field.to_owned(),
-            code: code.to_owned(),
-            message: message.to_owned(),
-        });
+        if issues.len() < MAX_VALIDATION_ISSUES - 1 {
+            issues.push(ValidationIssue {
+                field: field.to_owned(),
+                code: code.to_owned(),
+                message: message.to_owned(),
+            });
+        } else {
+            issues_truncated = true;
+        }
     };
 
     if request.version != crate::CONTRACT_VERSION {
@@ -363,7 +370,7 @@ pub fn validation_issues(request: &ImageRequest, limits: RequestLimits) -> Vec<V
     }
 
     let (edit_images, mask, references) = match &request.operation {
-        ImageOperation::Generate { reference_images } => (0, false, reference_images.as_slice()),
+        ImageOperation::Generate { reference_images } => (0, None, reference_images.as_slice()),
         ImageOperation::Edit {
             images,
             mask,
@@ -376,29 +383,46 @@ pub fn validation_issues(request: &ImageRequest, limits: RequestLimits) -> Vec<V
                     "edit operation requires at least one source image",
                 );
             }
-            for (index, input) in images.iter().enumerate() {
-                validate_input(input, &format!("images[{index}]"), limits, &mut issue);
-            }
-            if let Some(mask) = mask {
-                validate_input(mask, "mask", limits, &mut issue);
-            }
-            (images.len(), mask.is_some(), reference_images.as_slice())
+            (images.len(), mask.as_ref(), reference_images.as_slice())
         }
     };
-    for (index, input) in references.iter().enumerate() {
-        validate_input(
-            input,
-            &format!("reference_images[{index}]"),
-            limits,
-            &mut issue,
-        );
-    }
-    let input_count = edit_images + usize::from(mask) + references.len();
+    let input_count = edit_images
+        .saturating_add(usize::from(mask.is_some()))
+        .saturating_add(references.len());
     if input_count > limits.max_inputs {
         issue(
             "operation",
             "too_many_inputs",
             "total input image count exceeds the configured limit",
+        );
+    }
+    let mut detailed_inputs = 0_usize;
+    if let ImageOperation::Edit { images, .. } = &request.operation {
+        for (index, input) in images
+            .iter()
+            .take(MAX_DETAILED_INPUT_VALIDATIONS)
+            .enumerate()
+        {
+            validate_input(input, &format!("images[{index}]"), limits, &mut issue);
+            detailed_inputs += 1;
+        }
+    }
+    if let Some(mask) = mask
+        && detailed_inputs < MAX_DETAILED_INPUT_VALIDATIONS
+    {
+        validate_input(mask, "mask", limits, &mut issue);
+        detailed_inputs += 1;
+    }
+    for (index, input) in references
+        .iter()
+        .take(MAX_DETAILED_INPUT_VALIDATIONS.saturating_sub(detailed_inputs))
+        .enumerate()
+    {
+        validate_input(
+            input,
+            &format!("reference_images[{index}]"),
+            limits,
+            &mut issue,
         );
     }
     if request.parameters.input_fidelity.is_some() && edit_images + references.len() == 0 {
@@ -426,6 +450,13 @@ pub fn validation_issues(request: &ImageRequest, limits: RequestLimits) -> Vec<V
         _ => {}
     }
 
+    if issues_truncated {
+        issues.push(ValidationIssue {
+            field: "$".to_owned(),
+            code: "too_many_issues".to_owned(),
+            message: "additional validation issues were omitted".to_owned(),
+        });
+    }
     issues.sort_by(|left, right| {
         left.field
             .cmp(&right.field)
@@ -587,6 +618,28 @@ mod tests {
                 "timeout_ms"
             ]
         );
+    }
+
+    #[test]
+    fn validation_bounds_issue_and_input_amplification() {
+        let invalid = ImageInput {
+            source: ImageSource::Base64 {
+                data: String::new(),
+            },
+            media_type: None,
+            filename: Some("../invalid.png".to_owned()),
+        };
+        let mut request = ImageRequest::generate("test");
+        request.operation = ImageOperation::Edit {
+            images: vec![invalid; 10_000],
+            mask: None,
+            reference_images: Vec::new(),
+        };
+
+        let issues = validation_issues(&request, RequestLimits::default());
+        assert_eq!(issues.len(), MAX_VALIDATION_ISSUES);
+        assert!(issues.iter().any(|item| item.code == "too_many_inputs"));
+        assert!(issues.iter().any(|item| item.code == "too_many_issues"));
     }
 
     #[test]
