@@ -12,6 +12,7 @@ const APP_CSS: &str = include_str!("../dashboard/app.css");
 const APP_JS: &str = include_str!("../dashboard/app.js");
 const API_JS: &str = include_str!("../dashboard/api.js");
 const FORM_JS: &str = include_str!("../dashboard/form.js");
+const ICON_SVG: &str = include_str!("../dashboard/icon.svg");
 
 const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; img-src 'self' blob: data:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
 
@@ -27,6 +28,7 @@ where
         .route("/dashboard/app.js", get(script))
         .route("/dashboard/api.js", get(api_script))
         .route("/dashboard/form.js", get(form_script))
+        .route("/dashboard/icon.svg", get(icon))
 }
 
 async fn index() -> Response {
@@ -47,6 +49,10 @@ async fn api_script() -> Response {
 
 async fn form_script() -> Response {
     asset_response(FORM_JS, "text/javascript; charset=utf-8", false)
+}
+
+async fn icon() -> Response {
+    asset_response(ICON_SVG, "image/svg+xml", false)
 }
 
 fn asset_response(body: &'static str, content_type: &'static str, document: bool) -> Response {
@@ -107,6 +113,7 @@ mod tests {
         );
         assert!(INDEX_HTML.contains("/dashboard/app.css"));
         assert!(INDEX_HTML.contains("/dashboard/app.js"));
+        assert!(INDEX_HTML.contains("/dashboard/icon.svg"));
         assert!(INDEX_HTML.contains("type=\"module\""));
         assert!(INDEX_HTML.contains("id=\"detail-message\""));
         assert!(INDEX_HTML.contains("id=\"event-table-body\""));
@@ -117,6 +124,17 @@ mod tests {
         assert!(APP_JS.contains("loadPartialImage"));
         assert!(!INDEX_HTML.contains("<script>"));
         assert!(!INDEX_HTML.contains("style=\""));
+    }
+
+    #[tokio::test]
+    async fn icon_is_served_as_svg() {
+        let response = icon().await;
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "image/svg+xml");
+        assert_eq!(
+            response.headers()[header::X_CONTENT_TYPE_OPTIONS],
+            "nosniff"
+        );
+        assert!(ICON_SVG.contains("<title id=\"title\">Imagegen Bridge</title>"));
     }
 
     #[test]

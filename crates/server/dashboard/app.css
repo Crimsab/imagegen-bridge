@@ -225,18 +225,11 @@
 	}
 
 	.brand-mark {
-		align-items: center;
-		background: var(--text);
-		border-radius: var(--radius-small);
-		color: var(--surface);
-		display: inline-flex;
-		font-family: var(--font-mono);
-		font-size: 0.78rem;
-		font-weight: 700;
+		block-size: 2.65rem;
+		display: block;
+		flex: 0 0 auto;
 		inline-size: 2.4rem;
-		justify-content: center;
-		letter-spacing: -0.04em;
-		min-block-size: 2.4rem;
+		object-fit: contain;
 	}
 
 	.brand p {

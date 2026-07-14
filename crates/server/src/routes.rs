@@ -2185,6 +2185,7 @@ mod tests {
             ("/dashboard/app.js", "text/javascript; charset=utf-8"),
             ("/dashboard/api.js", "text/javascript; charset=utf-8"),
             ("/dashboard/form.js", "text/javascript; charset=utf-8"),
+            ("/dashboard/icon.svg", "image/svg+xml"),
         ] {
             let response = app
                 .clone()

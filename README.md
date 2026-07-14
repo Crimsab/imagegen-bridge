@@ -1,24 +1,31 @@
+<div align="center">
+  <img src="crates/server/dashboard/icon.svg" alt="Imagegen Bridge logo" width="144">
+
 # Imagegen Bridge
 
-Imagegen Bridge exposes image generation from an existing Codex OAuth login as
-a command-line tool, a local HTTP service, and typed Rust, Python, and
-TypeScript clients. Codex-backed usage does not require an `OPENAI_API_KEY`.
+**Use an existing Codex OAuth login for image generation through a CLI, local API, dashboard, or typed SDK.**
 
-The project has two Codex transports:
+[Quick start](#quick-start) · [CLI](docs/cli.md) · [HTTP API](docs/api.md) · [SDKs](docs/sdks.md) · [Deployment](docs/deployment.md)
 
-- `codex-app-server` uses the supported Codex app-server lifecycle. It handles
-  process supervision, reference images, edits, and persistent thread reuse,
-  but the current Codex image tool exposes only a small automatic parameter set.
-- `codex-responses` sends image-tool requests through the private Codex
-  Responses endpoint. It exposes more image controls and model selection, but
-  is opt-in and experimental because that upstream protocol can change without
-  notice.
+</div>
 
-The repository is pre-release. Build it from source; no crates, Python wheels,
-npm packages, binaries, or container images are published yet. A guided setup,
-deep diagnostic command, and embedded browser dashboard are included.
+<!-- Hero artwork slot: add docs/assets/hero.webp here when the final artwork is ready. -->
 
-## What is implemented
+Imagegen Bridge turns an existing Codex OAuth login into a command-line tool,
+local HTTP service, embedded dashboard, and typed Rust, Python, and TypeScript
+clients. Codex-backed usage does not require an `OPENAI_API_KEY`.
+
+> **Pre-release:** build from source. Crates, Python wheels, npm packages,
+> binaries, and container images are not published yet.
+
+### Choose a Codex transport
+
+| Transport | Status | Best for | Main constraint |
+| --- | --- | --- | --- |
+| `codex-app-server` | Default | Supported Codex lifecycle, reference images, edits, and reusable threads | The current image tool exposes a small automatic parameter set |
+| `codex-responses` | Opt-in, experimental | Model selection and more image controls | Uses a private upstream protocol that may change without notice |
+
+## Capabilities
 
 - Generation and reference-based editing through Codex OAuth.
 - Explicit provider/model capability discovery and request negotiation.
@@ -50,10 +57,10 @@ deep diagnostic command, and embedded browser dashboard are included.
 - Rust library facade and typed Python and TypeScript HTTP clients.
 - A non-root, read-only-compatible container build with a pinned Codex binary.
 
-The configuration contains a reserved official OpenAI provider section, but an
-API-key-backed OpenAI provider is not implemented or registered yet.
+The configuration reserves an official OpenAI provider section, but an
+API-key-backed OpenAI provider is not implemented or registered.
 
-## Build and authenticate
+## Quick start
 
 Requirements:
 
@@ -67,6 +74,10 @@ cd imagegen-bridge
 cargo build --locked --release -p imagegen-bridge-cli
 ./target/release/imagegen-bridge setup
 ./target/release/imagegen-bridge doctor
+./target/release/imagegen-bridge generate \
+  "A red paper fox on a charcoal background" \
+  --output first-image.png \
+  --preview
 ```
 
 You can also install the local checkout into Cargo's binary directory:
@@ -75,6 +86,8 @@ You can also install the local checkout into Cargo's binary directory:
 cargo install --locked --path crates/cli
 ```
 
+The final command performs a live Codex generation, writes `first-image.png`
+below the configured artifact root, and previews it in a supported terminal.
 `setup` detects Codex and ChatGPT OAuth, previews every filesystem change,
 writes a user configuration atomically, creates private state and artifact
 directories, and applies the session and job SQLite schemas idempotently. It
@@ -86,6 +99,8 @@ permissions, database schema, listener availability, provider readiness, and
 dynamic capabilities. `doctor --live-probe` adds one confirmed paid generation.
 
 ## CLI usage
+
+### Generate and store images
 
 Generate an artifact using the default app-server provider:
 
@@ -117,6 +132,8 @@ work.
 `--preview` renders in supported Kitty/iTerm2-compatible terminals and degrades
 to a status message elsewhere; `--open` launches the system image viewer.
 
+### Reuse presets
+
 Save and reuse complete settings across the CLI, API, and dashboard:
 
 ```sh
@@ -130,6 +147,8 @@ A preset can retain its own prompt, or the prompt on `generate`/`edit` can
 replace it. Image inputs, masks, reference-image bytes, and idempotency keys are
 never retained in presets.
 
+### Edit and use references
+
 Edit an image or add visual references:
 
 ```sh
@@ -139,6 +158,8 @@ imagegen-bridge edit \
   --reference ./palette.png \
   --response-format artifact
 ```
+
+### Reuse a Codex thread
 
 Use a persistent app-server thread:
 
@@ -154,6 +175,8 @@ imagegen-bridge generate \
   --response-format artifact
 ```
 
+### Discover and validate capabilities
+
 Inspect the effective provider surface before using advanced flags:
 
 ```sh
@@ -168,6 +191,8 @@ the response's `normalizations` field. `--dry-run` validates and prints the
 request without starting Codex or opening output storage. The current Codex
 transports reject `--user` explicitly because upstream attribution support has
 not been proven; they never silently discard it.
+
+### Generate multiple images
 
 Multi-image requests are available even when an upstream provider returns only
 one image per call. Provider discovery reports the effective `count` plus a
@@ -186,6 +211,8 @@ bounded concurrency, while `auto` remains session-aware.
 `failures`; every success and failure includes its output index and per-item
 generation time. Both direct API calls and durable dashboard jobs use this same
 pipeline.
+
+### Create transparent output
 
 Request transparent output from the default GPT Image 2 app-server path:
 
@@ -223,6 +250,8 @@ imagegen-bridge background remove keyed-input.png \
   --key auto
 ```
 
+### Configure fallbacks
+
 Provider fallback is opt-in and ordered:
 
 ```sh
@@ -240,6 +269,8 @@ safety rejections, cancellation, permission errors, session failures, or an
 operation whose upstream outcome is unknown. Fallbacks require isolated
 sessions. Successful responses expose ordered `attempts`; sidecar metadata
 retains the same trace.
+
+### Use the experimental Responses transport
 
 The Responses adapter forwards `action=auto|generate|edit`. The app-server path
 accepts only `auto`. An explicit `input_fidelity=high` is accepted for
