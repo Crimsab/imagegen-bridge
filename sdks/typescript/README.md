@@ -11,7 +11,10 @@ const bridge = new ImagegenBridgeClient({ baseUrl: "http://127.0.0.1:8787" });
 const result = await bridge.images.generate({
   operation: "generate",
   prompt: "a paper fox",
-  routing: { provider: "codex-app-server" },
+  routing: {
+    provider: "codex-app-server",
+    fallbacks: [{ provider: "codex-responses", model: "gpt-image-2" }],
+  },
   output: {
     response_format: "artifact",
     directory: "illustrations",
@@ -35,6 +38,9 @@ console.log(diagnostics.configuration.listener_scope, diagnostics.providers);
 
 Changing `routing.provider` is the only SDK change needed to select another
 configured provider.
+`routing.fallbacks` adds ordered provider/model alternatives; responses expose
+every attempted route. `output.transparency` controls native or local
+chroma-key alpha while `parameters.background` remains `transparent`.
 `output.metadata` accepts `none`, `sidecar`, `embedded`, or
 `sidecar_and_embedded`. Embedded XMP is carried inside the returned PNG, JPEG,
 or WebP bytes; the latter combined mode requires artifact output.

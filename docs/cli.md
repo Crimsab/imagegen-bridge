@@ -94,6 +94,9 @@ capabilities --json` and its `batching` field for the exact behavior. Isolated
 Codex app-server batches can run concurrently. `--session-key` and
 `--thread-id` batches are intentionally sequential so turns on one conversation
 remain ordered.
+Use `--batch-execution sequential` for one upstream fan-out call at a time or
+`--batch-execution parallel` to require configured bounded concurrency.
+`auto` is the default and becomes sequential for conversational sessions.
 
 `-o, --output FILE` selects an exact filename and is valid only when `n=1`.
 `--output-dir DIR` retains generated UUID filenames inside a per-call directory.
@@ -111,8 +114,9 @@ explicitly chosen and opts into a portable `metadata-<artifact-id>.json` file in
 the same directory as each image. It contains the original/effective prompt,
 negative prompt, operation summary without input paths or bytes,
 requested/effective parameters, normalization records, revised prompt,
-provider/model, usage, session, timings, warnings, and independently verified
-image properties. The response exposes its relative `metadata_name`; cleanup
+provider/model, ordered fallback attempts, usage, session, timings, warnings,
+and independently verified image properties. The response exposes its relative
+`metadata_name`; cleanup
 verifies and removes the owned image and sidecar together. Sidecars are off by
 default because prompt and session content may be sensitive.
 
@@ -141,7 +145,9 @@ against the configured root first.
 
 Advanced flags include `--negative-prompt`, `--negative-prompt-mode`,
 `--revised-prompt`, `--aspect-ratio`, `--resolution`, `--compression`,
-`--background`, `--moderation`, `--partial-images`, `--failure-policy`,
+`--background`, `--transparency`, `--chroma-key`, both chroma thresholds,
+`--no-despill`, `--fallback`, `--fallback-policy`, `--batch-execution`,
+`--moderation`, `--partial-images`, `--failure-policy`,
 `--input-fidelity`, `--action`, `--compatibility`, `--output`, `--output-dir`,
 `--collision`, `--metadata`, `--open`, `--preview`,
 `--session`, `--session-key`, `--thread-id`, `--idempotency-key`, and
@@ -166,6 +172,21 @@ silently discarded, including in `best_effort` mode.
 `--failure-policy best_effort` keeps successful outputs and reports failed
 indices in `failures`; this is separate from provider compatibility
 `--compatibility best_effort`.
+
+`--background transparent --transparency auto` prefers native alpha and
+otherwise uses the bridge's local chroma-key processor. The processor chooses
+a key color from the prompt, asks the model for a uniform keyed background,
+samples the actual output border, creates a soft alpha matte, despills edges,
+and rejects a missing/pathological matte. `native` requires provider support;
+`chroma_key` forces local processing. PNG and WebP preserve alpha. The offline
+equivalent is `background remove INPUT --output OUTPUT --key auto`.
+
+`--fallback PROVIDER[:MODEL]` is repeatable and ordered. The default
+`on_unavailable` policy reroutes only unavailable/unsupported conditions.
+`on_error` also permits errors with a known upstream outcome. Safety refusals,
+permission errors, cancellation, session errors, and unknown outcomes never
+reroute. Fallback requires an isolated session and successful responses expose
+the full route trace in `attempts`.
 
 `--input-fidelity low|high` requires at least one source/reference image.
 `gpt-image-2` accepts only `high` because its inputs are always processed at

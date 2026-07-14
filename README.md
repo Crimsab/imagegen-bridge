@@ -27,6 +27,11 @@ deep diagnostic command, and embedded browser dashboard are included.
 - Multiple images, size, quality, PNG/JPEG/WebP, compression, background,
   moderation, negative-prompt policy, revised-prompt policy, bounded
   concurrency, and explicit partial-failure behavior where supported.
+- Transparent output through provider-native alpha or a self-contained
+  GPT Image 2 chroma-key pipeline with prompt-aware key selection, border
+  sampling, soft matte, despill, and alpha validation.
+- Ordered provider/model fallback routes with conservative unknown-outcome and
+  safety guards plus an attempt trace in responses and sidecar metadata.
 - Capability-checked edit action and input fidelity. `gpt-image-2` image inputs
   are always high fidelity; older Responses-routed image models accept explicit
   `low`/`high`. Masks remain explicitly unsupported by both Codex transports.
@@ -159,12 +164,69 @@ isolated turns in flight (`providers.codex_app_server.max_outputs` and
 `max_parallel_outputs`). Persistent-key and explicit-thread batches are
 serialized to preserve conversation order. The Responses adapter supports the
 same four-output contract and uses its own `max_parallel_outputs` setting.
+`--batch-execution sequential` reproduces OpenClaw-style one-call-at-a-time
+fan-out for an isolated request; `parallel` explicitly selects the configured
+bounded concurrency, while `auto` remains session-aware.
 
 `failure_policy=fail_fast` cancels outstanding work on the first failure.
 `best_effort` returns successful images in requested-index order plus structured
 `failures`; every success and failure includes its output index and per-item
 generation time. Both direct API calls and durable dashboard jobs use this same
 pipeline.
+
+Request transparent output from the default GPT Image 2 app-server path:
+
+```sh
+imagegen-bridge generate \
+  "A small red fox mascot, full body" \
+  --background transparent \
+  --transparency auto \
+  --format png \
+  --output mascots/fox.png \
+  --metadata sidecar
+```
+
+`auto` uses provider-native alpha when available. Otherwise the bridge asks
+the current model for a flat prompt-aware chroma background, samples the
+actual generated border, removes it locally in Rust, normalizes fully
+transparent pixels, cleans color spill, and rejects unusable alpha mattes.
+`--transparency native` requires upstream alpha;
+`--transparency chroma_key` forces local processing. Advanced callers can set
+`--chroma-key`, both matte thresholds, and `--no-despill`. JPEG cannot carry
+alpha and is rejected in strict mode or normalized to PNG under an explicit
+compatibility policy.
+Provider discovery reports this distinction as
+`transparent_background=native|emulated|unsupported`; the raw `backgrounds`
+set continues to describe values accepted directly by the upstream adapter.
+This follows the generate-key-remove-validate strategy documented by OpenAI's
+[Hatch Pet skill](https://github.com/openai/skills/blob/main/skills/.curated/hatch-pet/SKILL.md),
+implemented here as a dependency-free Rust pipeline.
+
+The same processor works without a provider call:
+
+```sh
+imagegen-bridge background remove keyed-input.png \
+  --output transparent.png \
+  --key auto
+```
+
+Provider fallback is opt-in and ordered:
+
+```sh
+imagegen-bridge generate "A red paper fox" \
+  --provider codex-app-server \
+  --fallback codex-responses:gpt-image-2 \
+  --fallback-policy on_unavailable \
+  --response-format artifact
+```
+
+`on_unavailable` handles unavailable authentication/configuration, capacity,
+rate limits, and unsupported capabilities. `on_error` additionally permits
+known-outcome protocol, upstream, or artifact failures. Neither mode reroutes
+safety rejections, cancellation, permission errors, session failures, or an
+operation whose upstream outcome is unknown. Fallbacks require isolated
+sessions. Successful responses expose ordered `attempts`; sidecar metadata
+retains the same trace.
 
 The Responses adapter forwards `action=auto|generate|edit`. The app-server path
 accepts only `auto`. An explicit `input_fidelity=high` is accepted for
@@ -214,7 +276,8 @@ imagegen-bridge serve --bind 127.0.0.1:8787
 Then open `http://127.0.0.1:8787/dashboard`. The dashboard is served by the
 same Rust process and needs no Node runtime, static-file server, CDN, or build
 step. It supports generation and edit uploads, provider/model selection,
-capability-aware controls, durable queue progress, cancellation confirmations,
+capability-aware controls, transparency processing, ordered fallback routes,
+durable queue progress, cancellation confirmations,
 verified transient partial previews, server-side prompt search, favorites,
 hide/restore, verified thumbnails,
 full-image viewing and download, portable output-folder copy, timings, revised

@@ -155,9 +155,10 @@ artifact delivery and writes a bounded JSON object next to every image. The
 sidecar includes version/request identity, completion timestamp, a path-free
 operation summary, original/effective/negative prompts, effective policies,
 requested/effective parameters, normalizations, revised prompt, provider/model,
-usage, session, timings, warnings, and verified per-image dimensions, format,
-byte count and checksum. Its portable relative path is returned in each
-image's optional `metadata_name`. Sidecar JSON is independently checksummed in
+ordered provider attempts, usage, session, timings, warnings, and verified
+per-image dimensions, format, byte count and checksum. Its portable relative
+path is returned in each image's optional `metadata_name`. Sidecar JSON is
+independently checksummed in
 the ownership record and participates in conservative retention cleanup. It is
 an explicit privacy choice: deployments that publicly serve the artifact root
 must treat sidecars as equally public.
@@ -181,6 +182,20 @@ them in a stable order and names every removed field in `omitted_fields`; prompt
 text is never silently truncated. All metadata modes are explicit opt-ins
 because prompts and session identifiers become part of copied or publicly
 served files.
+
+`parameters.background=transparent` describes the requested result.
+`output.transparency.mode` selects `auto`, `native`, or `chroma_key`; auto uses
+native provider alpha when declared and otherwise performs local chroma-key
+removal. Optional `key_color`, `transparent_threshold`, `opaque_threshold`, and
+`despill` fields tune the deterministic matte. Final native and emulated alpha
+are independently decoded and validated. JPEG is not an alpha-capable output.
+
+`routing.fallbacks` is an ordered list of `{provider, model?}` routes and
+`routing.fallback_policy` is `on_unavailable` or `on_error`. Fallbacks are
+allowed only for isolated sessions. The runtime never reroutes safety,
+permission, cancellation, session, idempotency, or unknown-outcome failures.
+Successful routed responses include redaction-safe `attempts`; exhausted
+errors carry the same trace in `details.attempts`.
 
 `parameters.input_fidelity` is optional and accepts `low` or `high` only when
 the selected model advertises it. `parameters.action` is `auto`, `generate`, or

@@ -4,7 +4,13 @@ Typed sync and async clients for the normalized Imagegen Bridge HTTP API. The
 package is not published yet; build it from this repository.
 
 ```python
-from imagegen_bridge import AsyncImagegenBridgeClient, ImageRequest, OutputOptions
+from imagegen_bridge import (
+    AsyncImagegenBridgeClient,
+    ImageRequest,
+    OutputOptions,
+    ProviderRoute,
+    RoutingOptions,
+)
 
 async with AsyncImagegenBridgeClient("http://127.0.0.1:8787") as client:
     result = await client.images.generate(ImageRequest.generate(
@@ -15,6 +21,10 @@ async with AsyncImagegenBridgeClient("http://127.0.0.1:8787") as client:
             filename="fox.png",
             collision="suffix",
             metadata="sidecar",
+        ),
+        routing=RoutingOptions(
+            provider="codex-app-server",
+            fallbacks=(ProviderRoute("codex-responses", "gpt-image-2"),),
         ),
     ))
     print(result.data[0].name, result.data[0].metadata_name)
@@ -31,6 +41,9 @@ async with AsyncImagegenBridgeClient("http://127.0.0.1:8787") as client:
 
 Set `provider` in `ImageRequest.routing` to switch between configured bridge
 providers; client construction and response types do not change.
+Fallback routes are ordered and returned as typed provider attempts.
+`OutputOptions.transparency` selects native or local chroma-key alpha when the
+generation parameters request a transparent background.
 `OutputOptions.metadata` accepts `none`, `sidecar`, `embedded`, or
 `sidecar_and_embedded`. Embedded XMP is carried inside the returned PNG, JPEG,
 or WebP bytes; the latter combined mode requires artifact output.

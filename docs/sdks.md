@@ -35,11 +35,19 @@ discovery/session endpoint. It ships `py.typed`, frozen dataclass models, and
 wheel/sdist metadata.
 
 ```python
-from imagegen_bridge import AsyncImagegenBridgeClient, ImageRequest, RoutingOptions
+from imagegen_bridge import (
+    AsyncImagegenBridgeClient,
+    ImageRequest,
+    ProviderRoute,
+    RoutingOptions,
+)
 
 request = ImageRequest.generate(
     "a paper fox",
-    routing=RoutingOptions(provider="codex-app-server"),
+    routing=RoutingOptions(
+        provider="codex-app-server",
+        fallbacks=(ProviderRoute("codex-responses", "gpt-image-2"),),
+    ),
 )
 async with AsyncImagegenBridgeClient(
     "http://127.0.0.1:8787",
@@ -85,7 +93,10 @@ const client = new ImagegenBridgeClient({
 const response = await client.images.generate({
   operation: "generate",
   prompt: "a paper fox",
-  routing: { provider: "codex-app-server" },
+  routing: {
+    provider: "codex-app-server",
+    fallbacks: [{ provider: "codex-responses", model: "gpt-image-2" }],
+  },
 });
 const job = await client.jobs.create({ operation: "generate", prompt: "a paper fox" });
 const completed = await client.jobs.get(job.id);
@@ -104,6 +115,8 @@ rejected. JSON/error body limits and byte-framed SSE limits are independently
 configurable, while partial previews retain a fixed streamed 16 MiB ceiling.
 Both SDKs expose durable jobs, requested output indices, optional per-item generation time,
 and structured failures from best-effort multi-image requests.
+They also expose transparent-output controls and ordered provider-attempt traces;
+changing provider routes does not change the client or response type.
 The request and capability types also expose input fidelity, image action, and
 the provider-specific accepted value sets instead of assuming every model can
 honor every edit control. Provider descriptors expose their declared image

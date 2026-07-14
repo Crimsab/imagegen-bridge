@@ -35,12 +35,16 @@ verified, absolute, and confined to the configured artifact root.
    quality, count, format, background, partial-image, fidelity, action, edit,
    reference, or session flags only when requested and advertised by the
    discovered capabilities.
+   Transparent output is a bridge-level exception: use
+   `--background transparent --transparency auto`. The bridge may emulate alpha
+   locally even when the selected provider does not advertise native
+   transparency.
 4. Execute `generate` or `edit` with `--json --local-artifact-paths`, artifact
    output, and a portable output directory. Pass prompt text as one process
    argument; never concatenate untrusted prompt text into a shell command.
 5. Return every `artifacts[].path`. Also surface `response.revised_prompt`,
    `response.warnings`, `response.normalizations`, `response.failures`, and
-   `response.timings.total_ms` when present.
+   `response.attempts`, and `response.timings.total_ms` when present.
 6. If the command fails, preserve the bridge error code and recovery detail.
    Do not retry a safety rejection unchanged and do not silently remove an
    unsupported user-requested option.
