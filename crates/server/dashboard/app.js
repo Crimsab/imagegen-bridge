@@ -139,7 +139,7 @@ function renderProviderNote(capabilities, selectedProvider) {
 		capabilityHint(
 			providerLabel,
 			isDefault
-				? `${capabilities.provider} is the configured default provider. Change default_provider in the bridge configuration, or choose another provider in this form.`
+				? `${capabilities.provider} is the configured default provider. Change default_provider in the bridge configuration and refresh the dashboard, or choose another provider in this form.`
 				: `${capabilities.provider} is explicitly selected for this request. Choose Default or another registered provider to change it.`,
 			tooltip,
 		),
@@ -173,6 +173,7 @@ function setMessage(element, message = "", status = "") {
 }
 
 function showAuthentication() {
+	elements.connectionButton.hidden = false;
 	elements.token.value = api.token;
 	if (!elements.connectionDialog.open) elements.connectionDialog.showModal();
 	state.authenticationPrompted = true;
@@ -182,6 +183,7 @@ function handleError(error, target = elements.libraryMessage) {
 	const message = error instanceof Error ? error.message : String(error);
 	setMessage(target, message, "error");
 	if (error instanceof BridgeApiError && error.authenticationRequired) {
+		elements.connectionButton.hidden = false;
 		setConnection("Authentication required", "error");
 		if (!state.authenticationPrompted) showAuthentication();
 	} else {
@@ -205,6 +207,12 @@ async function loadProviders() {
 	state.providers = page.items || [];
 	state.defaultProvider =
 		diagnostics.configuration?.default_provider || state.providers[0]?.name || "";
+	const authenticationRequired = Boolean(
+		diagnostics.configuration?.authentication_required,
+	);
+	elements.connectionButton.hidden = !authenticationRequired;
+	if (!authenticationRequired && elements.connectionDialog.open)
+		elements.connectionDialog.close();
 	elements.provider.replaceChildren(...options);
 	elements.operatorSessionProvider.replaceChildren(
 		...options.map((option) => option.cloneNode(true)),
@@ -626,6 +634,8 @@ function renderCard(summary) {
 	const image = firstArtifact(detail);
 	if (image) {
 		const thumbnail = create("img");
+		if (Number(image.width) > 0) thumbnail.width = Number(image.width);
+		if (Number(image.height) > 0) thumbnail.height = Number(image.height);
 		thumbnail.alt = detail?.request?.prompt
 			? `Generated result for ${truncate(detail.request.prompt, 90)}`
 			: "Generated image";
@@ -762,12 +772,35 @@ function firstArtifact(job) {
 async function loadImage(element, artifactId, edge) {
 	const key = `thumbnail:${artifactId}:${edge}`;
 	let url = state.assetUrls.get(key);
+	let preview = "";
+	if (!url && edge > 640) {
+		preview = state.assetUrls.get(`thumbnail:${artifactId}:640`) || "";
+		if (preview) {
+			element.src = preview;
+			element.dataset.loadState = "preview";
+		}
+	}
+	if (!element.src) element.dataset.loadState = "loading";
 	if (!url) {
-		const blob = await api.thumbnail(artifactId, edge);
-		url = URL.createObjectURL(blob);
-		state.assetUrls.set(key, url);
+		try {
+			const blob = await api.thumbnail(artifactId, edge);
+			url = URL.createObjectURL(blob);
+			state.assetUrls.set(key, url);
+		} catch (error) {
+			if (preview) {
+				element.dataset.loadState = "ready";
+				return;
+			}
+			throw error;
+		}
 	}
 	element.src = url;
+	try {
+		await element.decode();
+	} catch (error) {
+		if (!element.complete || element.naturalWidth === 0) throw error;
+	}
+	element.dataset.loadState = "ready";
 }
 
 async function loadPartialImage(element, jobId, partialCount) {
@@ -851,6 +884,7 @@ async function showJob(id) {
 
 function renderDetail(job) {
 	elements.detailTitle.textContent = truncate(job.request.prompt, 72);
+	elements.detailTitle.title = job.request.prompt;
 	elements.detailKicker.textContent = `${job.status} · ${job.id.slice(0, 8)}`;
 	const layout = create("div", "detail-layout");
 	const primary = create("div", "detail-section");
@@ -882,6 +916,8 @@ function renderDetail(job) {
 		open.type = "button";
 		open.title = "Open full image";
 		const image = create("img");
+		if (Number(output.width) > 0) image.width = Number(output.width);
+		if (Number(output.height) > 0) image.height = Number(output.height);
 		image.alt = `Generated output ${output.index + 1}`;
 		open.append(image);
 		open.addEventListener("click", () => openArtifact(output.id));
@@ -1279,7 +1315,16 @@ function bindEvents() {
 	);
 	elements.provider.addEventListener("change", loadCapabilities);
 	elements.model.addEventListener("change", loadCapabilities);
-	elements.refresh.addEventListener("click", () => loadJobs());
+	elements.refresh.addEventListener("click", async () => {
+		elements.refresh.disabled = true;
+		try {
+			await Promise.all([loadProviders(), loadJobs()]);
+		} catch (error) {
+			handleError(error);
+		} finally {
+			elements.refresh.disabled = false;
+		}
+	});
 	elements.loadMore.addEventListener("click", () => loadJobs({ append: true }));
 	elements.statusFilter.addEventListener("change", () => loadJobs());
 	elements.deletedFilter.addEventListener("change", () => loadJobs());

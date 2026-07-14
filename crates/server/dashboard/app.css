@@ -85,6 +85,8 @@
 		background: var(--canvas);
 		font-size: 100%;
 		min-block-size: 100%;
+		-webkit-font-smoothing: antialiased;
+		-moz-osx-font-smoothing: grayscale;
 	}
 
 	body {
@@ -150,6 +152,8 @@
 	img {
 		display: block;
 		max-inline-size: 100%;
+		outline: 1px solid color-mix(in oklab, var(--text) 10%, transparent);
+		outline-offset: -1px;
 	}
 }
 
@@ -409,7 +413,7 @@
 		padding-block: 0.2rem;
 	}
 
-	.advanced summary {
+	.advanced > summary {
 		color: var(--text-muted);
 		font-size: 0.82rem;
 		font-weight: 700;
@@ -417,13 +421,38 @@
 		padding-block: 0.65rem;
 	}
 
-	.advanced[open] summary {
+	.advanced[open] > summary {
 		color: var(--text);
 	}
 
 	.advanced-body {
-		grid-template-columns: repeat(2, minmax(0, 1fr));
+		grid-template-columns: 1fr;
 		padding-block: 0.35rem 0.9rem;
+	}
+
+	.control-group {
+		background: var(--surface-muted);
+		border: 1px solid var(--line);
+		border-radius: var(--radius-small);
+	}
+
+	.control-group > summary {
+		color: var(--text-muted);
+		font-size: 0.78rem;
+		font-weight: 700;
+		padding: 0.65rem 0.75rem;
+	}
+
+	.control-group[open] > summary {
+		border-block-end: 1px solid var(--line);
+		color: var(--text);
+	}
+
+	.control-grid {
+		display: grid;
+		gap: 0.75rem;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		padding: 0.75rem;
 	}
 
 	.field-wide {
@@ -607,6 +636,22 @@
 		block-size: 100%;
 		inline-size: 100%;
 		object-fit: cover;
+		transition: opacity 140ms ease;
+	}
+
+	.job-visual:has(img[data-load-state="loading"])::after,
+	.detail-image > button:has(img[data-load-state="loading"])::after {
+		color: var(--text-muted);
+		content: "Loading preview";
+		font-family: var(--font-mono);
+		font-size: 0.72rem;
+		inset: 50% auto auto 50%;
+		position: absolute;
+		translate: -50% -50%;
+	}
+
+	img[data-load-state="loading"] {
+		opacity: 0;
 	}
 
 	.job-placeholder {
@@ -965,6 +1010,7 @@
 		display: block;
 		inline-size: 100%;
 		padding: 0;
+		position: relative;
 	}
 
 	.detail-image img {
@@ -999,7 +1045,7 @@
 	}
 
 	.detail-image-actions .button {
-		font-family: var(--font-body);
+		font-family: var(--font-sans);
 		font-size: 0.72rem;
 		inline-size: auto;
 		min-block-size: 2rem;
@@ -1219,7 +1265,7 @@
 	}
 
 	.compact-grid,
-	.advanced-body,
+	.control-grid,
 	.detail-meta,
 	.session-form {
 		grid-template-columns: 1fr;

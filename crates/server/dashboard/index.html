@@ -21,9 +21,9 @@
       </div>
       <div class="header-actions">
         <output id="connection-status" class="connection-status" aria-live="polite">Connecting</output>
-        <button id="operator-button" class="button secondary" type="button">Operations</button>
-        <button id="connection-button" class="button secondary" type="button">Connection</button>
-        <button id="refresh-button" class="button secondary" type="button">Refresh</button>
+        <button id="operator-button" class="button secondary" type="button" aria-label="Open system diagnostics" title="Provider health, diagnostics, and sessions">System</button>
+        <button id="connection-button" class="button secondary" type="button" aria-label="Configure bridge authentication" title="Set the bridge bearer token for this browser tab" hidden>Authentication</button>
+        <button id="refresh-button" class="button secondary" type="button" aria-label="Refresh dashboard data" title="Refresh providers, configuration, and recent jobs">Refresh</button>
       </div>
     </header>
 
@@ -81,6 +81,9 @@
           <details class="advanced">
             <summary>Advanced controls</summary>
             <div class="advanced-body">
+              <details class="control-group">
+                <summary>Image settings</summary>
+                <div class="control-grid">
               <label class="field field-wide">
                 <span>Negative prompt</span>
                 <textarea id="negative-prompt" name="negative-prompt" rows="2" maxlength="65536" placeholder="Optional exclusions or constraints"></textarea>
@@ -142,6 +145,11 @@
                   <option value="transparent">Transparent</option>
                 </select>
               </label>
+                </div>
+              </details>
+              <details class="control-group">
+                <summary>Transparency, previews, and editing</summary>
+                <div class="control-grid">
               <label class="field">
                 <span>Transparency strategy</span>
                 <select id="transparency" name="transparency">
@@ -193,6 +201,11 @@
                   <option value="edit">Edit</option>
                 </select>
               </label>
+                </div>
+              </details>
+              <details class="control-group">
+                <summary>Routing and execution</summary>
+                <div class="control-grid">
               <label class="field">
                 <span>Failure policy</span>
                 <select id="failure-policy" name="failure-policy">
@@ -244,6 +257,11 @@
                   <option value="on_error">Known-outcome provider errors</option>
                 </select>
               </label>
+                </div>
+              </details>
+              <details class="control-group">
+                <summary>Files and metadata</summary>
+                <div class="control-grid">
               <label class="field">
                 <span>Artifact directory</span>
                 <input id="directory" name="directory" type="text" placeholder="dashboard" autocomplete="off">
@@ -272,6 +290,11 @@
                   <option value="none">None</option>
                 </select>
               </label>
+                </div>
+              </details>
+              <details class="control-group">
+                <summary>Session and request</summary>
+                <div class="control-grid">
               <label class="field">
                 <span>Session mode</span>
                 <select id="session-mode" name="session-mode">
@@ -300,6 +323,8 @@
                 <span>User identifier</span>
                 <input id="user" name="user" type="text" autocomplete="off">
               </label>
+                </div>
+              </details>
             </div>
           </details>
 
@@ -352,11 +377,11 @@
         <div class="dialog-heading">
           <div>
             <p class="kicker">Local access</p>
-            <h2 id="connection-title">Connection</h2>
+            <h2 id="connection-title">Bridge authentication</h2>
           </div>
           <button class="button secondary compact" value="cancel" type="submit">Close</button>
         </div>
-        <p class="quiet">If bridge bearer authentication is enabled, enter the token here. It is kept only for this browser tab.</p>
+        <p class="quiet">Enter the bridge bearer token. It is stored only in this browser tab and is never written to disk.</p>
         <label class="field">
           <span>Bearer token</span>
           <input id="bearer-token" type="password" autocomplete="off" spellcheck="false">
