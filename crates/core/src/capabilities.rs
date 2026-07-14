@@ -5,7 +5,10 @@ use std::collections::BTreeSet;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{Background, ImageAction, ImageSize, InputFidelity, Moderation, OutputFormat, Quality};
+use crate::{
+    Background, BridgeError, ErrorCode, ImageAction, ImageSize, InputFidelity, Moderation,
+    OutputFormat, Quality,
+};
 
 /// Degree to which a provider supports a semantic feature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -137,6 +140,29 @@ pub struct ProviderCapabilities {
     pub persistent_sessions: bool,
     /// Whether explicit upstream thread IDs are supported.
     pub explicit_threads: bool,
+}
+
+impl ProviderCapabilities {
+    /// Rejects semantically inconsistent dynamic provider declarations.
+    pub fn validate(&self) -> Result<(), BridgeError> {
+        if self.count.min > self.count.max {
+            return Err(invalid_capability(
+                self,
+                "provider output-count capability range is invalid",
+            ));
+        }
+        if self.partial_images.min > self.partial_images.max {
+            return Err(invalid_capability(
+                self,
+                "provider partial-image capability range is invalid",
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn invalid_capability(capabilities: &ProviderCapabilities, message: &str) -> BridgeError {
+    BridgeError::new(ErrorCode::Protocol, message).with_provider(&capabilities.provider)
 }
 
 /// Provider identity shown in discovery endpoints.

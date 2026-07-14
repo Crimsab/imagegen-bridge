@@ -32,6 +32,7 @@ pub fn negotiate_request(
     request: &ImageRequest,
     capabilities: &ProviderCapabilities,
 ) -> Result<NegotiatedRequest, BridgeError> {
+    capabilities.validate()?;
     let requested = request.parameters.clone();
     let mut effective_request = request.clone();
     let mut normalizations = Vec::new();
@@ -855,5 +856,27 @@ mod tests {
 
         request.parameters.size = "4000x1024".parse().unwrap();
         assert!(negotiate_request(&request, &capabilities).is_err());
+    }
+
+    #[test]
+    fn malformed_provider_ranges_are_rejected_without_panicking() {
+        for mode in [
+            CompatibilityMode::Strict,
+            CompatibilityMode::Normalize,
+            CompatibilityMode::BestEffort,
+        ] {
+            let mut request = ImageRequest::generate("test");
+            request.policies.compatibility = mode;
+
+            let mut invalid_count = capabilities();
+            invalid_count.count = U8Range { min: 2, max: 1 };
+            let error = negotiate_request(&request, &invalid_count).unwrap_err();
+            assert_eq!(error.code, ErrorCode::Protocol);
+
+            let mut invalid_partials = capabilities();
+            invalid_partials.partial_images = U8Range { min: 2, max: 1 };
+            let error = negotiate_request(&request, &invalid_partials).unwrap_err();
+            assert_eq!(error.code, ErrorCode::Protocol);
+        }
     }
 }

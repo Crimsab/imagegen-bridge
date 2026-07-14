@@ -96,7 +96,18 @@ impl ProviderRegistry {
         provider: Option<&str>,
         model: Option<&str>,
     ) -> Result<ProviderCapabilities, BridgeError> {
-        self.resolve(provider)?.capabilities(model).await
+        let provider = self.resolve(provider)?;
+        let descriptor = provider.descriptor();
+        let capabilities = provider.capabilities(model).await?;
+        if capabilities.provider != descriptor.name {
+            return Err(BridgeError::new(
+                ErrorCode::Protocol,
+                "provider capability identity does not match its registry identity",
+            )
+            .with_provider(&descriptor.name));
+        }
+        capabilities.validate()?;
+        Ok(capabilities)
     }
 
     /// Performs non-generating readiness checks in stable name order.
