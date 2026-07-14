@@ -5,10 +5,20 @@ IMAGE=${IMAGEGEN_BRIDGE_SMOKE_IMAGE:-imagegen-bridge:smoke}
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 TEMP=$(mktemp -d)
 NAME="imagegen-bridge-smoke-$$"
+SEEDER="${NAME}-seed"
+CONFIG_VOLUME="${NAME}-config"
+WORKSPACE_VOLUME="${NAME}-workspace"
+STATE_VOLUME="${NAME}-state"
+ARTIFACT_VOLUME="${NAME}-artifacts"
+CODEX_VOLUME="${NAME}-codex-home"
 SMOKE_TOKEN="container-smoke-test-token"
 
 cleanup() {
+  docker rm -f "$SEEDER" >/dev/null 2>&1 || true
   docker rm -f "$NAME" >/dev/null 2>&1 || true
+  docker volume rm -f \
+    "$CONFIG_VOLUME" "$WORKSPACE_VOLUME" "$STATE_VOLUME" \
+    "$ARTIFACT_VOLUME" "$CODEX_VOLUME" >/dev/null 2>&1 || true
   rm -rf "$TEMP"
 }
 trap cleanup EXIT INT TERM
@@ -17,8 +27,6 @@ if [ "${IMAGEGEN_BRIDGE_SKIP_BUILD:-0}" != "1" ]; then
   docker build --tag "$IMAGE" "$ROOT"
 fi
 
-mkdir -p "$TEMP/state" "$TEMP/artifacts" "$TEMP/codex-home" "$TEMP/workspace"
-chmod 0777 "$TEMP/state" "$TEMP/artifacts" "$TEMP/codex-home"
 cat >"$TEMP/fake-codex" <<'SCRIPT'
 #!/bin/sh
 while IFS= read -r line; do
@@ -57,7 +65,30 @@ bearer_token_env = "IMAGEGEN_BRIDGE_BEARER_TOKEN"
 [server.metrics]
 enabled = true
 EOF
-cp "$TEMP/fake-codex" "$TEMP/workspace/fake-codex"
+
+for volume in \
+  "$CONFIG_VOLUME" "$WORKSPACE_VOLUME" "$STATE_VOLUME" \
+  "$ARTIFACT_VOLUME" "$CODEX_VOLUME"
+do
+  docker volume create "$volume" >/dev/null
+done
+
+# Seed through the Docker API instead of bind-mounting client-side temporary
+# paths. This also works when the test client itself uses a host Docker socket.
+docker create --name "$SEEDER" --user 0 --entrypoint /bin/sh \
+  --volume "$CONFIG_VOLUME:/config" \
+  --volume "$WORKSPACE_VOLUME:/workspace" \
+  --volume "$STATE_VOLUME:/data/state" \
+  --volume "$ARTIFACT_VOLUME:/data/artifacts" \
+  --volume "$CODEX_VOLUME:/codex-home" \
+  "$IMAGE" -c '
+    chmod 0755 /workspace/fake-codex &&
+    chown -R 10001:10001 /data/state /data/artifacts /codex-home
+  ' >/dev/null
+docker cp "$TEMP/config.toml" "$SEEDER:/config/imagegen-bridge.toml"
+docker cp "$TEMP/fake-codex" "$SEEDER:/workspace/fake-codex"
+docker start --attach "$SEEDER" >/dev/null
+docker rm "$SEEDER" >/dev/null
 
 docker run --detach --name "$NAME" \
   --read-only \
@@ -68,11 +99,11 @@ docker run --detach --name "$NAME" \
   --tmpfs /home/imagegen:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=0700 \
   --env IMAGEGEN_BRIDGE_BEARER_TOKEN="$SMOKE_TOKEN" \
   --publish 127.0.0.1::8787 \
-  --volume "$TEMP/config.toml:/config/imagegen-bridge.toml:ro" \
-  --volume "$TEMP/codex-home:/codex-home" \
-  --volume "$TEMP/workspace:/workspace:ro" \
-  --volume "$TEMP/state:/data/state" \
-  --volume "$TEMP/artifacts:/data/artifacts" \
+  --volume "$CONFIG_VOLUME:/config:ro" \
+  --volume "$CODEX_VOLUME:/codex-home" \
+  --volume "$WORKSPACE_VOLUME:/workspace:ro" \
+  --volume "$STATE_VOLUME:/data/state" \
+  --volume "$ARTIFACT_VOLUME:/data/artifacts" \
   "$IMAGE" >/dev/null
 
 PORT=$(docker port "$NAME" 8787/tcp | sed -n 's/.*://p')
