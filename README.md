@@ -202,7 +202,8 @@ step. It supports generation and edit uploads, provider/model selection,
 capability-aware controls, durable queue progress, cancellation confirmations,
 server-side prompt search, favorites, hide/restore, verified thumbnails,
 full-image viewing and download, portable output-folder copy, timings, revised
-prompts, and raw retained metadata. The copied folder is relative to the
+prompts, raw retained metadata, model-specific capability exploration, and a
+bounded redacted operator event history. The copied folder is relative to the
 configured artifact root; the browser never receives a host filesystem path.
 When bridge bearer authentication is enabled, enter the
 token in the Connection dialog; it is kept in `sessionStorage` for that browser

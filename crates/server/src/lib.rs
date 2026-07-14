@@ -5,6 +5,7 @@ mod compat;
 mod dashboard;
 mod diagnostics;
 mod error;
+mod events;
 mod jobs;
 mod metrics;
 mod openapi;

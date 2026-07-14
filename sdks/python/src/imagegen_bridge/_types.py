@@ -526,6 +526,31 @@ class ProviderReadiness:
 
 
 @dataclass(frozen=True, slots=True)
+class OperatorEvent:
+    sequence: int
+    timestamp_ms: int
+    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "OTHER"]
+    route: str
+    status: int
+    duration_ms: int
+
+
+@dataclass(frozen=True, slots=True)
+class OperatorEventHistory:
+    capacity: int
+    dropped: int
+    items: tuple[OperatorEvent, ...]
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> OperatorEventHistory:
+        return cls(
+            capacity=value["capacity"],
+            dropped=value["dropped"],
+            items=tuple(OperatorEvent(**item) for item in value["items"]),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class OperatorDiagnostics:
     bridge_version: str
     configuration: ConfigurationDiagnostics
@@ -533,6 +558,7 @@ class OperatorDiagnostics:
     runtime: RuntimeDiagnostics
     providers: tuple[ProviderReadiness, ...]
     jobs: JobManagerDiagnostics | None = None
+    events: OperatorEventHistory | None = None
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> OperatorDiagnostics:
@@ -543,6 +569,11 @@ class OperatorDiagnostics:
             runtime=RuntimeDiagnostics(**value["runtime"]),
             providers=tuple(ProviderReadiness.from_dict(item) for item in value["providers"]),
             jobs=JobManagerDiagnostics(**value["jobs"]) if value.get("jobs") is not None else None,
+            events=(
+                OperatorEventHistory.from_dict(value["events"])
+                if value.get("events") is not None
+                else None
+            ),
         )
 
 

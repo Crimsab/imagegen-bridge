@@ -37,11 +37,14 @@ backpressure, and disconnect cancellation.
 `GET /v1/diagnostics` returns only aggregate operational facts: bridge version,
 listener scope, whether bridge authentication is required, configuration field
 origins without values, bounded runtime queue depths, provider readiness, job
-status counts and configured retention/admission limits. It never returns
+status counts, configured retention/admission limits, and a newest-first
+in-memory ring of 256 redacted API events. Events contain only a generated
+sequence, timestamp, normalized method, fixed route template, status, and
+duration; overwritten entries are counted. It never returns
 credential values, prompts, account IDs, input data, artifact/database paths, or
-job/session identifiers. SQLite storage is reported only as an aggregate byte
-count. The route follows the same bridge bearer policy as other `/v1/**`
-endpoints.
+job/session identifiers, queries, headers, or payloads. SQLite storage is
+reported only as an aggregate byte count. The route follows the same bridge
+bearer policy as other `/v1/**` endpoints.
 
 ## Durable jobs and history
 

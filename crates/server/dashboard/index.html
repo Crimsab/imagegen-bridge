@@ -372,6 +372,28 @@
             </table>
           </section>
         </section>
+        <section aria-labelledby="events-title">
+          <div class="operator-section-heading">
+            <div>
+              <h3 id="events-title">Recent redacted events</h3>
+              <p id="event-summary" class="quiet">Only route templates, status, method, time, and duration are retained in memory.</p>
+            </div>
+          </div>
+          <section class="table-scroll" tabindex="0" aria-label="Scrollable redacted event history">
+            <table class="capability-table event-table">
+              <thead>
+                <tr>
+                  <th scope="col">Time</th>
+                  <th scope="col">Method</th>
+                  <th scope="col">Route template</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Duration</th>
+                </tr>
+              </thead>
+              <tbody id="event-table-body"></tbody>
+            </table>
+          </section>
+        </section>
         <section class="operator-columns" aria-label="Configuration and sessions">
           <div class="operator-panel">
             <h3>Configuration provenance</h3>

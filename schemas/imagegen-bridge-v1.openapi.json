@@ -1849,6 +1849,77 @@
         ],
         "type": "object"
       },
+      "OperatorEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "duration_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "method": {
+            "enum": [
+              "GET",
+              "POST",
+              "PUT",
+              "PATCH",
+              "DELETE",
+              "HEAD",
+              "OPTIONS",
+              "OTHER"
+            ]
+          },
+          "route": {
+            "type": "string"
+          },
+          "sequence": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "status": {
+            "maximum": 599,
+            "minimum": 100,
+            "type": "integer"
+          },
+          "timestamp_ms": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sequence",
+          "timestamp_ms",
+          "method",
+          "route",
+          "status",
+          "duration_ms"
+        ],
+        "type": "object"
+      },
+      "OperatorEventHistory": {
+        "additionalProperties": false,
+        "properties": {
+          "capacity": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "dropped": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorEvent"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "capacity",
+          "dropped",
+          "items"
+        ],
+        "type": "object"
+      },
       "OutputFormat": {
         "description": "Encoded output image format.",
         "oneOf": [
@@ -2268,6 +2339,9 @@
       "ReadinessResponse": {
         "additionalProperties": false,
         "properties": {
+          "events": {
+            "$ref": "#/components/schemas/OperatorEventHistory"
+          },
           "providers": {
             "items": {
               "$ref": "#/components/schemas/ProviderReadiness"
@@ -3001,6 +3075,11 @@
                     "provenance": [],
                     "read_timeout_ms": 30000,
                     "version": 1
+                  },
+                  "events": {
+                    "capacity": 256,
+                    "dropped": 0,
+                    "items": []
                   },
                   "jobs": {
                     "active_workers": 1,

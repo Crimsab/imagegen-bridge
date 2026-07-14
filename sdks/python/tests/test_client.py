@@ -116,7 +116,11 @@ def test_async_client_matches_shared_http_contract(
             assert (
                 await client.capabilities("codex-responses", model="gpt-image-1")
             ).model == "gpt-image-1"
-            assert (await client.diagnostics()).artifact_storage_enabled
+            diagnostics = await client.diagnostics()
+            assert diagnostics.artifact_storage_enabled
+            assert diagnostics.events is not None
+            assert diagnostics.events.items[0].route == "/v1/jobs"
+            assert diagnostics.events.items[1].duration_ms == 36
             assert (await client.session("sdk-fixture")).reused
             await client.delete_session("sdk-fixture")
             queued = await client.jobs.create(request)

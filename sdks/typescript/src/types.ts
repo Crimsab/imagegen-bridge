@@ -311,6 +311,21 @@ export interface ProviderReadiness {
   error?: BridgeErrorData | null;
 }
 
+export interface OperatorEvent {
+  sequence: number;
+  timestamp_ms: number;
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS" | "OTHER";
+  route: string;
+  status: number;
+  duration_ms: number;
+}
+
+export interface OperatorEventHistory {
+  capacity: number;
+  dropped: number;
+  items: OperatorEvent[];
+}
+
 export interface OperatorDiagnostics {
   bridge_version: string;
   configuration: ConfigurationDiagnostics;
@@ -318,6 +333,7 @@ export interface OperatorDiagnostics {
   runtime: RuntimeDiagnostics;
   jobs?: JobManagerDiagnostics | null;
   providers: ProviderReadiness[];
+  events?: OperatorEventHistory | null;
 }
 
 export interface U8Range {

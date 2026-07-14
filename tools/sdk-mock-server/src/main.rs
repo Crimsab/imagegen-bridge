@@ -110,7 +110,15 @@ async fn diagnostics(headers: HeaderMap) -> Response {
         "providers": [
             {"provider":"codex-app-server","status":"ready"},
             {"provider":"codex-responses","status":"ready"}
-        ]
+        ],
+        "events": {
+            "capacity": 256,
+            "dropped": 0,
+            "items": [
+                {"sequence":2,"timestamp_ms":1_783_960_001_000_u64,"method":"GET","route":"/v1/jobs","status":200,"duration_ms":3},
+                {"sequence":1,"timestamp_ms":1_783_960_000_000_u64,"method":"POST","route":"/v1/images","status":200,"duration_ms":36}
+            ]
+        }
     }))
     .into_response()
 }

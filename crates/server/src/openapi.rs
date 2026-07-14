@@ -96,7 +96,8 @@ pub fn openapi_document() -> Value {
                             "artifact_storage_enabled":true,
                             "runtime":{"global_queued":0,"providers_queued":{"codex-app-server":0}},
                             "jobs":{"total":12,"queued":0,"running":1,"succeeded":10,"failed":1,"cancelled":0,"interrupted":0,"hidden":0,"database_bytes":40960,"active_workers":1,"max_pending":1000,"max_running":4,"retention_secs":604_800,"max_retained":10000},
-                            "providers":[{"provider":"codex-app-server","status":"ready"}]
+                            "providers":[{"provider":"codex-app-server","status":"ready"}],
+                            "events":{"capacity":256,"dropped":0,"items":[]}
                         })),
                         "401": error_response("Bridge authentication required")
                     }
@@ -501,9 +502,36 @@ fn add_compatibility_schemas(schemas: &mut Map<String, Value>) {
     schemas.insert("ReadinessResponse".to_owned(), json!({
         "type":"object","additionalProperties":false,"required":["status","providers"],"properties":{
             "status":{"enum":["ready","not_ready"]},
-            "providers":{"type":"array","items":{"$ref":"#/components/schemas/ProviderReadiness"}}
+            "providers":{"type":"array","items":{"$ref":"#/components/schemas/ProviderReadiness"}},
+            "events":{"$ref":"#/components/schemas/OperatorEventHistory"}
         }
     }));
+    schemas.insert(
+        "OperatorEventHistory".to_owned(),
+        json!({
+            "type":"object","additionalProperties":false,"required":["capacity","dropped","items"],
+            "properties":{
+                "capacity":{"type":"integer","minimum":1},
+                "dropped":{"type":"integer","minimum":0},
+                "items":{"type":"array","items":{"$ref":"#/components/schemas/OperatorEvent"}}
+            }
+        }),
+    );
+    schemas.insert(
+        "OperatorEvent".to_owned(),
+        json!({
+            "type":"object","additionalProperties":false,
+            "required":["sequence","timestamp_ms","method","route","status","duration_ms"],
+            "properties":{
+                "sequence":{"type":"integer","minimum":1},
+                "timestamp_ms":{"type":"integer","minimum":0},
+                "method":{"enum":["GET","POST","PUT","PATCH","DELETE","HEAD","OPTIONS","OTHER"]},
+                "route":{"type":"string"},
+                "status":{"type":"integer","minimum":100,"maximum":599},
+                "duration_ms":{"type":"integer","minimum":0}
+            }
+        }),
+    );
     schemas.insert("OperatorDiagnostics".to_owned(), json!({
         "type":"object","additionalProperties":false,
         "required":["bridge_version","configuration","artifact_storage_enabled","runtime","providers"],

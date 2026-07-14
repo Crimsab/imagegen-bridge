@@ -62,7 +62,8 @@ details, and request ID.
 artifact-backed work plus `update` for favorite/delete/restore state; job pages
 never duplicate inline request image bodies.
 `diagnostics()` returns typed aggregate health, safe configuration provenance,
-queue/storage limits, and provider readiness without user content or host paths.
+queue/storage limits, provider readiness, and bounded redacted API events
+without user content, identifiers, headers, queries, payloads, or host paths.
 
 ## TypeScript
 

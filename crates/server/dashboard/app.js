@@ -45,6 +45,8 @@ const elements = {
 	operatorMessage: document.querySelector("#operator-message"),
 	operatorSummary: document.querySelector("#operator-summary"),
 	capabilityTableBody: document.querySelector("#capability-table-body"),
+	eventSummary: document.querySelector("#event-summary"),
+	eventTableBody: document.querySelector("#event-table-body"),
 	provenanceList: document.querySelector("#provenance-list"),
 	refreshOperator: document.querySelector("#refresh-operator-button"),
 	closeOperator: document.querySelector("#close-operator-button"),
@@ -195,6 +197,7 @@ async function loadOperator() {
 		});
 		renderOperatorSummary(diagnostics);
 		renderCapabilityMatrix(capabilityRows, diagnostics.providers || []);
+		renderOperatorEvents(diagnostics.events);
 		renderProvenance(diagnostics.configuration?.provenance || []);
 		setMessage(elements.operatorMessage, "Diagnostics are current", "ready");
 		setConnection("Connected", "ready");
@@ -237,6 +240,12 @@ function renderOperatorSummary(diagnostics) {
 			diagnostics.artifact_storage_enabled ? "enabled" : "disabled",
 		],
 		["Metrics", config.metrics_enabled ? "enabled" : "disabled"],
+		[
+			"Redacted events",
+			diagnostics.events
+				? `${diagnostics.events.items?.length ?? 0}/${diagnostics.events.capacity}`
+				: "unavailable",
+		],
 	];
 	const nodes = items.map(([term, value]) => {
 		const item = create("div");
@@ -294,6 +303,38 @@ function renderCapabilityMatrix(rows, readiness) {
 		rendered.push(row);
 	}
 	elements.capabilityTableBody.replaceChildren(...rendered);
+}
+
+function renderOperatorEvents(history) {
+	const items = history?.items || [];
+	const capacity = history?.capacity ?? 0;
+	const dropped = history?.dropped ?? 0;
+	setMessage(
+		elements.eventSummary,
+		capacity > 0
+			? `Newest first · ${items.length}/${capacity} retained · ${dropped} overwritten. No prompts, request/job/session IDs, headers, paths, or payloads are stored.`
+			: "Redacted event history is unavailable from this server.",
+	);
+	const rows = items.map((event) => {
+		const row = document.createElement("tr");
+		const values = [
+			formatEventTime(event.timestamp_ms),
+			event.method,
+			event.route,
+			String(event.status),
+			formatDuration(event.duration_ms),
+		];
+		for (const value of values) row.append(create("td", "", value));
+		return row;
+	});
+	if (rows.length === 0) {
+		const row = document.createElement("tr");
+		const cell = create("td", "", "No API events have been recorded yet.");
+		cell.colSpan = 5;
+		row.append(cell);
+		rows.push(row);
+	}
+	elements.eventTableBody.replaceChildren(...rows);
 }
 
 function renderProvenance(provenance) {
@@ -960,6 +1001,14 @@ function formatDate(timestamp) {
 		dateStyle: "medium",
 		timeStyle: "short",
 	}).format(new Date(timestamp * 1000));
+}
+
+function formatEventTime(timestamp) {
+	if (!Number.isFinite(timestamp)) return "unknown";
+	return new Intl.DateTimeFormat(undefined, {
+		dateStyle: "short",
+		timeStyle: "medium",
+	}).format(new Date(timestamp));
 }
 
 function formatDuration(milliseconds) {

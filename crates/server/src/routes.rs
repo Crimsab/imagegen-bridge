@@ -38,6 +38,7 @@ use crate::{
     compat::{edit_compatible, generate_compatible},
     dashboard_router,
     diagnostics::ConfigurationDiagnostics,
+    events::{OperatorEventHistory, OperatorEvents, redacted_route},
     metrics::ServerMetrics,
     openapi::openapi_document,
     streaming::stream_image,
@@ -59,6 +60,7 @@ pub struct ServerState {
     pub(crate) auth: Option<AuthPolicy>,
     pub(crate) metrics: Option<Arc<ServerMetrics>>,
     pub(crate) diagnostics: Arc<ConfigurationDiagnostics>,
+    pub(crate) events: Arc<OperatorEvents>,
 }
 
 impl std::fmt::Debug for ServerState {
@@ -70,6 +72,7 @@ impl std::fmt::Debug for ServerState {
             .field("auth", &self.auth.is_some())
             .field("metrics", &self.metrics.is_some())
             .field("diagnostics", &self.diagnostics)
+            .field("events", &self.events.snapshot().items.len())
             .finish()
     }
 }
@@ -114,6 +117,7 @@ impl ServerState {
             auth,
             metrics,
             diagnostics: Arc::new(ConfigurationDiagnostics::from_settings(settings)),
+            events: Arc::new(OperatorEvents::default()),
         })
     }
 
@@ -155,6 +159,7 @@ impl ServerState {
                 authentication_required,
                 metrics_enabled,
             )),
+            events: Arc::new(OperatorEvents::default()),
         }
     }
 }
@@ -225,7 +230,7 @@ pub fn router(state: ServerState, settings: &ServerSettings) -> Router {
             settings.max_header_bytes,
             enforce_header_limit,
         ))
-        .layer(middleware::from_fn(request_id))
+        .layer(middleware::from_fn_with_state(state.clone(), request_id))
         .with_state(state)
 }
 
@@ -264,10 +269,22 @@ async fn enforce_header_limit(
     next.run(request).await
 }
 
-async fn request_id(mut request: axum::extract::Request, next: middleware::Next) -> Response {
+async fn request_id(
+    State(state): State<ServerState>,
+    mut request: axum::extract::Request,
+    next: middleware::Next,
+) -> Response {
     let request_id = RequestId::new();
+    let route = redacted_route(request.uri().path());
+    let method = request.method().clone();
+    let started = Instant::now();
     request.extensions_mut().insert(request_id.clone());
     let mut response = next.run(request).await;
+    if let Some(route) = route {
+        state
+            .events
+            .record(&method, route, response.status(), started.elapsed());
+    }
     if let Ok(value) = HeaderValue::from_str(&request_id.0) {
         response.headers_mut().insert(REQUEST_ID_HEADER, value);
     }
@@ -324,6 +341,7 @@ struct OperatorDiagnostics {
     #[serde(skip_serializing_if = "Option::is_none")]
     jobs: Option<crate::JobManagerDiagnostics>,
     providers: Vec<imagegen_bridge_runtime::ProviderReadiness>,
+    events: OperatorEventHistory,
 }
 
 async fn operator_diagnostics(
@@ -349,6 +367,7 @@ async fn operator_diagnostics(
         },
         jobs,
         providers: state.runtime.registry().readiness().await,
+        events: state.events.snapshot(),
     }))
 }
 
@@ -1509,6 +1528,15 @@ mod tests {
     async fn diagnostics_are_authenticated_aggregate_and_redaction_safe() {
         let directory = tempfile::tempdir().unwrap();
         let (app, jobs) = test_job_router(directory.path()).await;
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::get("/v1/sessions/private-session-key?provider=private-provider")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         let response = app
             .oneshot(Request::get("/v1/diagnostics").body(Body::empty()).unwrap())
             .await
@@ -1524,10 +1552,16 @@ mod tests {
         assert_eq!(value["jobs"]["active_workers"], 0);
         assert!(value["jobs"]["database_bytes"].as_u64().unwrap() > 0);
         assert_eq!(value["providers"][0]["provider"], "ready");
+        assert_eq!(value["events"]["capacity"], 256);
+        assert_eq!(value["events"]["dropped"], 0);
+        assert_eq!(value["events"]["items"][0]["route"], "/v1/sessions/{key}");
+        assert_eq!(value["events"]["items"][0]["method"], "GET");
         let body = String::from_utf8(body.to_vec()).unwrap();
         assert!(!body.contains(directory.path().to_str().unwrap()));
         assert!(!body.contains("prompt"));
         assert!(!body.contains("token"));
+        assert!(!body.contains("private-session-key"));
+        assert!(!body.contains("private-provider"));
         jobs.shutdown().await;
 
         let protected = test_router(Some("bridge-secret"))
