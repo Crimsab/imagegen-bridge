@@ -1,0 +1,50 @@
+{
+  "prompt": "A precise test image",
+  "negative_prompt": "no text",
+  "operation": "generate",
+  "reference_images": [],
+  "parameters": {
+    "n": 2,
+    "size": "auto",
+    "aspect_ratio": "2:3",
+    "resolution": "2k",
+    "quality": "high",
+    "output_format": "webp",
+    "output_compression": 82,
+    "background": "transparent",
+    "moderation": "low",
+    "partial_images": 2,
+    "failure_policy": "best_effort",
+    "action": "auto"
+  },
+  "routing": {
+    "provider": "codex-app-server",
+    "model": "gpt-image-2",
+    "fallbacks": [{ "provider": "codex-responses", "model": "gpt-image-1" }],
+    "fallback_policy": "on_error"
+  },
+  "session": { "mode": "isolated" },
+  "output": {
+    "response_format": "artifact",
+    "filename_prefix": "portrait",
+    "directory": "tests/red",
+    "collision": "error",
+    "metadata": "embedded",
+    "transparency": {
+      "mode": "chroma_key",
+      "key_color": "#00ff00",
+      "transparent_threshold": 10,
+      "opaque_threshold": 90,
+      "despill": true
+    }
+  },
+  "policies": {
+    "compatibility": "strict",
+    "negative_prompt": "merge",
+    "revised_prompt": "require",
+    "batch_execution": "parallel"
+  },
+  "idempotency_key": "preset-test-1",
+  "timeout_ms": 120000,
+  "user": "qa-user"
+}

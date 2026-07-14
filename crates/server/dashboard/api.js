@@ -49,6 +49,36 @@ export class BridgeApi {
 		});
 	}
 
+	async listPresets({ cursor = "", limit = 100 } = {}) {
+		const query = new URLSearchParams({ limit: String(limit) });
+		if (cursor) query.set("cursor", cursor);
+		return this.request(`/v1/presets?${query}`);
+	}
+
+	async createPreset(preset) {
+		return this.request("/v1/presets", {
+			method: "POST",
+			body: JSON.stringify(preset),
+		});
+	}
+
+	async getPreset(name) {
+		return this.request(`/v1/presets/${encodeURIComponent(name)}`);
+	}
+
+	async replacePreset(name, preset) {
+		return this.request(`/v1/presets/${encodeURIComponent(name)}`, {
+			method: "PUT",
+			body: JSON.stringify(preset),
+		});
+	}
+
+	async deletePreset(name) {
+		return this.request(`/v1/presets/${encodeURIComponent(name)}`, {
+			method: "DELETE",
+		});
+	}
+
 	async listJobs({
 		cursor = "",
 		status = "",

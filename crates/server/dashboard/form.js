@@ -55,7 +55,7 @@ function fileToImageInput(file) {
 	});
 }
 
-export async function buildRequest(form) {
+export async function buildRequest(form, { requireEditImages = true } = {}) {
 	const operation = value(form, "operation");
 	const references = await fileInput(
 		form.elements.namedItem("reference-images"),
@@ -63,7 +63,7 @@ export async function buildRequest(form) {
 	let operationFields;
 	if (operation === "edit") {
 		const images = await fileInput(form.elements.namedItem("edit-images"));
-		if (images.length === 0)
+		if (requireEditImages && images.length === 0)
 			throw new Error("Choose at least one image to edit.");
 		const masks = await fileInput(form.elements.namedItem("mask"));
 		operationFields = {
@@ -162,6 +162,98 @@ export async function buildRequest(form) {
 	return removeUndefined(request);
 }
 
+export function presetTemplateFromRequest(request) {
+	return removeUndefined({
+		prompt: request.prompt || undefined,
+		negative_prompt: request.negative_prompt,
+		operation: request.operation,
+		parameters: request.parameters,
+		routing: request.routing,
+		session: request.session,
+		output: request.output,
+		policies: request.policies,
+		timeout_ms: request.timeout_ms,
+		user: request.user,
+	});
+}
+
+export function applyPresetTemplate(form, template) {
+	setValue(form, "prompt", template.prompt || "");
+	setValue(form, "negative-prompt", template.negative_prompt || "");
+	setValue(form, "operation", template.operation || "generate");
+	const parameters = template.parameters || {};
+	for (const [name, field, fallback] of [
+		["count", "n", 1],
+		["size", "size", "auto"],
+		["aspect-ratio", "aspect_ratio", ""],
+		["resolution", "resolution", ""],
+		["quality", "quality", "auto"],
+		["format", "output_format", "png"],
+		["compression", "output_compression", ""],
+		["background", "background", "auto"],
+		["moderation", "moderation", "auto"],
+		["partial-images", "partial_images", 0],
+		["failure-policy", "failure_policy", "fail_fast"],
+		["input-fidelity", "input_fidelity", ""],
+		["action", "action", "auto"],
+	]) {
+		setValue(form, name, parameters[field] ?? fallback);
+	}
+	const routing = template.routing || {};
+	setValue(form, "provider", routing.provider || "");
+	setValue(form, "model", routing.model || "");
+	setValue(
+		form,
+		"fallback-routes",
+		(routing.fallbacks || [])
+			.map((route) =>
+				route.model ? `${route.provider}:${route.model}` : route.provider,
+			)
+			.join(", "),
+	);
+	setValue(form, "fallback-policy", routing.fallback_policy || "on_unavailable");
+	const session = template.session || {};
+	setValue(form, "session-mode", session.mode || "isolated");
+	setValue(form, "session-key", session.key || "");
+	setValue(form, "thread-id", session.thread_id || "");
+	const output = template.output || {};
+	setValue(form, "filename-prefix", output.filename_prefix || "");
+	setValue(form, "directory", output.directory || "");
+	setValue(form, "filename", output.filename || "");
+	setValue(form, "collision", output.collision || "error");
+	setValue(form, "metadata", output.metadata || "sidecar");
+	const transparency = output.transparency || {};
+	setValue(form, "transparency", transparency.mode || "auto");
+	setValue(form, "chroma-key", transparency.key_color || "");
+	setValue(
+		form,
+		"chroma-transparent-threshold",
+		transparency.transparent_threshold ?? 12,
+	);
+	setValue(
+		form,
+		"chroma-opaque-threshold",
+		transparency.opaque_threshold ?? 96,
+	);
+	form.elements.namedItem("despill").checked = transparency.despill ?? true;
+	const policies = template.policies || {};
+	setValue(form, "compatibility", policies.compatibility || "best_effort");
+	setValue(form, "negative-policy", policies.negative_prompt || "auto");
+	setValue(form, "revised-prompt", policies.revised_prompt || "include");
+	setValue(form, "batch-execution", policies.batch_execution || "auto");
+	setValue(form, "timeout-ms", template.timeout_ms ?? "");
+	setValue(form, "user", template.user || "");
+	setValue(form, "idempotency-key", "");
+	updateOperationFields(template.operation || "generate");
+	updateSessionFields(session.mode || "isolated");
+	updateFormatFields(form);
+	updateTransparencyFields(form);
+}
+
+function setValue(form, name, value) {
+	form.elements.namedItem(name).value = String(value);
+}
+
 function removeUndefined(value) {
 	if (Array.isArray(value)) return value.map(removeUndefined);
 	if (value && typeof value === "object") {
@@ -212,10 +304,20 @@ export function applyCapabilities(form, capabilities) {
 	partial.max = String(capabilities?.partial_images?.max ?? 3);
 	if (Number(partial.value) > Number(partial.max)) partial.value = partial.max;
 
-	constrainOptions(form.elements.namedItem("quality"), capabilities?.qualities);
+	constrainOptions(
+		form.elements.namedItem("size"),
+		allowedSizes(capabilities?.sizes),
+		true,
+	);
+	constrainOptions(
+		form.elements.namedItem("quality"),
+		capabilities?.qualities,
+		true,
+	);
 	constrainOptions(
 		form.elements.namedItem("format"),
 		capabilities?.output_formats,
+		true,
 	);
 	const backgrounds = capabilities?.backgrounds
 		? [...new Set([...capabilities.backgrounds, "transparent"])]
@@ -224,16 +326,31 @@ export function applyCapabilities(form, capabilities) {
 	constrainOptions(
 		form.elements.namedItem("moderation"),
 		capabilities?.moderation,
+		true,
 	);
 	constrainOptionalOptions(
 		form.elements.namedItem("input-fidelity"),
 		capabilities?.input_fidelities,
 	);
-	constrainOptions(form.elements.namedItem("action"), capabilities?.actions);
-	form.elements.namedItem("aspect-ratio").disabled =
+	constrainOptions(form.elements.namedItem("action"), capabilities?.actions, true);
+	const aspectRatio = form.elements.namedItem("aspect-ratio");
+	aspectRatio.disabled =
 		capabilities?.aspect_ratio === "unsupported";
-	form.elements.namedItem("resolution").disabled =
+	aspectRatio.title = aspectRatio.disabled
+		? "The selected provider cannot receive an aspect-ratio hint."
+		: "Aspect-ratio support reported by the selected provider.";
+	const resolution = form.elements.namedItem("resolution");
+	resolution.disabled =
 		capabilities?.resolution === "unsupported";
+	resolution.title = resolution.disabled
+		? "The selected provider cannot receive a resolution hint."
+		: "Resolution support reported by the selected provider.";
+	partial.disabled = Number(partial.max) === 0;
+	partial.title = partial.disabled
+		? "The selected provider does not stream partial images."
+		: "Number of transient progress previews requested from the provider.";
+	updateFormatFields(form);
+	updateTransparencyFields(form);
 
 	const session = form.elements.namedItem("session-mode");
 	session.querySelector('option[value="persistent"]').disabled = capabilities
@@ -248,12 +365,27 @@ export function applyCapabilities(form, capabilities) {
 	}
 }
 
-function constrainOptions(select, allowed) {
+function allowedSizes(sizes) {
+	if (!sizes || sizes.arbitrary) return undefined;
+	const allowed = [...(sizes.allowed || [])];
+	if (sizes.auto) allowed.unshift("auto");
+	return [...new Set(allowed)];
+}
+
+function constrainOptions(select, allowed, disableWhenFixed = false) {
 	for (const option of select.options) {
 		option.disabled = Array.isArray(allowed) && !allowed.includes(option.value);
 	}
-	if (!Array.isArray(allowed) || allowed.length === 0) return;
+	if (!Array.isArray(allowed) || allowed.length === 0) {
+		select.disabled = false;
+		select.removeAttribute("title");
+		return;
+	}
 	if (select.selectedOptions[0]?.disabled) select.value = allowed[0];
+	select.disabled = disableWhenFixed && allowed.length === 1;
+	select.title = select.disabled
+		? `The selected provider only supports ${select.selectedOptions[0]?.textContent || allowed[0]}.`
+		: "Options are limited to capabilities reported by the selected provider.";
 }
 
 function constrainOptionalOptions(select, allowed) {
@@ -264,4 +396,36 @@ function constrainOptionalOptions(select, allowed) {
 			!allowed.includes(option.value);
 	}
 	if (select.selectedOptions[0]?.disabled) select.value = "";
+}
+
+export function updateFormatFields(form) {
+	const format = form.elements.namedItem("format");
+	const compression = form.elements.namedItem("compression");
+	const compressible = format.value === "jpeg" || format.value === "webp";
+	compression.disabled = !compressible;
+	compression.title = compressible
+		? "JPEG/WebP encoding quality from 0 through 100."
+		: "Compression is available only for JPEG and WebP output.";
+}
+
+export function updateTransparencyFields(form) {
+	const transparent = form.elements.namedItem("background").value === "transparent";
+	const strategy = form.elements.namedItem("transparency");
+	strategy.disabled = !transparent;
+	strategy.title = transparent
+		? "Choose native alpha or bridge-emulated chroma removal."
+		: "Transparency controls apply only when Background is Transparent.";
+	const chroma = transparent && strategy.value !== "native";
+	for (const name of [
+		"chroma-key",
+		"chroma-transparent-threshold",
+		"chroma-opaque-threshold",
+		"despill",
+	]) {
+		const control = form.elements.namedItem(name);
+		control.disabled = !chroma;
+		control.title = chroma
+			? "Used by bridge-emulated chroma-key transparency."
+			: "Chroma controls require transparent background without native-only alpha.";
+	}
 }

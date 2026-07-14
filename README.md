@@ -117,6 +117,19 @@ work.
 `--preview` renders in supported Kitty/iTerm2-compatible terminals and degrades
 to a status message elsewhere; `--open` launches the system image viewer.
 
+Save and reuse complete settings across the CLI, API, and dashboard:
+
+```sh
+imagegen-bridge preset create portrait-high --from request.json
+imagegen-bridge generate "A red-haired woman" --preset portrait-high
+imagegen-bridge preset update portrait-high --from updated-template.json
+imagegen-bridge preset delete portrait-high --force
+```
+
+A preset can retain its own prompt, or the prompt on `generate`/`edit` can
+replace it. Image inputs, masks, reference-image bytes, and idempotency keys are
+never retained in presets.
+
 Edit an image or add visual references:
 
 ```sh
@@ -280,10 +293,12 @@ capability-aware controls, transparency processing, ordered fallback routes,
 durable queue progress, cancellation confirmations,
 verified transient partial previews, server-side prompt search, favorites,
 hide/restore, verified thumbnails,
-full-image viewing and download, portable output-folder copy, timings, revised
-prompts, raw retained metadata, model-specific capability exploration, and a
-bounded redacted operator event history. The copied folder is relative to the
-configured artifact root; the browser never receives a host filesystem path.
+full-image viewing and download, portable artifact-path copy, reusable preset
+CRUD, timings, revised prompts, raw retained metadata, model-specific
+capability exploration, and a bounded redacted operator event history. Copied
+paths are artifact-root-relative; the browser never receives a host filesystem
+path. Controls that the selected provider cannot honor are disabled with an
+explanation instead of submitting misleading values.
 When bridge bearer authentication is enabled, enter the
 token in the Connection dialog; it is kept in `sessionStorage` for that browser
 tab and is never placed in a URL. Protected routes reject cross-site browser
@@ -339,6 +354,8 @@ Important routes:
 | `GET /v1/jobs/{id}` | Job state, request, result, and structured error |
 | `DELETE /v1/jobs/{id}` | Request durable cancellation |
 | `PATCH /v1/jobs/{id}` | Favorite, soft-delete, or restore a history item |
+| `GET, POST /v1/presets` | List or create reusable request presets |
+| `GET, PUT, DELETE /v1/presets/{name}` | Read, replace, or delete a preset |
 | `GET /v1/artifacts/{id}` | Authenticated ownership-verified image bytes |
 | `GET /v1/artifacts/{id}/thumbnail` | Bounded PNG thumbnail for galleries |
 | `GET /v1/jobs/{id}/partial` | Latest verified transient preview for a running job |

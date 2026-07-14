@@ -1,9 +1,13 @@
 import { BridgeApi, BridgeApiError } from "/dashboard/api.js";
 import {
 	applyCapabilities,
+	applyPresetTemplate,
 	buildRequest,
+	presetTemplateFromRequest,
+	updateFormatFields,
 	updateOperationFields,
 	updateSessionFields,
+	updateTransparencyFields,
 } from "/dashboard/form.js";
 
 const api = new BridgeApi();
@@ -19,6 +23,8 @@ const state = {
 	authenticationPrompted: false,
 	providers: [],
 	defaultProvider: "",
+	presets: new Map(),
+	presetMode: "create",
 };
 
 const PARAMETER_LABELS = {
@@ -47,6 +53,21 @@ const elements = {
 	model: document.querySelector("#model"),
 	knownModels: document.querySelector("#known-models"),
 	providerNote: document.querySelector("#provider-note"),
+	capabilitySummary: document.querySelector("#capability-summary"),
+	preset: document.querySelector("#preset"),
+	presetMessage: document.querySelector("#preset-message"),
+	applyPreset: document.querySelector("#apply-preset-button"),
+	createPreset: document.querySelector("#create-preset-button"),
+	editPreset: document.querySelector("#edit-preset-button"),
+	deletePreset: document.querySelector("#delete-preset-button"),
+	presetDialog: document.querySelector("#preset-dialog"),
+	presetForm: document.querySelector("#preset-form"),
+	presetDialogTitle: document.querySelector("#preset-dialog-title"),
+	presetName: document.querySelector("#preset-name"),
+	presetDescription: document.querySelector("#preset-description"),
+	presetDialogMessage: document.querySelector("#preset-dialog-message"),
+	savePreset: document.querySelector("#save-preset-button"),
+	closePresetDialog: document.querySelector("#close-preset-dialog-button"),
 	grid: document.querySelector("#job-grid"),
 	libraryMessage: document.querySelector("#library-message"),
 	statusFilter: document.querySelector("#status-filter"),
@@ -161,6 +182,27 @@ function renderProviderNote(capabilities, selectedProvider) {
 	);
 }
 
+function renderCapabilitySummary(capabilities) {
+	const sizes = capabilities.sizes || {};
+	const size =
+		sizes.arbitrary || (sizes.allowed?.length ?? 0) > 0
+			? "selectable sizes"
+			: "automatic size only";
+	const aspect =
+		capabilities.aspect_ratio === "unsupported"
+			? "aspect ratio unavailable"
+			: `${capabilities.aspect_ratio} aspect ratio`;
+	const resolution =
+		capabilities.resolution === "unsupported"
+			? "resolution unavailable"
+			: `${capabilities.resolution} resolution`;
+	const backgrounds = [...(capabilities.backgrounds || [])];
+	if (capabilities.transparent_background === "emulated") {
+		backgrounds.push("transparent (bridge emulation)");
+	}
+	elements.capabilitySummary.textContent = `${size} · ${aspect} · ${resolution} · quality ${joinValues(capabilities.qualities) || "none"} · format ${joinValues(capabilities.output_formats) || "none"} · background ${backgrounds.join(", ") || "none"}`;
+}
+
 function setConnection(label, status) {
 	elements.connectionStatus.textContent = label;
 	elements.connectionStatus.dataset.state = status;
@@ -230,6 +272,7 @@ async function loadCapabilities() {
 	if (!provider) {
 		applyCapabilities(elements.form, null);
 		elements.providerNote.textContent = "No provider available";
+		elements.capabilitySummary.textContent = "";
 		return;
 	}
 	try {
@@ -239,8 +282,113 @@ async function loadCapabilities() {
 		);
 		applyCapabilities(elements.form, capabilities);
 		renderProviderNote(capabilities, selectedProvider);
+		renderCapabilitySummary(capabilities);
 	} catch (error) {
 		handleError(error, elements.formMessage);
+	}
+}
+
+async function loadPresets() {
+	const selected = elements.preset.value;
+	const page = await api.listPresets();
+	state.presets = new Map(
+		(page.items || []).map((preset) => [preset.name, preset]),
+	);
+	elements.preset.replaceChildren(
+		new Option("No preset", ""),
+		...Array.from(state.presets.values(), (preset) =>
+			new Option(
+				preset.description
+					? `${preset.name} — ${preset.description}`
+					: preset.name,
+				preset.name,
+			),
+		),
+	);
+	elements.preset.value = state.presets.has(selected) ? selected : "";
+	updatePresetActions();
+}
+
+function updatePresetActions() {
+	const selected = state.presets.has(elements.preset.value);
+	elements.applyPreset.disabled = !selected;
+	elements.editPreset.disabled = !selected;
+	elements.deletePreset.disabled = !selected;
+}
+
+async function applySelectedPreset() {
+	const preset = state.presets.get(elements.preset.value);
+	if (!preset) return;
+	applyPresetTemplate(elements.form, preset.template);
+	await loadCapabilities();
+	setMessage(elements.presetMessage, `Applied preset ${preset.name}`, "ready");
+}
+
+function openPresetDialog(mode) {
+	state.presetMode = mode;
+	const preset = state.presets.get(elements.preset.value);
+	const editing = mode === "update" && preset;
+	elements.presetDialogTitle.textContent = editing
+		? `Edit ${preset.name}`
+		: "Save preset";
+	elements.savePreset.textContent = editing ? "Update preset" : "Create preset";
+	elements.presetName.value = editing ? preset.name : "";
+	elements.presetName.readOnly = Boolean(editing);
+	elements.presetDescription.value = editing
+		? preset.description || ""
+		: "";
+	setMessage(elements.presetDialogMessage);
+	elements.presetDialog.showModal();
+	(editing ? elements.presetDescription : elements.presetName).focus();
+}
+
+async function savePreset(event) {
+	event.preventDefault();
+	elements.savePreset.disabled = true;
+	setMessage(elements.presetDialogMessage, "Saving preset");
+	try {
+		const request = await buildRequest(elements.form, {
+			requireEditImages: false,
+		});
+		const write = {
+			description: elements.presetDescription.value.trim() || undefined,
+			template: presetTemplateFromRequest(request),
+		};
+		const name = elements.presetName.value.trim();
+		const saved =
+			state.presetMode === "update"
+				? await api.replacePreset(name, write)
+				: await api.createPreset({ name, ...write });
+		await loadPresets();
+		elements.preset.value = saved.name;
+		updatePresetActions();
+		elements.presetDialog.close();
+		setMessage(elements.presetMessage, `Saved preset ${saved.name}`, "ready");
+	} catch (error) {
+		handleError(error, elements.presetDialogMessage);
+	} finally {
+		elements.savePreset.disabled = false;
+	}
+}
+
+async function deleteSelectedPreset() {
+	const preset = state.presets.get(elements.preset.value);
+	if (!preset) return;
+	const confirmed = await confirmAction({
+		title: "Delete preset?",
+		message: `Delete the reusable preset “${preset.name}”? Existing jobs are unchanged.`,
+		action: "Delete preset",
+	});
+	if (!confirmed) return;
+	elements.deletePreset.disabled = true;
+	try {
+		await api.deletePreset(preset.name);
+		await loadPresets();
+		setMessage(elements.presetMessage, `Deleted preset ${preset.name}`, "ready");
+	} catch (error) {
+		handleError(error, elements.presetMessage);
+	} finally {
+		updatePresetActions();
 	}
 }
 
@@ -924,8 +1072,8 @@ function renderDetail(job) {
 		const caption = create("figcaption");
 		const imageActions = create("span", "detail-image-actions");
 		imageActions.append(
-			makeButton("Copy folder", "secondary compact", () =>
-				copyArtifactFolder(output),
+			makeButton("Copy path", "secondary compact", () =>
+				copyArtifactPath(output),
 			),
 			makeButton("Download", "secondary compact detail-download", () =>
 				downloadArtifact(output),
@@ -1189,21 +1337,22 @@ async function downloadArtifact(output) {
 	}
 }
 
-async function copyArtifactFolder(output) {
+async function copyArtifactPath(output) {
 	const name = typeof output.name === "string" ? output.name : "";
-	const parts = name.split("/").filter(Boolean);
-	const folder = parts.length > 1 ? parts.slice(0, -1).join("/") : ".";
+	const path =
+		name ||
+		`image-${Number(output.index ?? 0) + 1}.${output.format || "png"}`;
 	try {
-		await copyText(folder);
+		await copyText(path);
 		setMessage(
 			elements.detailMessage,
-			`Copied portable output folder: ${folder}`,
+			`Copied portable artifact path: ${path}`,
 			"ready",
 		);
 	} catch {
 		setMessage(
 			elements.detailMessage,
-			`Could not copy the portable output folder. Folder: ${folder}`,
+			`Could not copy the portable artifact path. Path: ${path}`,
 			"error",
 		);
 	}
@@ -1315,10 +1464,35 @@ function bindEvents() {
 	);
 	elements.provider.addEventListener("change", loadCapabilities);
 	elements.model.addEventListener("change", loadCapabilities);
+	elements.preset.addEventListener("change", updatePresetActions);
+	elements.applyPreset.addEventListener("click", applySelectedPreset);
+	elements.createPreset.addEventListener("click", () =>
+		openPresetDialog("create"),
+	);
+	elements.editPreset.addEventListener("click", () =>
+		openPresetDialog("update"),
+	);
+	elements.deletePreset.addEventListener("click", deleteSelectedPreset);
+	elements.presetForm.addEventListener("submit", savePreset);
+	elements.closePresetDialog.addEventListener("click", () =>
+		elements.presetDialog.close(),
+	);
+	elements.presetDialog.addEventListener("click", (event) => {
+		if (event.target === elements.presetDialog) elements.presetDialog.close();
+	});
+	elements.form.elements.namedItem("format").addEventListener("change", () =>
+		updateFormatFields(elements.form),
+	);
+	elements.form.elements.namedItem("background").addEventListener("change", () =>
+		updateTransparencyFields(elements.form),
+	);
+	elements.form.elements.namedItem("transparency").addEventListener("change", () =>
+		updateTransparencyFields(elements.form),
+	);
 	elements.refresh.addEventListener("click", async () => {
 		elements.refresh.disabled = true;
 		try {
-			await Promise.all([loadProviders(), loadJobs()]);
+			await Promise.all([loadProviders(), loadPresets(), loadJobs()]);
 		} catch (error) {
 			handleError(error);
 		} finally {
@@ -1353,7 +1527,7 @@ function bindEvents() {
 		elements.token.value = "";
 		state.authenticationPrompted = false;
 		loadProviders()
-			.then(() => loadJobs())
+			.then(() => Promise.all([loadPresets(), loadJobs()]))
 			.catch((error) => handleError(error));
 	});
 	elements.connectionDialog.addEventListener("submit", (event) => {
@@ -1362,7 +1536,7 @@ function bindEvents() {
 		api.setToken(elements.token.value);
 		elements.connectionDialog.close();
 		state.authenticationPrompted = false;
-		Promise.all([loadProviders(), loadJobs()]).catch((error) =>
+		Promise.all([loadProviders(), loadPresets(), loadJobs()]).catch((error) =>
 			handleError(error),
 		);
 	});
@@ -1386,7 +1560,11 @@ async function initialize() {
 	updateSessionFields(elements.sessionMode.value);
 	showSkeletons();
 	try {
-		await Promise.all([loadProviders(), loadJobs({ quiet: true })]);
+		await Promise.all([
+			loadProviders(),
+			loadPresets(),
+			loadJobs({ quiet: true }),
+		]);
 	} catch (error) {
 		handleError(error);
 	}

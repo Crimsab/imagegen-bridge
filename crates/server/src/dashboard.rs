@@ -110,12 +110,27 @@ mod tests {
         assert!(INDEX_HTML.contains("type=\"module\""));
         assert!(INDEX_HTML.contains("id=\"detail-message\""));
         assert!(INDEX_HTML.contains("id=\"event-table-body\""));
-        assert!(APP_JS.contains("copyArtifactFolder"));
+        assert!(APP_JS.contains("copyArtifactPath"));
         assert!(APP_JS.contains("renderOperatorEvents"));
         assert!(APP_JS.contains("Requested and effective parameters"));
         assert!(APP_JS.contains("Applied normalizations"));
         assert!(APP_JS.contains("loadPartialImage"));
         assert!(!INDEX_HTML.contains("<script>"));
         assert!(!INDEX_HTML.contains("style=\""));
+    }
+
+    #[test]
+    fn advanced_dashboard_fixture_is_structurally_valid() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let request: imagegen_bridge_core::ImageRequest =
+            serde_json::from_str(include_str!("../dashboard/advanced-request.fixture.json"))?;
+        imagegen_bridge_core::validate_request(
+            &request,
+            imagegen_bridge_core::RequestLimits::default(),
+        )?;
+        assert_eq!(request.parameters.n, 2);
+        assert_eq!(request.output.directory.as_deref(), Some("tests/red"));
+        assert_eq!(request.routing.fallbacks.len(), 1);
+        Ok(())
     }
 }

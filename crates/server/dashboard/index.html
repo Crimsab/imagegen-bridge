@@ -34,10 +34,28 @@
             <p class="kicker">New operation</p>
             <h2 id="composer-title">Create with Codex</h2>
           </div>
-          <span id="provider-note" class="quiet provider-note">Provider default</span>
+          <div class="provider-context">
+            <span id="provider-note" class="quiet provider-note">Provider default</span>
+            <span id="capability-summary" class="quiet capability-summary"></span>
+          </div>
         </div>
 
         <form id="generation-form">
+          <section class="preset-toolbar" aria-label="Generation presets">
+            <label class="field preset-select">
+              <span>Preset</span>
+              <select id="preset" name="preset">
+                <option value="">No preset</option>
+              </select>
+            </label>
+            <div class="preset-actions">
+              <button id="apply-preset-button" class="button secondary compact" type="button" disabled>Apply</button>
+              <button id="create-preset-button" class="button secondary compact" type="button">Save as</button>
+              <button id="edit-preset-button" class="button secondary compact" type="button" disabled>Edit</button>
+              <button id="delete-preset-button" class="button danger compact" type="button" disabled>Delete</button>
+            </div>
+            <div id="preset-message" class="form-message preset-message" role="status" aria-live="polite"></div>
+          </section>
           <label class="field prompt-field">
             <span>Prompt</span>
             <textarea id="prompt" name="prompt" rows="5" required maxlength="131072" placeholder="Describe the image you want to create"></textarea>
@@ -170,10 +188,13 @@
                 <span>Opaque threshold</span>
                 <input id="chroma-opaque-threshold" name="chroma-opaque-threshold" type="number" min="1" max="255" value="96" inputmode="numeric">
               </label>
-              <label class="field check-filter">
-                <input id="despill" name="despill" type="checkbox" checked>
-                <span>Clean chroma spill</span>
-              </label>
+              <div class="field">
+                <span>Chroma cleanup</span>
+                <label class="check-control">
+                  <input id="despill" name="despill" type="checkbox" checked>
+                  <span>Clean chroma spill</span>
+                </label>
+              </div>
               <label class="field">
                 <span>Moderation</span>
                 <select id="moderation" name="moderation">
@@ -371,6 +392,31 @@
         </div>
       </section>
     </main>
+
+    <dialog id="preset-dialog" class="dialog connection-dialog" aria-labelledby="preset-dialog-title">
+      <form id="preset-form" class="dialog-body">
+        <div class="dialog-heading">
+          <div>
+            <p class="kicker">Reusable configuration</p>
+            <h2 id="preset-dialog-title">Save preset</h2>
+          </div>
+          <button id="close-preset-dialog-button" class="button secondary compact" type="button">Close</button>
+        </div>
+        <p class="quiet">Presets store the current prompt and every configuration value, but never uploaded image bytes or one-shot idempotency keys.</p>
+        <label class="field">
+          <span>Name</span>
+          <input id="preset-name" name="preset-name" type="text" required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" autocomplete="off" placeholder="portrait-high">
+        </label>
+        <label class="field">
+          <span>Description</span>
+          <textarea id="preset-description" name="preset-description" rows="3" maxlength="512" placeholder="Optional note about when to use this preset"></textarea>
+        </label>
+        <div id="preset-dialog-message" class="form-message" role="status" aria-live="polite"></div>
+        <div class="dialog-actions">
+          <button id="save-preset-button" class="button primary" type="submit">Create preset</button>
+        </div>
+      </form>
+    </dialog>
 
     <dialog id="connection-dialog" class="dialog connection-dialog" aria-labelledby="connection-title">
       <form method="dialog" class="dialog-body">
