@@ -7,6 +7,26 @@ on:
         description: Existing release tag to publish
         required: true
         type: string
+      publish_crates:
+        description: Publish Rust crates
+        required: false
+        default: true
+        type: boolean
+      publish_pypi:
+        description: Publish the Python SDK
+        required: false
+        default: true
+        type: boolean
+      publish_typescript:
+        description: Publish the TypeScript SDK
+        required: false
+        default: true
+        type: boolean
+      publish_container:
+        description: Publish the GHCR image
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -55,6 +75,7 @@ jobs:
   crates:
     name: crates.io
     needs: verify
+    if: ${{ inputs.publish_crates }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: crates-io
@@ -147,6 +168,7 @@ jobs:
   pypi:
     name: PyPI
     needs: verify
+    if: ${{ inputs.publish_pypi }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: pypi
@@ -176,6 +198,7 @@ jobs:
   npm:
     name: npm
     needs: verify
+    if: ${{ inputs.publish_typescript }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: npm
@@ -232,6 +255,7 @@ jobs:
   ghcr:
     name: GHCR
     needs: verify
+    if: ${{ inputs.publish_container }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
