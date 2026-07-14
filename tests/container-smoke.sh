@@ -41,9 +41,27 @@ fi
 cat >"$TEMP/fake-codex" <<'SCRIPT'
 #!/bin/sh
 while IFS= read -r line; do
+  id=$(printf '%s\n' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
   case "$line" in
-    *'"method":"initialize"'*) printf '%s\n' '{"id":1,"result":{}}' ;;
-    *'"method":"account/read"'*) printf '%s\n' '{"id":2,"result":{"account":{"type":"chatgpt"}}}' ;;
+    *'"method":"initialize"'*)
+      printf '{"id":%s,"result":{}}\n' "$id"
+      ;;
+    *'"method":"account/read"'*)
+      printf '{"id":%s,"result":{"account":{"type":"chatgpt"}}}\n' "$id"
+      ;;
+    *'"method":"thread/start"'*)
+      printf '%s\n' 'thread/start' >>/data/state/rpc-methods.log
+      printf '{"id":%s,"result":{"thread":{"id":"thread-container-smoke"}}}\n' "$id"
+      ;;
+    *'"method":"thread/resume"'*)
+      printf '%s\n' 'thread/resume' >>/data/state/rpc-methods.log
+      printf '{"id":%s,"result":{"thread":{"id":"thread-container-smoke"}}}\n' "$id"
+      ;;
+    *'"method":"turn/start"'*)
+      printf '{"id":%s,"result":{"turn":{"id":"turn-container-smoke"}}}\n' "$id"
+      printf '%s\n' '{"method":"item/completed","params":{"threadId":"thread-container-smoke","turnId":"turn-container-smoke","item":{"type":"imageGeneration","id":"image-container-smoke","status":"completed","revisedPrompt":"container smoke fixture","result":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="}}}'
+      printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-container-smoke","turn":{"id":"turn-container-smoke","status":"completed","items":[]}}}'
+      ;;
   esac
 done
 SCRIPT
@@ -81,6 +99,25 @@ enabled = true
 database = "/data/state/jobs.sqlite3"
 EOF
 
+cat >"$TEMP/request-first.json" <<'EOF'
+{
+  "version": "1",
+  "prompt": "container restart fixture one",
+  "operation": "generate",
+  "session": {"mode": "persistent", "key": "container-smoke"},
+  "policies": {"compatibility": "normalize"}
+}
+EOF
+cat >"$TEMP/request-second.json" <<'EOF'
+{
+  "version": "1",
+  "prompt": "container restart fixture two",
+  "operation": "generate",
+  "session": {"mode": "persistent", "key": "container-smoke"},
+  "policies": {"compatibility": "normalize"}
+}
+EOF
+
 for volume in \
   "$CONFIG_VOLUME" "$WORKSPACE_VOLUME" "$STATE_VOLUME" \
   "$ARTIFACT_VOLUME" "$CODEX_VOLUME"
@@ -113,6 +150,20 @@ docker cp "$TEMP/config.toml" "$SEEDER:/config/imagegen-bridge.toml"
 docker cp "$TEMP/fake-codex" "$SEEDER:/workspace/fake-codex"
 docker start --attach "$SEEDER" >/dev/null
 docker rm "$SEEDER" >/dev/null
+
+# A deliberately sparse version-1 configuration models an older deployment.
+# New defaults must stay backward-compatible, and validation must work with a
+# read-only root filesystem without opening provider or SQLite state.
+CHECK=$(docker run --rm \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=1777 \
+  --tmpfs /home/imagegen:rw,noexec,nosuid,nodev,size=8m,uid=10001,gid=10001,mode=0700 \
+  --volume "$CONFIG_VOLUME:/config:ro" \
+  --volume "$WORKSPACE_VOLUME:/workspace:ro" \
+  --volume "$STATE_VOLUME:/data/state" \
+  --volume "$ARTIFACT_VOLUME:/data/artifacts" \
+  "$IMAGE" imagegen-bridge --config /config/imagegen-bridge.toml config check --json)
+[ "$CHECK" = '{"issues":[],"valid":true}' ]
 
 docker run --detach --name "$NAME" \
   --network "$NETWORK" \
@@ -160,6 +211,43 @@ curl --fail --silent \
 STATUS=$(curl --silent --output /dev/null --write-out '%{http_code}' \
   "$BASE_URL/v1/providers")
 [ "$STATUS" = "401" ]
+
+curl --fail --silent --show-error \
+  --header "Authorization: Bearer $SMOKE_TOKEN" \
+  --header "Content-Type: application/json" \
+  --data-binary "@$TEMP/request-first.json" \
+  --output "$TEMP/first-response.json" \
+  "$BASE_URL/v1/images"
+grep -q '"thread_id":"thread-container-smoke"' "$TEMP/first-response.json"
+grep -q '"reused":false' "$TEMP/first-response.json"
+
+docker stop --time 45 "$NAME" >/dev/null
+[ "$(docker inspect --format '{{.State.ExitCode}}' "$NAME")" = "0" ]
+
+# Reuse the exact container and named volumes. The bridge must reopen its
+# migrated SQLite state and resume the existing Codex thread rather than create
+# another chat.
+docker start "$NAME" >/dev/null
+attempt=0
+until curl --fail --silent "$BASE_URL/health/live" >/dev/null; do
+  attempt=$((attempt + 1))
+  if [ "$attempt" -ge 100 ]; then
+    docker logs --tail 100 "$NAME" >&2
+    exit 1
+  fi
+  sleep 0.1
+done
+curl --fail --silent "$BASE_URL/health/ready" | grep -q '"status":"ready"'
+curl --fail --silent --show-error \
+  --header "Authorization: Bearer $SMOKE_TOKEN" \
+  --header "Content-Type: application/json" \
+  --data-binary "@$TEMP/request-second.json" \
+  --output "$TEMP/second-response.json" \
+  "$BASE_URL/v1/images"
+grep -q '"thread_id":"thread-container-smoke"' "$TEMP/second-response.json"
+grep -q '"reused":true' "$TEMP/second-response.json"
+docker exec "$NAME" sh -c \
+  'grep -qx "thread/start" /data/state/rpc-methods.log && grep -qx "thread/resume" /data/state/rpc-methods.log'
 
 docker stop --time 45 "$NAME" >/dev/null
 [ "$(docker inspect --format '{{.State.ExitCode}}' "$NAME")" = "0" ]

@@ -63,9 +63,43 @@ upgrade, run `imagegen-bridge config check` with the new binary/image, then
 replace the container without deleting named volumes. The configuration loader
 rejects unknown or invalid fields before mutating storage.
 
+## Troubleshooting
+
+If liveness succeeds but readiness returns `503`, keep the service on loopback
+and run the non-generating diagnostics first:
+
+```sh
+docker compose exec imagegen-bridge imagegen-bridge \
+  --config /config/imagegen-bridge.toml doctor --non-interactive --json
+docker compose logs --tail 100 imagegen-bridge
+```
+
+An authentication failure normally means `/codex-home/auth.json` is absent,
+expired, or not writable by UID 10001. Re-run `codex login` outside the
+container, copy only the dedicated Codex state described above, preserve its
+secret permissions, and restart. Do not print `auth.json` or mount a whole user
+home while debugging.
+
+For `permission denied` errors, verify ownership of the Codex, state, and
+artifact mounts and that the config/workspace mounts are intentionally
+read-only. Do not solve this with world-writable permissions. A config failure
+should be reproduced with `config check`; it is non-mutating and reports the
+field path without resolving secrets.
+
+If startup reports a SQLite migration error, stop the service, take a
+consistent backup of `/data/state`, and retain the original volume for
+diagnosis. Never delete or hand-edit the database as an automatic repair.
+Queued jobs resume after a clean restart; a job that was running during an
+uncertain shutdown becomes `interrupted` and is not paid/retried again without
+an explicit new request. Provider restart counts, readiness, bounded storage
+facts, and redacted recent API events are available from authenticated
+`GET /v1/diagnostics`.
+
 ## Container verification
 
 `tests/container-smoke.sh` builds the image and runs a disposable fake-Codex
 deployment. It verifies non-root UID, read-only rootfs, liveness, provider
-readiness, protected metrics/API, and graceful SIGTERM exit. It never performs
-a live or paid image generation.
+readiness, protected metrics/API, backward-compatible version-1 config loading,
+graceful SIGTERM exit, persistent SQLite state, and app-server thread resume
+after a real container stop/start. The generated fixture is local and it never
+performs a live or paid image generation.

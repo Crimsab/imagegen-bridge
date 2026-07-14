@@ -72,8 +72,9 @@ cargo install --locked --path crates/cli
 
 `setup` detects Codex and ChatGPT OAuth, previews every filesystem change,
 writes a user configuration atomically, creates private state and artifact
-directories, and applies the session and job SQLite schemas idempotently. It never generates an
-image unless `--live-probe` is explicitly requested and confirmed. Use
+directories, and applies the session and job SQLite schemas idempotently. It
+never generates an image unless `--live-probe` is explicitly requested and
+confirmed. Use
 `setup --dry-run --json` to inspect the plan or `setup --yes --non-interactive`
 for automation. `doctor` checks the executable/version, configuration, OAuth,
 permissions, database schema, listener availability, provider readiness, and
