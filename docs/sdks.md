@@ -55,7 +55,8 @@ completion, and error events. `BridgeAPIError` exposes HTTP status, standard
 error fields, stable bridge code, retryability, safe provider/upstream IDs,
 details, and request ID.
 `client.jobs` provides typed create/get/list/cancel operations for durable
-artifact-backed work; job pages never duplicate inline request image bodies.
+artifact-backed work plus `update` for favorite/delete/restore state; job pages
+never duplicate inline request image bodies.
 
 ## TypeScript
 

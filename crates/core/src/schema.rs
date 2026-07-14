@@ -4,8 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    BridgeError, ImageJob, ImageJobPage, ImageRequest, ImageResponse, ProviderCapabilities,
-    ProviderDescriptor, ProviderEvent, ValidationIssue,
+    BridgeError, ImageJob, ImageJobPage, ImageJobUpdate, ImageRequest, ImageResponse,
+    ProviderCapabilities, ProviderDescriptor, ProviderEvent, ValidationIssue,
 };
 
 /// All top-level native messages represented as one versioned JSON Schema.
@@ -26,6 +26,8 @@ pub enum ContractMessage {
     Job(Box<ImageJob>),
     /// Cursor-paginated durable job summaries.
     JobPage(ImageJobPage),
+    /// Mutable retained-history fields.
+    JobUpdate(ImageJobUpdate),
     /// Public bridge error.
     Error(BridgeError),
     /// One validation issue.

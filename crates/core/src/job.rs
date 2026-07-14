@@ -101,3 +101,15 @@ pub struct ImageJobPage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
 }
+
+/// Mutable gallery fields for one retained durable job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ImageJobUpdate {
+    /// Set or clear the favorite marker.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub favorite: Option<bool>,
+    /// Soft-delete or restore a terminal history item.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deleted: Option<bool>,
+}

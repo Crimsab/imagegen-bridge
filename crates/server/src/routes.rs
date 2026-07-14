@@ -16,12 +16,13 @@ use axum::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use imagegen_bridge_config::ServerSettings;
 use imagegen_bridge_core::{
-    BridgeError, ErrorCode, ImageJob, ImageJobPage, ImageJobStatus, ImageRequest,
+    BridgeError, ErrorCode, ImageJob, ImageJobPage, ImageJobStatus, ImageJobUpdate, ImageRequest,
     ProviderDescriptor, ProviderEvent,
 };
 use imagegen_bridge_runtime::{ExecutionContext, ImagegenRuntime, ProviderReadinessStatus};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tower::limit::ConcurrencyLimitLayer;
@@ -166,7 +167,15 @@ pub fn router(state: ServerState, settings: &ServerSettings) -> Router {
     if state.jobs.is_some() {
         protected = protected
             .route("/v1/jobs", post(create_job).get(list_jobs))
-            .route("/v1/jobs/{id}", get(get_job).delete(cancel_job));
+            .route(
+                "/v1/jobs/{id}",
+                get(get_job).delete(cancel_job).patch(update_job),
+            );
+    }
+    if state.runtime.has_artifact_store() {
+        protected = protected
+            .route("/v1/artifacts/{id}", get(get_artifact))
+            .route("/v1/artifacts/{id}/thumbnail", get(get_artifact_thumbnail));
     }
     let protected = protected.route_layer(middleware::from_fn_with_state(state.clone(), authorize));
     Router::new()
@@ -572,6 +581,147 @@ async fn cancel_job(
         .map_err(|error| job_api_error(error, request_id))
 }
 
+async fn update_job(
+    State(state): State<ServerState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(id): Path<String>,
+    payload: Result<Json<ImageJobUpdate>, JsonRejection>,
+) -> Result<Json<ImageJob>, ApiError> {
+    let Json(update) = payload.map_err(|_| {
+        ApiError::bad_request(
+            "request body must be a valid ImageJobUpdate JSON object",
+            request_id.clone(),
+        )
+    })?;
+    let manager = state.jobs.as_ref().ok_or_else(|| {
+        ApiError::from_bridge(
+            BridgeError::new(ErrorCode::Configuration, "durable jobs are disabled"),
+            request_id.clone(),
+        )
+    })?;
+    manager
+        .update_history(&id, update)
+        .await
+        .map(Json)
+        .map_err(|error| job_api_error(error, request_id))
+}
+
+async fn get_artifact(
+    State(state): State<ServerState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    let runtime = Arc::clone(&state.runtime);
+    let artifact = tokio::task::spawn_blocking(move || runtime.read_artifact(&id))
+        .await
+        .map_err(|_| {
+            ApiError::from_bridge(
+                BridgeError::new(ErrorCode::Internal, "artifact delivery task failed"),
+                request_id.clone(),
+            )
+        })?
+        .map_err(|error| artifact_api_error(error, request_id.clone()))?;
+    let content_type = match artifact.metadata.format {
+        imagegen_bridge_core::OutputFormat::Png => "image/png",
+        imagegen_bridge_core::OutputFormat::Jpeg => "image/jpeg",
+        imagegen_bridge_core::OutputFormat::Webp => "image/webp",
+    };
+    artifact_response(
+        artifact.bytes,
+        content_type,
+        &artifact.metadata.sha256,
+        artifact.name.rsplit('/').next(),
+        request_id,
+    )
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct ThumbnailQuery {
+    edge: u32,
+}
+
+impl Default for ThumbnailQuery {
+    fn default() -> Self {
+        Self { edge: 384 }
+    }
+}
+
+async fn get_artifact_thumbnail(
+    State(state): State<ServerState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(id): Path<String>,
+    query: Result<Query<ThumbnailQuery>, QueryRejection>,
+) -> Result<Response, ApiError> {
+    let Query(query) = query.map_err(|_| {
+        ApiError::bad_request("thumbnail query parameters are invalid", request_id.clone())
+    })?;
+    if !(32..=2_048).contains(&query.edge) {
+        return Err(ApiError::bad_request(
+            "thumbnail edge must be between 32 and 2048 pixels",
+            request_id,
+        ));
+    }
+    let runtime = Arc::clone(&state.runtime);
+    let artifact_id = id.clone();
+    let bytes = tokio::task::spawn_blocking(move || {
+        runtime.read_artifact_thumbnail(&artifact_id, query.edge)
+    })
+    .await
+    .map_err(|_| {
+        ApiError::from_bridge(
+            BridgeError::new(ErrorCode::Internal, "thumbnail delivery task failed"),
+            request_id.clone(),
+        )
+    })?
+    .map_err(|error| artifact_api_error(error, request_id.clone()))?;
+    let digest = format!("{:x}", Sha256::digest(&bytes));
+    let filename = format!("thumbnail-{id}.png");
+    artifact_response(bytes, "image/png", &digest, Some(&filename), request_id)
+}
+
+fn artifact_response(
+    bytes: Vec<u8>,
+    content_type: &'static str,
+    digest: &str,
+    filename: Option<&str>,
+    request_id: RequestId,
+) -> Result<Response, ApiError> {
+    let etag = HeaderValue::from_str(&format!("\"{digest}\"")).map_err(|_| {
+        ApiError::from_bridge(
+            BridgeError::new(ErrorCode::Internal, "artifact checksum header is invalid"),
+            request_id.clone(),
+        )
+    })?;
+    let disposition = HeaderValue::from_str(&format!(
+        "inline; filename=\"{}\"",
+        filename.unwrap_or("image")
+    ))
+    .map_err(|_| {
+        ApiError::from_bridge(
+            BridgeError::new(ErrorCode::Internal, "artifact filename header is invalid"),
+            request_id,
+        )
+    })?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, HeaderValue::from_static(content_type)),
+            (
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("private, max-age=31536000, immutable"),
+            ),
+            (header::ETAG, etag),
+            (header::CONTENT_DISPOSITION, disposition),
+            (
+                header::X_CONTENT_TYPE_OPTIONS,
+                HeaderValue::from_static("nosniff"),
+            ),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
 fn job_api_error(error: BridgeError, request_id: RequestId) -> ApiError {
     let not_found = error.code == ErrorCode::InvalidRequest
         && error
@@ -585,6 +735,10 @@ fn job_api_error(error: BridgeError, request_id: RequestId) -> ApiError {
     } else {
         error
     }
+}
+
+fn artifact_api_error(error: BridgeError, request_id: RequestId) -> ApiError {
+    ApiError::from_bridge(error, request_id).with_status(StatusCode::NOT_FOUND)
 }
 
 pub(crate) async fn run_request(
@@ -1066,10 +1220,42 @@ mod tests {
         .unwrap();
         assert_eq!(completed.summary.status, ImageJobStatus::Succeeded);
         let result = completed.result.unwrap();
-        assert!(matches!(
-            result.data[0].payload,
-            ImagePayload::Artifact { .. }
-        ));
+        let artifact_id = result
+            .data
+            .iter()
+            .find_map(|image| match &image.payload {
+                ImagePayload::Artifact { id, .. } => Some(id.clone()),
+                _ => None,
+            })
+            .unwrap();
+
+        let artifact = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/v1/artifacts/{artifact_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(artifact.status(), StatusCode::OK);
+        assert_eq!(artifact.headers()[header::CONTENT_TYPE], "image/png");
+        assert_eq!(
+            artifact.headers()[header::X_CONTENT_TYPE_OPTIONS],
+            "nosniff"
+        );
+
+        let thumbnail = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/v1/artifacts/{artifact_id}/thumbnail?edge=128"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(thumbnail.status(), StatusCode::OK);
+        assert_eq!(thumbnail.headers()[header::CONTENT_TYPE], "image/png");
 
         let listed = app
             .clone()
@@ -1085,6 +1271,43 @@ mod tests {
         let page: ImageJobPage = serde_json::from_slice(&body).unwrap();
         assert_eq!(page.items.len(), 1);
         assert_eq!(page.items[0].id, id);
+
+        let updated = app
+            .clone()
+            .oneshot(
+                Request::patch(format!("/v1/jobs/{id}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"favorite":true,"deleted":true}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.status(), StatusCode::OK);
+        let body = updated.into_body().collect().await.unwrap().to_bytes();
+        let updated: ImageJob = serde_json::from_slice(&body).unwrap();
+        assert!(updated.summary.favorite);
+        assert!(updated.summary.deleted.is_some());
+
+        let hidden = app
+            .clone()
+            .oneshot(Request::get("/v1/jobs").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let body = hidden.into_body().collect().await.unwrap().to_bytes();
+        let hidden: ImageJobPage = serde_json::from_slice(&body).unwrap();
+        assert!(hidden.items.is_empty());
+
+        let restored = app
+            .clone()
+            .oneshot(
+                Request::patch(format!("/v1/jobs/{id}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"deleted":false}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(restored.status(), StatusCode::OK);
 
         let missing = app
             .oneshot(

@@ -422,6 +422,52 @@ impl SqliteImageJobStore {
         rows.into_iter().map(decode_summary).collect()
     }
 
+    /// Updates favorite and soft-delete gallery state without removing job evidence.
+    pub async fn update_history(
+        &self,
+        id: &str,
+        favorite: Option<bool>,
+        deleted: Option<bool>,
+        now: u64,
+    ) -> Result<ImageJob, BridgeError> {
+        if favorite.is_none() && deleted.is_none() {
+            return Err(BridgeError::new(
+                ErrorCode::InvalidRequest,
+                "history update must change favorite or deleted state",
+            ));
+        }
+        let existing = self.get(id).await?;
+        if deleted.is_some() && !existing.summary.status.terminal() {
+            return Err(BridgeError::new(
+                ErrorCode::InvalidRequest,
+                "only terminal jobs can be deleted from history",
+            )
+            .with_detail("field", "deleted"));
+        }
+        let id = id.to_owned();
+        let lookup_id = id.clone();
+        let now = to_i64(now)?;
+        self.connection
+            .call(move |connection| {
+                let changed = connection.execute(
+                    "UPDATE image_jobs
+                     SET favorite=COALESCE(?2,favorite),
+                         deleted_at=CASE WHEN ?3 IS NULL THEN deleted_at
+                                         WHEN ?3 THEN ?4 ELSE NULL END,
+                         updated_at=?4
+                     WHERE id=?1",
+                    params![id, favorite, deleted, now],
+                )?;
+                if changed != 1 {
+                    return Err(tokio_rusqlite::rusqlite::Error::QueryReturnedNoRows);
+                }
+                Ok::<(), tokio_rusqlite::rusqlite::Error>(())
+            })
+            .await
+            .map_err(|_| job_error("could not update durable job history"))?;
+        self.get(&lookup_id).await
+    }
+
     /// Removes terminal records outside time/count retention bounds.
     pub async fn prune(
         &self,
@@ -437,6 +483,7 @@ impl SqliteImageJobStore {
                 let expired = transaction.execute(
                     "DELETE FROM image_jobs
                      WHERE status IN ('succeeded','failed','cancelled','interrupted')
+                       AND favorite=0
                        AND completed_at <= ?1",
                     [cutoff],
                 )?;
@@ -444,6 +491,7 @@ impl SqliteImageJobStore {
                     "DELETE FROM image_jobs WHERE id IN (
                        SELECT id FROM image_jobs
                        WHERE status IN ('succeeded','failed','cancelled','interrupted')
+                         AND favorite=0
                        ORDER BY created_at DESC, id DESC LIMIT -1 OFFSET ?1
                      )",
                     [maximum],
@@ -744,5 +792,45 @@ mod tests {
         symlink(target, &link).unwrap();
         let error = SqliteImageJobStore::open(&link).await.unwrap_err();
         assert_eq!(error.code, ErrorCode::Internal);
+    }
+
+    #[tokio::test]
+    async fn history_updates_only_soft_delete_terminal_jobs() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SqliteImageJobStore::open(&directory.path().join("jobs.sqlite3"))
+            .await
+            .unwrap();
+        store
+            .create("019f-job", &ImageRequest::generate("test"), 10, 10)
+            .await
+            .unwrap();
+        let error = store
+            .update_history("019f-job", None, Some(true), 11)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidRequest);
+        assert!(store.claim("019f-job", 12).await.unwrap());
+        store
+            .succeed("019f-job", &fixture_response("019f-job"), 13)
+            .await
+            .unwrap();
+        let deleted = store
+            .update_history("019f-job", Some(true), Some(true), 14)
+            .await
+            .unwrap();
+        assert!(deleted.summary.favorite);
+        assert_eq!(deleted.summary.deleted, Some(14));
+        assert!(store.list(None, 10, false, None).await.unwrap().is_empty());
+        let restored = store
+            .update_history("019f-job", None, Some(false), 15)
+            .await
+            .unwrap();
+        assert_eq!(restored.summary.deleted, None);
+        assert_eq!(store.prune(100, 1, 1).await.unwrap(), 0);
+        store
+            .update_history("019f-job", Some(false), None, 101)
+            .await
+            .unwrap();
+        assert_eq!(store.prune(102, 1, 1).await.unwrap(), 1);
     }
 }

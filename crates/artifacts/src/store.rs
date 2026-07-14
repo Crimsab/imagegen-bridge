@@ -39,6 +39,19 @@ pub struct StoredSidecar {
     pub name: String,
 }
 
+/// Verified bridge-owned artifact bytes for trusted delivery code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredArtifactContent {
+    /// Opaque artifact identifier.
+    pub id: String,
+    /// Portable relative artifact name.
+    pub name: String,
+    /// Independently verified encoded image bytes.
+    pub bytes: Vec<u8>,
+    /// Verified image properties and checksum.
+    pub metadata: ImageMetadata,
+}
+
 /// Per-request artifact placement below the configured owned root.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ArtifactPublication<'a> {
@@ -315,6 +328,29 @@ impl ArtifactStore {
         }
         Ok(StoredSidecar {
             name: portable_name,
+        })
+    }
+
+    /// Reads one ownership-verified artifact without exposing its filesystem path.
+    pub fn read(&self, artifact_id: &str) -> Result<StoredArtifactContent, BridgeError> {
+        if Uuid::parse_str(artifact_id).is_err() {
+            return Err(artifact_error("artifact identity is invalid"));
+        }
+        let marker = self.ownership_root.join(format!("{artifact_id}.json"));
+        let candidate = self
+            .read_candidate(&marker)
+            .map_err(|()| artifact_error("artifact was not found or is invalid"))?;
+        self.verify_candidate(&candidate)
+            .map_err(|()| artifact_error("artifact was not found or is invalid"))?;
+        let bytes = fs::read(&candidate.artifact)
+            .map_err(|_| artifact_error("artifact could not be read"))?;
+        let metadata = inspect_image(&bytes, self.limits)
+            .map_err(|_| artifact_error("artifact failed delivery verification"))?;
+        Ok(StoredArtifactContent {
+            id: candidate.record.id,
+            name: candidate.record.name,
+            bytes,
+            metadata,
         })
     }
 
@@ -759,6 +795,20 @@ mod tests {
         assert_eq!(report.deleted, 1);
         assert!(!owned.path.exists());
         assert!(unowned.exists());
+    }
+
+    #[test]
+    fn reads_only_matching_owned_artifacts() {
+        let root = tempfile::tempdir().unwrap();
+        let store = ArtifactStore::new(root.path(), ImageLimits::default()).unwrap();
+        let published = store
+            .publish(&test_png(2, 3), Some("owned"), Some(OutputFormat::Png))
+            .unwrap();
+        let content = store.read(&published.id).unwrap();
+        assert_eq!(content.id, published.id);
+        assert_eq!(content.name, published.name);
+        assert_eq!((content.metadata.width, content.metadata.height), (2, 3));
+        assert!(store.read("019f0000-0000-7000-8000-000000000000").is_err());
     }
 
     #[test]

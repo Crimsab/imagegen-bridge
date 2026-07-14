@@ -123,6 +123,23 @@
       ]
     },
     {
+      "description": "Mutable retained-history fields.",
+      "type": "object",
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/ImageJobUpdate"
+        },
+        "message": {
+          "type": "string",
+          "const": "job_update"
+        }
+      },
+      "required": [
+        "message",
+        "body"
+      ]
+    },
+    {
       "description": "Public bridge error.",
       "type": "object",
       "properties": {
@@ -1018,6 +1035,27 @@
         "updated",
         "favorite"
       ]
+    },
+    "ImageJobUpdate": {
+      "description": "Mutable gallery fields for one retained durable job.",
+      "type": "object",
+      "properties": {
+        "deleted": {
+          "description": "Soft-delete or restore a terminal history item.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "favorite": {
+          "description": "Set or clear the favorite marker.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "ImageRequest": {
       "description": "A complete provider-neutral image request.",

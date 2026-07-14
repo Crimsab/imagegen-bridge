@@ -77,6 +77,9 @@ describe("ImagegenBridgeClient", () => {
     const jobs = await client.jobs.list({ status: "succeeded" });
     expect(jobs.items[0]?.id).toBe(queued.id);
     expect(jobs.next_cursor).toBe("sdk-next");
+    expect((await client.jobs.update(queued.id, { favorite: true, deleted: false })).favorite).toBe(
+      true,
+    );
     expect((await client.jobs.cancel(queued.id)).status).toBe("cancelled");
     expect((await client.health()).status).toBe("live");
     expect((await client.health({ ready: true })).status).toBe("ready");

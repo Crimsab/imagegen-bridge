@@ -5,6 +5,7 @@ import type {
   GenerateImageRequest,
   ImageJob,
   ImageJobPage,
+  ImageJobUpdate,
   ImageRequest,
   ImageResponse,
   JobListOptions,
@@ -71,6 +72,10 @@ export class JobsResource {
 
   cancel(id: string, options: RequestOptions = {}): Promise<ImageJob> {
     return this.#client.cancelJob(id, options);
+  }
+
+  update(id: string, update: ImageJobUpdate, options: RequestOptions = {}): Promise<ImageJob> {
+    return this.#client.updateJob(id, update, options);
   }
 }
 
@@ -171,6 +176,17 @@ export class ImagegenBridgeClient {
 
   async cancelJob(id: string, options: RequestOptions): Promise<ImageJob> {
     return imageJob(await this.#json("DELETE", `v1/jobs/${encodeURIComponent(id)}`, { options }));
+  }
+
+  async updateJob(id: string, update: ImageJobUpdate, options: RequestOptions): Promise<ImageJob> {
+    if (update.favorite === undefined && update.deleted === undefined)
+      throw new TypeError("job update requires favorite or deleted");
+    return imageJob(
+      await this.#json("PATCH", `v1/jobs/${encodeURIComponent(id)}`, {
+        body: update as unknown as JsonValue,
+        options,
+      }),
+    );
   }
 
   async providers(

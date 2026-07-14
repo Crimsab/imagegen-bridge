@@ -20,6 +20,9 @@ network clients. Version 1 evolves additively; breaking wire changes use `/v2`.
 | `GET` | `/v1/jobs` | Cursor-paginated job history | `200` |
 | `GET` | `/v1/jobs/{id}` | Complete durable job detail | `200` |
 | `DELETE` | `/v1/jobs/{id}` | Request cancellation | `200` |
+| `PATCH` | `/v1/jobs/{id}` | Favorite, soft-delete, or restore history | `200` |
+| `GET` | `/v1/artifacts/{id}` | Ownership-verified image delivery | `200` |
+| `GET` | `/v1/artifacts/{id}/thumbnail` | Bounded PNG thumbnail | `200` |
 | `GET` | `/v1/openapi.json` | Checked OpenAPI 3.1 contract | `200` |
 
 Native generation accepts the versioned `ImageRequest` schema and returns
@@ -50,6 +53,17 @@ ambiguous. Retention is bounded by both age and terminal-record count.
 `GET /v1/jobs?limit=20&cursor=...&status=succeeded` uses an opaque, stable
 newest-first cursor. `limit` is `1..=100`. The current lifecycle values are
 `queued`, `running`, `succeeded`, `failed`, `cancelled`, and `interrupted`.
+`PATCH /v1/jobs/{id}` accepts `favorite` and/or `deleted` booleans. Deletion is
+soft, terminal-only, hidden from ordinary lists, and reversible. It preserves
+the job evidence. Favorite job records are explicitly exempt from automatic
+job-history pruning until unfavorited; artifact bytes still follow the separate
+artifact-retention policy.
+
+Artifact routes never resolve caller-supplied filenames. They look up the
+opaque ID through the bridge ownership record, re-check the checksum and full
+image decode, and return only verified PNG/JPEG/WebP bytes. Thumbnail requests
+run off the async reactor, accept a `32..=2048` maximum edge, preserve aspect
+ratio, and always return a verified PNG with private immutable caching.
 
 Native multi-image requests accept `parameters.failure_policy` as `fail_fast`
 or `best_effort`. Results retain the requested `index` and optional

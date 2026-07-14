@@ -5,7 +5,7 @@ use std::sync::Arc;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use imagegen_bridge_artifacts::{
     ArtifactPublication, ArtifactStore, ImageLimits, ImageMetadata, RemoteImageFetcher,
-    inspect_image,
+    StoredArtifactContent, inspect_image, thumbnail_png,
 };
 use imagegen_bridge_core::{
     ArtifactMetadataPolicy, BridgeError, CompatibilityMode, ErrorCode, GeneratedImage,
@@ -89,6 +89,35 @@ impl OutputMaterializer {
             }
         }
         Ok(Self { config })
+    }
+
+    pub(crate) const fn has_artifact_store(&self) -> bool {
+        self.config.artifact_store.is_some()
+    }
+
+    pub(crate) fn read_artifact(
+        &self,
+        artifact_id: &str,
+    ) -> Result<StoredArtifactContent, BridgeError> {
+        self.config
+            .artifact_store
+            .as_ref()
+            .ok_or_else(|| configuration_error("artifact output is not configured"))?
+            .read(artifact_id)
+    }
+
+    pub(crate) fn read_thumbnail(
+        &self,
+        artifact_id: &str,
+        maximum_edge: u32,
+    ) -> Result<Vec<u8>, BridgeError> {
+        let artifact = self.read_artifact(artifact_id)?;
+        thumbnail_png(&artifact.bytes, maximum_edge, self.config.image_limits).map_err(|error| {
+            BridgeError {
+                code: ErrorCode::Artifact,
+                ..error
+            }
+        })
     }
 
     pub(crate) async fn materialize(

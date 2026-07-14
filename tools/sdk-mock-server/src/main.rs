@@ -35,7 +35,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/images", post(images))
         .route("/v1/images/stream", post(image_stream))
         .route("/v1/jobs", post(create_job).get(list_jobs))
-        .route("/v1/jobs/{id}", get(get_job).delete(cancel_job))
+        .route(
+            "/v1/jobs/{id}",
+            get(get_job).delete(cancel_job).patch(update_job),
+        )
         .route("/v1/providers", get(providers))
         .route("/v1/providers/{provider}/capabilities", get(capabilities))
         .route("/v1/sessions/{key}", get(session).delete(delete_session));
@@ -187,6 +190,30 @@ async fn cancel_job(headers: HeaderMap, Path(id): Path<String>) -> Response {
     job_response(StatusCode::OK, "cancelled", false)
 }
 
+async fn update_job(
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(update): Json<Value>,
+) -> Response {
+    if let Some(response) = authenticate(&headers) {
+        return response;
+    }
+    if id != "019f0000-0000-7000-8000-000000000001" {
+        return error(StatusCode::NOT_FOUND, "job was not found");
+    }
+    if update != json!({"favorite": true, "deleted": false}) {
+        return error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "job update did not match fixture",
+        );
+    }
+    let Some(mut job) = job_value("succeeded", true) else {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, "job fixture is invalid");
+    };
+    job["favorite"] = Value::Bool(true);
+    fixture_response(StatusCode::OK, &job.to_string(), "application/json")
+}
+
 fn job_response(status: StatusCode, job_status: &str, result: bool) -> Response {
     let Some(job) = job_value(job_status, result) else {
         return error(StatusCode::INTERNAL_SERVER_ERROR, "job fixture is invalid");
@@ -306,7 +333,8 @@ fn error(status: StatusCode, message: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use imagegen_bridge_core::{
-        ImageRequest, ImageResponse, ProviderCapabilities, SessionMetadata,
+        ImageJob, ImageJobSummary, ImageRequest, ImageResponse, ProviderCapabilities,
+        SessionMetadata,
     };
 
     use super::*;
@@ -322,5 +350,13 @@ mod tests {
         assert!(capabilities.is_ok(), "{capabilities:?}");
         assert!(serde_json::from_str::<SessionMetadata>(SESSION_RESPONSE).is_ok());
         assert!(serde_json::from_str::<Value>(ERROR_RESPONSE).is_ok());
+        assert!(
+            job_value("queued", false)
+                .is_some_and(|value| serde_json::from_value::<ImageJob>(value).is_ok())
+        );
+        assert!(
+            job_value("succeeded", false)
+                .is_some_and(|value| serde_json::from_value::<ImageJobSummary>(value).is_ok())
+        );
     }
 }

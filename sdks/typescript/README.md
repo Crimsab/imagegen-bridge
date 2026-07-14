@@ -27,5 +27,5 @@ const page = await bridge.jobs.list({ status: "succeeded" });
 
 Changing `routing.provider` is the only SDK change needed to select another
 configured provider.
-`bridge.jobs` exposes typed `create`, `get`, `list`, and `cancel` operations for
+`bridge.jobs` exposes typed `create`, `get`, `list`, `cancel`, and `update` operations for
 durable artifact-backed work.

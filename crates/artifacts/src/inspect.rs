@@ -105,6 +105,48 @@ pub fn inspect_image(bytes: &[u8], limits: ImageLimits) -> Result<ImageMetadata,
     })
 }
 
+/// Produces a bounded PNG thumbnail after complete source verification.
+pub fn thumbnail_png(
+    bytes: &[u8],
+    maximum_edge: u32,
+    limits: ImageLimits,
+) -> Result<Vec<u8>, BridgeError> {
+    if !(32..=2_048).contains(&maximum_edge) {
+        return Err(image_error(
+            "thumbnail edge must be between 32 and 2048 pixels",
+        ));
+    }
+    let metadata = inspect_image(bytes, limits)?;
+    let format = match metadata.format {
+        OutputFormat::Png => ImageFormat::Png,
+        OutputFormat::Jpeg => ImageFormat::Jpeg,
+        OutputFormat::Webp => ImageFormat::WebP,
+    };
+    let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
+    let mut decode_limits = Limits::default();
+    decode_limits.max_image_width = Some(limits.max_edge);
+    decode_limits.max_image_height = Some(limits.max_edge);
+    decode_limits.max_alloc = Some(limits.max_decode_alloc);
+    reader.limits(decode_limits);
+    let thumbnail = reader
+        .decode()
+        .map_err(|_| image_error("image could not be decoded for thumbnailing"))?
+        .thumbnail(maximum_edge, maximum_edge);
+    let mut output = Cursor::new(Vec::new());
+    thumbnail
+        .write_to(&mut output, ImageFormat::Png)
+        .map_err(|_| image_error("thumbnail could not be encoded"))?;
+    let output = output.into_inner();
+    let thumbnail_limits = ImageLimits {
+        max_encoded_bytes: limits.max_encoded_bytes,
+        max_edge: maximum_edge,
+        max_pixels: u64::from(maximum_edge) * u64::from(maximum_edge),
+        max_decode_alloc: limits.max_decode_alloc,
+    };
+    inspect_image(&output, thumbnail_limits)?;
+    Ok(output)
+}
+
 fn image_error(message: &str) -> BridgeError {
     BridgeError::new(ErrorCode::Input, message)
 }
@@ -151,5 +193,14 @@ mod tests {
             ..ImageLimits::default()
         };
         assert!(inspect_image(&bytes, limits).is_err());
+    }
+
+    #[test]
+    fn creates_bounded_png_thumbnails_without_upscaling() {
+        let bytes = test_png(800, 400);
+        let thumbnail = thumbnail_png(&bytes, 128, ImageLimits::default()).unwrap();
+        let metadata = inspect_image(&thumbnail, ImageLimits::default()).unwrap();
+        assert_eq!(metadata.format, OutputFormat::Png);
+        assert_eq!((metadata.width, metadata.height), (128, 64));
     }
 }

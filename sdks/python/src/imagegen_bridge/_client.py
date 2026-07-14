@@ -62,6 +62,17 @@ def _decode_job_page(response: httpx.Response) -> ImageJobPage:
         raise BridgeProtocolError("bridge returned an invalid durable job page") from error
 
 
+def _job_update(favorite: bool | None, deleted: bool | None) -> dict[str, bool]:
+    update = {}
+    if favorite is not None:
+        update["favorite"] = favorite
+    if deleted is not None:
+        update["deleted"] = deleted
+    if not update:
+        raise ValueError("job update requires favorite or deleted")
+    return update
+
+
 def _headers(bearer_token: str | None, default_headers: Mapping[str, str] | None) -> dict[str, str]:
     headers = {"accept": "application/json", "user-agent": "imagegen-bridge-python/0.1.0"}
     if default_headers:
@@ -169,6 +180,16 @@ class AsyncJobsResource:
     async def cancel(self, job_id: str, *, timeout: Timeout = None) -> ImageJob:
         return await self._client._cancel_job(job_id, timeout)
 
+    async def update(
+        self,
+        job_id: str,
+        *,
+        favorite: bool | None = None,
+        deleted: bool | None = None,
+        timeout: Timeout = None,
+    ) -> ImageJob:
+        return await self._client._update_job(job_id, favorite, deleted, timeout)
+
 
 class JobsResource:
     def __init__(self, client: ImagegenBridgeClient) -> None:
@@ -193,6 +214,16 @@ class JobsResource:
 
     def cancel(self, job_id: str, *, timeout: Timeout = None) -> ImageJob:
         return self._client._cancel_job(job_id, timeout)
+
+    def update(
+        self,
+        job_id: str,
+        *,
+        favorite: bool | None = None,
+        deleted: bool | None = None,
+        timeout: Timeout = None,
+    ) -> ImageJob:
+        return self._client._update_job(job_id, favorite, deleted, timeout)
 
 
 class AsyncImagegenBridgeClient:
@@ -302,6 +333,19 @@ class AsyncImagegenBridgeClient:
 
     async def _cancel_job(self, job_id: str, timeout: Timeout) -> ImageJob:
         response = await self._send("DELETE", f"/v1/jobs/{quote(job_id, safe='')}", timeout=timeout)
+        return _decode_job(response)
+
+    async def _update_job(
+        self,
+        job_id: str,
+        favorite: bool | None,
+        deleted: bool | None,
+        timeout: Timeout,
+    ) -> ImageJob:
+        body = _job_update(favorite, deleted)
+        response = await self._send(
+            "PATCH", f"/v1/jobs/{quote(job_id, safe='')}", json=body, timeout=timeout
+        )
         return _decode_job(response)
 
     async def providers(self, *, limit: int = 20, cursor: str | None = None) -> ProviderPage:
@@ -457,6 +501,19 @@ class ImagegenBridgeClient:
 
     def _cancel_job(self, job_id: str, timeout: Timeout) -> ImageJob:
         response = self._send("DELETE", f"/v1/jobs/{quote(job_id, safe='')}", timeout=timeout)
+        return _decode_job(response)
+
+    def _update_job(
+        self,
+        job_id: str,
+        favorite: bool | None,
+        deleted: bool | None,
+        timeout: Timeout,
+    ) -> ImageJob:
+        body = _job_update(favorite, deleted)
+        response = self._send(
+            "PATCH", f"/v1/jobs/{quote(job_id, safe='')}", json=body, timeout=timeout
+        )
         return _decode_job(response)
 
     def providers(self, *, limit: int = 20, cursor: str | None = None) -> ProviderPage:

@@ -1183,6 +1183,27 @@
         ],
         "type": "object"
       },
+      "ImageJobUpdate": {
+        "additionalProperties": false,
+        "description": "Mutable gallery fields for one retained durable job.",
+        "properties": {
+          "deleted": {
+            "description": "Soft-delete or restore a terminal history item.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "favorite": {
+            "description": "Set or clear the favorite marker.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "ImageRequest": {
         "description": "A complete provider-neutral image request.",
         "oneOf": [
@@ -2601,6 +2622,131 @@
         ]
       }
     },
+    "/v1/artifacts/{id}": {
+      "get": {
+        "operationId": "getImageArtifact",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "example": "019f0000-0000-7000-8000-000000000002",
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "contentEncoding": "binary",
+                  "type": "string"
+                }
+              },
+              "image/png": {
+                "schema": {
+                  "contentEncoding": "binary",
+                  "type": "string"
+                }
+              },
+              "image/webp": {
+                "schema": {
+                  "contentEncoding": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Verified image bytes",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Bridge authentication required"
+          },
+          "404": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Artifact not found or verification failed"
+          }
+        },
+        "security": [
+          {
+            "bridgeBearer": []
+          }
+        ],
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
+    "/v1/artifacts/{id}/thumbnail": {
+      "get": {
+        "operationId": "getImageArtifactThumbnail",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "example": "019f0000-0000-7000-8000-000000000002",
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "edge",
+            "schema": {
+              "default": 384,
+              "maximum": 2048,
+              "minimum": 32,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/png": {
+                "schema": {
+                  "contentEncoding": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Bounded PNG thumbnail"
+          },
+          "400": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Invalid thumbnail size"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Bridge authentication required"
+          },
+          "404": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Artifact not found or verification failed"
+          }
+        },
+        "security": [
+          {
+            "bridgeBearer": []
+          }
+        ],
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
     "/v1/images": {
       "post": {
         "operationId": "executeImage",
@@ -3556,6 +3702,106 @@
         "tags": [
           "jobs"
         ]
+      },
+      "patch": {
+        "operationId": "updateImageJobHistory",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "example": "019f0000-0000-7000-8000-000000000000",
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "deleted": false,
+                "favorite": true
+              },
+              "schema": {
+                "$ref": "#/components/schemas/ImageJobUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "cancel_requested": false,
+                  "created": 1784000000,
+                  "favorite": false,
+                  "id": "019f0000-0000-7000-8000-000000000000",
+                  "request": {
+                    "operation": "generate",
+                    "output": {
+                      "filename_prefix": "fox",
+                      "response_format": "artifact"
+                    },
+                    "parameters": {
+                      "action": "auto",
+                      "background": "auto",
+                      "failure_policy": "fail_fast",
+                      "moderation": "auto",
+                      "n": 1,
+                      "output_format": "png",
+                      "partial_images": 0,
+                      "quality": "auto",
+                      "size": "auto"
+                    },
+                    "policies": {
+                      "compatibility": "strict",
+                      "negative_prompt": "auto",
+                      "revised_prompt": "include"
+                    },
+                    "prompt": "A red origami fox on warm gray",
+                    "routing": {
+                      "provider": "codex-app-server"
+                    },
+                    "session": {
+                      "key": "gallery",
+                      "mode": "persistent"
+                    }
+                  },
+                  "status": "succeeded",
+                  "updated": 1784000001
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ImageJob"
+                }
+              }
+            },
+            "description": "Updated history item"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Bridge authentication required"
+          },
+          "404": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Job not found"
+          },
+          "422": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Invalid history update"
+          }
+        },
+        "security": [
+          {
+            "bridgeBearer": []
+          }
+        ],
+        "tags": [
+          "jobs"
+        ]
       }
     },
     "/v1/providers": {
@@ -3798,6 +4044,10 @@
     {
       "description": "Durable asynchronous image operations and history",
       "name": "jobs"
+    },
+    {
+      "description": "Authenticated verified image delivery",
+      "name": "artifacts"
     },
     {
       "description": "OpenAI-familiar Images API",

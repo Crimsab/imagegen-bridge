@@ -245,6 +245,11 @@ export interface ImageJobPage {
   next_cursor?: string | null;
 }
 
+export interface ImageJobUpdate {
+  favorite?: boolean;
+  deleted?: boolean;
+}
+
 export interface ProviderDescriptor {
   name: string;
   display_name: string;

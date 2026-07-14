@@ -27,6 +27,7 @@ pub fn openapi_document() -> Value {
             {"name":"health","description":"Liveness and provider readiness"},
             {"name":"images","description":"Native lossless image operations"},
             {"name":"jobs","description":"Durable asynchronous image operations and history"},
+            {"name":"artifacts","description":"Authenticated verified image delivery"},
             {"name":"compatibility","description":"OpenAI-familiar Images API"},
             {"name":"providers","description":"Provider discovery and capability negotiation"},
             {"name":"sessions","description":"Persistent session lifecycle"},
@@ -172,6 +173,56 @@ pub fn openapi_document() -> Value {
                         "401": error_response("Bridge authentication required"),
                         "404": error_response("Job not found")
                     }
+                },
+                "patch": {
+                    "operationId":"updateImageJobHistory",
+                    "tags":["jobs"],
+                    "security":[{"bridgeBearer":[]}],
+                    "parameters":[job_id_parameter()],
+                    "requestBody":{"required":true,"content":{"application/json":{
+                        "schema":{"$ref":"#/components/schemas/ImageJobUpdate"},
+                        "example":{"favorite":true,"deleted":false}
+                    }}},
+                    "responses": {
+                        "200": json_response("Updated history item", json!({"$ref":"#/components/schemas/ImageJob"}), job_example("succeeded")),
+                        "401": error_response("Bridge authentication required"),
+                        "404": error_response("Job not found"),
+                        "422": error_response("Invalid history update")
+                    }
+                }
+            },
+            "/v1/artifacts/{id}": {
+                "get": {
+                    "operationId":"getImageArtifact",
+                    "tags":["artifacts"],
+                    "security":[{"bridgeBearer":[]}],
+                    "parameters":[artifact_id_parameter()],
+                    "responses": {
+                        "200":{"description":"Verified image bytes","headers":{"ETag":{"schema":{"type":"string"}}},"content":{
+                            "image/png":{"schema":{"type":"string","contentEncoding":"binary"}},
+                            "image/jpeg":{"schema":{"type":"string","contentEncoding":"binary"}},
+                            "image/webp":{"schema":{"type":"string","contentEncoding":"binary"}}
+                        }},
+                        "401":error_response("Bridge authentication required"),
+                        "404":error_response("Artifact not found or verification failed")
+                    }
+                }
+            },
+            "/v1/artifacts/{id}/thumbnail": {
+                "get": {
+                    "operationId":"getImageArtifactThumbnail",
+                    "tags":["artifacts"],
+                    "security":[{"bridgeBearer":[]}],
+                    "parameters":[
+                        artifact_id_parameter(),
+                        {"name":"edge","in":"query","schema":{"type":"integer","minimum":32,"maximum":2048,"default":384}}
+                    ],
+                    "responses": {
+                        "200":{"description":"Bounded PNG thumbnail","content":{"image/png":{"schema":{"type":"string","contentEncoding":"binary"}}}},
+                        "400":error_response("Invalid thumbnail size"),
+                        "401":error_response("Bridge authentication required"),
+                        "404":error_response("Artifact not found or verification failed")
+                    }
                 }
             },
             "/metrics": {
@@ -198,6 +249,10 @@ pub fn openapi_document() -> Value {
 
 fn job_id_parameter() -> Value {
     json!({"name":"id","in":"path","required":true,"schema":{"type":"string","format":"uuid","example":"019f0000-0000-7000-8000-000000000000"}})
+}
+
+fn artifact_id_parameter() -> Value {
+    json!({"name":"id","in":"path","required":true,"schema":{"type":"string","format":"uuid","example":"019f0000-0000-7000-8000-000000000002"}})
 }
 
 fn job_example(status: &str) -> Value {

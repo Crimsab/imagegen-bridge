@@ -27,4 +27,4 @@ async with AsyncImagegenBridgeClient("http://127.0.0.1:8787") as client:
 Set `provider` in `ImageRequest.routing` to switch between configured bridge
 providers; client construction and response types do not change.
 `client.jobs` is also available on the synchronous client and exposes
-`create`, `get`, `list`, and `cancel` with typed durable job models.
+`create`, `get`, `list`, `cancel`, and `update` with typed durable job models.

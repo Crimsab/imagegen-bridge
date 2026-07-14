@@ -229,6 +229,9 @@ Important routes:
 | `GET /v1/jobs` | Cursor-paginated job history |
 | `GET /v1/jobs/{id}` | Job state, request, result, and structured error |
 | `DELETE /v1/jobs/{id}` | Request durable cancellation |
+| `PATCH /v1/jobs/{id}` | Favorite, soft-delete, or restore a history item |
+| `GET /v1/artifacts/{id}` | Authenticated ownership-verified image bytes |
+| `GET /v1/artifacts/{id}/thumbnail` | Bounded PNG thumbnail for galleries |
 | `GET /v1/providers` | Provider inventory |
 | `GET /v1/providers/{provider}/capabilities` | Model-aware capabilities |
 | `GET /v1/sessions/{key}` | Persistent session lookup |

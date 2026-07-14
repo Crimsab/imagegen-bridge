@@ -123,6 +123,17 @@ impl JobManager {
         Ok(job)
     }
 
+    /// Updates favorite and reversible history visibility fields.
+    pub async fn update_history(
+        &self,
+        id: &str,
+        update: imagegen_bridge_core::ImageJobUpdate,
+    ) -> Result<ImageJob, BridgeError> {
+        self.store
+            .update_history(id, update.favorite, update.deleted, unix_timestamp())
+            .await
+    }
+
     /// Stops queued dispatch and waits a bounded interval for active state to settle.
     pub async fn shutdown(&self) {
         self.shutdown.cancel();

@@ -222,6 +222,29 @@ impl ImagegenRuntime {
         validate_request(request, self.config.request_limits)
     }
 
+    /// Whether verified bridge-owned artifact delivery is available.
+    #[must_use]
+    pub const fn has_artifact_store(&self) -> bool {
+        self.materializer.has_artifact_store()
+    }
+
+    /// Reads one ownership-verified artifact for authenticated delivery.
+    pub fn read_artifact(
+        &self,
+        artifact_id: &str,
+    ) -> Result<imagegen_bridge_artifacts::StoredArtifactContent, BridgeError> {
+        self.materializer.read_artifact(artifact_id)
+    }
+
+    /// Creates a bounded PNG thumbnail from one ownership-verified artifact.
+    pub fn read_artifact_thumbnail(
+        &self,
+        artifact_id: &str,
+        maximum_edge: u32,
+    ) -> Result<Vec<u8>, BridgeError> {
+        self.materializer.read_thumbnail(artifact_id, maximum_edge)
+    }
+
     /// Executes with generated request metadata and the default idempotency scope.
     pub async fn execute(&self, request: ImageRequest) -> Result<ImageResponse, BridgeError> {
         self.execute_with(request, ExecutionContext::default())
