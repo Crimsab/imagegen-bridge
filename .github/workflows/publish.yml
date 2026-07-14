@@ -148,6 +148,30 @@ jobs:
             [[ "$status" == "200" ]]
           }
 
+          retry_delay() {
+            local log_file="$1"
+            local retry_at
+            local retry_epoch
+            local now_epoch
+            local delay=90
+
+            retry_at="$(
+              sed -nE 's/.*Please try again after (.* GMT) and see.*/\1/p' "$log_file" |
+                tail -1
+            )"
+            if [[ -n "$retry_at" ]]; then
+              now_epoch="$(date +%s)"
+              retry_epoch="$(date --date="$retry_at" +%s)"
+              delay="$((retry_epoch - now_epoch + 15))"
+              if [[ "$delay" -lt 30 ]]; then
+                delay=30
+              elif [[ "$delay" -gt 900 ]]; then
+                delay=900
+              fi
+            fi
+            echo "$delay"
+          }
+
           for crate in "${crates[@]}"; do
             if crate_available "$crate"; then
               echo "$crate $VERSION is already published; skipping."
@@ -161,19 +185,26 @@ jobs:
 
             published=false
             for attempt in 1 2 3; do
-              if cargo publish --locked --package "$crate"; then
+              publish_log="$(mktemp)"
+              if cargo publish --locked --package "$crate" 2>&1 | tee "$publish_log"; then
+                rm -f "$publish_log"
                 published=true
                 break
               fi
 
               if crate_available "$crate"; then
+                rm -f "$publish_log"
                 published=true
                 break
               fi
 
               if [[ "$attempt" -lt 3 ]]; then
-                echo "::warning::$crate publish attempt $attempt failed; waiting 90 seconds before retrying."
-                sleep 90
+                delay="$(retry_delay "$publish_log")"
+                echo "::warning::$crate publish attempt $attempt failed; waiting $delay seconds before retrying."
+                rm -f "$publish_log"
+                sleep "$delay"
+              else
+                rm -f "$publish_log"
               fi
             done
 
