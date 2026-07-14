@@ -137,11 +137,11 @@ impl BridgeConfig {
             &self.artifacts.remote_output,
             &mut issue,
         );
-        if self.artifacts.max_base64_chars == 0 {
+        if self.artifacts.max_base64_chars == 0 || self.artifacts.max_response_bytes == 0 {
             issue(
-                "artifacts.max_base64_chars",
+                "artifacts",
                 "out_of_range",
-                "maximum base64 characters must be greater than zero",
+                "base64 and aggregate response byte limits must be greater than zero",
             );
         }
         let image = self.artifacts.image;

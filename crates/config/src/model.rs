@@ -229,6 +229,8 @@ pub struct ArtifactSettings {
     pub public_base_url: Option<String>,
     /// Maximum provider base64 characters.
     pub max_base64_chars: usize,
+    /// Maximum aggregate response bytes held across materialization stages.
+    pub max_response_bytes: usize,
     /// Encoded and decoded image limits.
     pub image: ImageLimitSettings,
     /// Provider-hosted output URL retrieval policy.
@@ -243,6 +245,7 @@ impl Default for ArtifactSettings {
             root: PathBuf::from("./data/artifacts"),
             public_base_url: None,
             max_base64_chars: 128 * 1024 * 1024,
+            max_response_bytes: 256 * 1024 * 1024,
             image: ImageLimitSettings::default(),
             remote_output: RemoteImageSettings::default(),
             retention: RetentionSettings::default(),

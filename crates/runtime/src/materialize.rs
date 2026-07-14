@@ -22,6 +22,8 @@ pub struct MaterializationConfig {
     pub image_limits: ImageLimits,
     /// Maximum encoded base64 characters accepted from a provider.
     pub max_base64_chars: usize,
+    /// Maximum aggregate provider, decoded, and projected response payload bytes.
+    pub max_response_bytes: usize,
     /// Optional bridge-owned artifact store.
     pub artifact_store: Option<Arc<ArtifactStore>>,
     /// Optional SSRF-resistant fetcher for provider-hosted image URLs.
@@ -36,6 +38,7 @@ impl std::fmt::Debug for MaterializationConfig {
             .debug_struct("MaterializationConfig")
             .field("image_limits", &self.image_limits)
             .field("max_base64_chars", &self.max_base64_chars)
+            .field("max_response_bytes", &self.max_response_bytes)
             .field("artifact_store", &self.artifact_store.is_some())
             .field(
                 "remote_output_fetcher",
@@ -51,6 +54,7 @@ impl Default for MaterializationConfig {
         Self {
             image_limits: ImageLimits::default(),
             max_base64_chars: 128 * 1024 * 1024,
+            max_response_bytes: 256 * 1024 * 1024,
             artifact_store: None,
             remote_output_fetcher: None,
             public_artifact_base_url: None,
@@ -64,9 +68,9 @@ pub(crate) struct OutputMaterializer {
 
 impl OutputMaterializer {
     pub(crate) fn new(config: MaterializationConfig) -> Result<Self, BridgeError> {
-        if config.max_base64_chars == 0 {
+        if config.max_base64_chars == 0 || config.max_response_bytes == 0 {
             return Err(configuration_error(
-                "maximum output base64 size must be greater than zero",
+                "output payload limits must be greater than zero",
             ));
         }
         if let Some(base) = &config.public_artifact_base_url {
@@ -131,12 +135,19 @@ impl OutputMaterializer {
             effective.parameters.failure_policy,
         )?;
 
-        let mut verified = Vec::with_capacity(response.data.len());
-        for image in &response.data {
-            verified.push(
-                self.verify(image, effective.parameters.output_format)
-                    .await?,
-            );
+        let mut aggregate_bytes = response_payload_bytes(&response)?;
+        self.check_response_budget(aggregate_bytes)?;
+        let provider_images = std::mem::take(&mut response.data);
+        let mut verified = Vec::with_capacity(provider_images.len());
+        for image in provider_images {
+            let image = self
+                .verify(&image, effective.parameters.output_format)
+                .await?;
+            aggregate_bytes = aggregate_bytes
+                .checked_add(image.bytes.len())
+                .ok_or_else(|| protocol_error("aggregate response size overflowed"))?;
+            self.check_response_budget(aggregate_bytes)?;
+            verified.push(image);
         }
 
         Self::reconcile_dimensions(
@@ -159,10 +170,25 @@ impl OutputMaterializer {
                 image.bytes = bytes;
                 image.metadata = metadata;
             }
-            projected.push(self.project(image, &effective.output)?);
+            let projected_image = self.project(image, &effective.output)?;
+            aggregate_bytes = aggregate_bytes
+                .checked_add(payload_bytes(&projected_image.payload))
+                .ok_or_else(|| protocol_error("aggregate response size overflowed"))?;
+            self.check_response_budget(aggregate_bytes)?;
+            projected.push(projected_image);
         }
         response.data = projected;
         Ok(response)
+    }
+
+    fn check_response_budget(&self, bytes: usize) -> Result<(), BridgeError> {
+        if bytes > self.config.max_response_bytes {
+            return Err(protocol_error(
+                "aggregate response payload exceeds the configured byte limit",
+            )
+            .with_detail("maximum_bytes", self.config.max_response_bytes));
+        }
+        Ok(())
     }
 
     pub(crate) fn attach_metadata(
@@ -658,6 +684,38 @@ struct VerifiedImage {
     generation_ms: Option<u64>,
 }
 
+fn response_payload_bytes(response: &ImageResponse) -> Result<usize, BridgeError> {
+    let mut total = response
+        .id
+        .len()
+        .checked_add(response.provider.len())
+        .and_then(|value| value.checked_add(response.model.len()))
+        .and_then(|value| value.checked_add(response.revised_prompt.as_deref().map_or(0, str::len)))
+        .ok_or_else(|| protocol_error("aggregate response size overflowed"))?;
+    for warning in &response.warnings {
+        total = total
+            .checked_add(warning.len())
+            .ok_or_else(|| protocol_error("aggregate response size overflowed"))?;
+    }
+    for image in &response.data {
+        total = total
+            .checked_add(payload_bytes(&image.payload))
+            .ok_or_else(|| protocol_error("aggregate response size overflowed"))?;
+    }
+    Ok(total)
+}
+
+fn payload_bytes(payload: &ImagePayload) -> usize {
+    match payload {
+        ImagePayload::B64Json { b64_json } => b64_json.len(),
+        ImagePayload::Url { url } => url.len(),
+        ImagePayload::Artifact { id, name } => {
+            id.len().saturating_add(name.as_deref().map_or(0, str::len))
+        }
+        ImagePayload::Metadata => 0,
+    }
+}
+
 fn as_artifact_error(error: BridgeError) -> BridgeError {
     BridgeError {
         code: ErrorCode::Artifact,
@@ -768,6 +826,42 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn rejects_outputs_that_exceed_the_aggregate_response_budget() {
+        let bytes = STANDARD.decode(ONE_PIXEL_PNG).unwrap();
+        let metadata = inspect_image(&bytes, ImageLimits::default()).unwrap();
+        let generated = |index| GeneratedImage {
+            index,
+            payload: ImagePayload::B64Json {
+                b64_json: ONE_PIXEL_PNG.to_owned(),
+            },
+            format: metadata.format,
+            width: metadata.width,
+            height: metadata.height,
+            bytes: metadata.bytes,
+            sha256: metadata.sha256.clone(),
+            generation_ms: None,
+            metadata_name: None,
+        };
+        let materializer = OutputMaterializer::new(MaterializationConfig {
+            max_response_bytes: 120,
+            ..MaterializationConfig::default()
+        })
+        .unwrap();
+        let mut request = ImageRequest::generate("two images");
+        request.parameters.n = 2;
+        let error = materializer
+            .materialize(
+                response(vec![generated(0), generated(1)], Vec::new()),
+                &request,
+                &request,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::Protocol);
+        assert!(error.message.contains("aggregate response payload"));
     }
 
     #[test]

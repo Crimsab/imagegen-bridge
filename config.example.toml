@@ -46,6 +46,7 @@ max_url_bytes = 8192
 [artifacts]
 root = "./data/artifacts"
 max_base64_chars = 134217728
+max_response_bytes = 268435456
 
 [artifacts.image]
 max_encoded_bytes = 33554432

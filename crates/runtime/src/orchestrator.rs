@@ -459,7 +459,6 @@ impl ImagegenRuntime {
                 operation,
             )
             .await;
-        drop(provider_permit);
         let provider_ms = elapsed_ms(provider_started);
         let mut response =
             provider_result.map_err(|error| attach_provider(error, &descriptor.name))?;
@@ -498,11 +497,12 @@ impl ImagegenRuntime {
                 "request was cancelled during output materialization",
             )
             .await?;
-        drop(global_permit);
         response.timings.artifact_ms = elapsed_ms(artifact_started);
         response.timings.total_ms = elapsed_ms(total_started);
         self.materializer
             .attach_metadata(&request, &effective_request, &mut response)?;
+        drop(provider_permit);
+        drop(global_permit);
         Ok(response)
     }
 

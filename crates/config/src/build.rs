@@ -79,6 +79,7 @@ impl BridgeConfig {
             materialization: MaterializationConfig {
                 image_limits,
                 max_base64_chars: self.artifacts.max_base64_chars,
+                max_response_bytes: self.artifacts.max_response_bytes,
                 artifact_store: None,
                 remote_output_fetcher,
                 public_artifact_base_url,
