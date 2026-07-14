@@ -93,11 +93,32 @@ Publication never overwrites: `--collision error` is the default, while
 Supplying either path option changes the default `b64_json` response to
 `artifact`; an explicitly incompatible response mode fails validation.
 
+`--metadata sidecar` selects artifact delivery when no response format was
+explicitly chosen and opts into a portable `metadata-<artifact-id>.json` file in
+the same directory as each image. It contains the original/effective prompt,
+negative prompt, operation summary without input paths or bytes,
+requested/effective parameters, normalization records, revised prompt,
+provider/model, usage, session, timings, warnings, and independently verified
+image properties. The response exposes its relative `metadata_name`; cleanup
+verifies and removes the owned image and sidecar together. Sidecars are off by
+default because prompt and session content may be sensitive.
+
+`--preview` selects artifact output when no response format was explicitly
+chosen and renders PNG through Kitty graphics or supported image formats through
+the iTerm2 inline protocol (also used by WezTerm). Unsupported formats,
+terminals, and redirected stdout receive a clear fallback message without
+turning a successful generation into a failure.
+Preview is rejected with `--json`/machine output so control sequences can never
+corrupt the wire stream. `--open` launches each artifact or bridge URL with the
+platform viewer (`xdg-open`, `open`, or Windows `start`). Viewer launch failures
+are reported as command failures; artifact paths are canonicalized and checked
+against the configured root first.
+
 Advanced flags include `--negative-prompt`, `--negative-prompt-mode`,
 `--revised-prompt`, `--aspect-ratio`, `--resolution`, `--compression`,
 `--background`, `--moderation`, `--partial-images`, `--failure-policy`,
 `--input-fidelity`, `--action`, `--compatibility`, `--output`, `--output-dir`,
-`--collision`,
+`--collision`, `--metadata`, `--open`, `--preview`,
 `--session`, `--session-key`, `--thread-id`, `--idempotency-key`, and
 `--timeout-ms`. Availability is provider/model-specific; inspect it before
 requesting strict parameters:

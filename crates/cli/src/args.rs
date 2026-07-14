@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 use imagegen_bridge::core::{
-    ArtifactCollisionPolicy, AspectRatio, Background, CompatibilityMode, ImageAction, ImageSize,
-    InputFidelity, Moderation, MultiImageFailurePolicy, NegativePromptMode, OutputFormat, Quality,
-    Resolution, ResponseFormat, RevisedPromptPolicy, SessionMode,
+    ArtifactCollisionPolicy, ArtifactMetadataPolicy, AspectRatio, Background, CompatibilityMode,
+    ImageAction, ImageSize, InputFidelity, Moderation, MultiImageFailurePolicy, NegativePromptMode,
+    OutputFormat, Quality, Resolution, ResponseFormat, RevisedPromptPolicy, SessionMode,
 };
 
 #[derive(Debug, Parser)]
@@ -164,6 +164,9 @@ pub(crate) struct GenerateArgs {
     #[command(flatten)]
     pub image: ImageArgs,
 
+    #[command(flatten)]
+    pub presentation: PresentationArgs,
+
     /// Validate and print the normalized request without starting a provider.
     #[arg(long)]
     pub dry_run: bool,
@@ -204,9 +207,28 @@ pub(crate) struct EditArgs {
     #[command(flatten)]
     pub image: ImageArgs,
 
+    #[command(flatten)]
+    pub presentation: PresentationArgs,
+
     /// Validate and print the normalized request without starting a provider.
     #[arg(long)]
     pub dry_run: bool,
+}
+
+#[derive(Debug, Args, Default, Clone, Copy)]
+pub(crate) struct PresentationArgs {
+    /// Open every generated artifact or URL with the system viewer.
+    #[arg(long)]
+    pub open: bool,
+    /// Render artifacts in supported Kitty/iTerm2-compatible terminals.
+    #[arg(long)]
+    pub preview: bool,
+}
+
+impl PresentationArgs {
+    pub(crate) const fn requested(self) -> bool {
+        self.open || self.preview
+    }
 }
 
 #[derive(Debug, Args, Default)]
@@ -279,6 +301,9 @@ pub(crate) struct ImageArgs {
     /// Atomic behavior when an explicit output filename already exists.
     #[arg(long, value_parser = parse_collision)]
     pub collision: Option<ArtifactCollisionPolicy>,
+    /// Persist portable generation metadata beside each artifact.
+    #[arg(long, value_parser = parse_metadata)]
+    pub metadata: Option<ArtifactMetadataPolicy>,
     /// Provider compatibility behavior.
     #[arg(long, value_parser = parse_compatibility)]
     pub compatibility: Option<CompatibilityMode>,
@@ -331,6 +356,7 @@ impl ImageArgs {
             && self.output_path.is_none()
             && self.output_dir.is_none()
             && self.collision.is_none()
+            && self.metadata.is_none()
             && self.compatibility.is_none()
             && self.negative_prompt_mode.is_none()
             && self.revised_prompt.is_none()
@@ -492,6 +518,7 @@ enum_parser!(parse_failure_policy, MultiImageFailurePolicy);
 enum_parser!(parse_input_fidelity, InputFidelity);
 enum_parser!(parse_image_action, ImageAction);
 enum_parser!(parse_collision, ArtifactCollisionPolicy);
+enum_parser!(parse_metadata, ArtifactMetadataPolicy);
 enum_parser!(parse_response_format, ResponseFormat);
 enum_parser!(parse_compatibility, CompatibilityMode);
 enum_parser!(parse_negative_prompt_mode, NegativePromptMode);

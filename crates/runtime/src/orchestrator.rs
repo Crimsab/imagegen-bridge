@@ -478,6 +478,8 @@ impl ImagegenRuntime {
         response.timings.provider_ms = provider_ms;
         response.timings.artifact_ms = elapsed_ms(artifact_started);
         response.timings.total_ms = elapsed_ms(total_started);
+        self.materializer
+            .attach_metadata(&request, &effective_request, &mut response)?;
         Ok(response)
     }
 
@@ -714,6 +716,7 @@ mod tests {
                     metadata.sha256
                 },
                 generation_ms: None,
+                metadata_name: None,
             };
             Ok(ImageResponse {
                 id: context.request_id,

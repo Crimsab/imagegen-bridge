@@ -4,8 +4,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ArtifactCollisionPolicy, BridgeError, ErrorCode, ImageAction, ImageOperation, ImageRequest,
-    ImageSource, NegativePromptMode, OutputFormat, ResponseFormat, SessionMode,
+    ArtifactCollisionPolicy, ArtifactMetadataPolicy, BridgeError, ErrorCode, ImageAction,
+    ImageOperation, ImageRequest, ImageSource, NegativePromptMode, OutputFormat, ResponseFormat,
+    SessionMode,
 };
 
 /// Configurable limits applied before provider negotiation.
@@ -308,6 +309,15 @@ pub fn validation_issues(request: &ImageRequest, limits: RequestLimits) -> Vec<V
             "output.collision",
             "incompatible",
             "collision policy applies only to an explicit filename",
+        );
+    }
+    if request.output.metadata == ArtifactMetadataPolicy::Sidecar
+        && request.output.response_format != ResponseFormat::Artifact
+    {
+        issue(
+            "output.metadata",
+            "incompatible",
+            "metadata sidecars require artifact response format",
         );
     }
     if let Some(directory) = request.output.directory.as_deref()
@@ -648,5 +658,18 @@ mod tests {
                 .iter()
                 .any(|item| item.field == "output.collision")
         );
+    }
+
+    #[test]
+    fn metadata_sidecars_require_artifact_delivery() {
+        let mut request = ImageRequest::generate("test");
+        request.output.metadata = ArtifactMetadataPolicy::Sidecar;
+        assert!(
+            validation_issues(&request, RequestLimits::default())
+                .iter()
+                .any(|item| item.field == "output.metadata")
+        );
+        request.output.response_format = ResponseFormat::Artifact;
+        assert!(validate_request(&request, RequestLimits::default()).is_ok());
     }
 }

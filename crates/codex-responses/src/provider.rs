@@ -493,6 +493,7 @@ impl CodexResponsesProvider {
             bytes: metadata.bytes,
             sha256: metadata.sha256,
             generation_ms: None,
+            metadata_name: None,
         })
     }
 

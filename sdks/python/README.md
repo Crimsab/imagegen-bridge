@@ -14,9 +14,10 @@ async with AsyncImagegenBridgeClient("http://127.0.0.1:8787") as client:
             directory="illustrations",
             filename="fox.png",
             collision="suffix",
+            metadata="sidecar",
         ),
     ))
-    print(result.data[0].name)
+    print(result.data[0].name, result.data[0].metadata_name)
 ```
 
 Set `provider` in `ImageRequest.routing` to switch between configured bridge

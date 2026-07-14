@@ -15,6 +15,7 @@ export type ImageAction = "auto" | "generate" | "edit";
 export type Resolution = "1k" | "2k" | "4k";
 export type ResponseFormat = "b64_json" | "url" | "artifact" | "metadata";
 export type ArtifactCollisionPolicy = "error" | "suffix";
+export type ArtifactMetadataPolicy = "none" | "sidecar";
 export type CompatibilityMode = "strict" | "normalize" | "best_effort";
 export type NegativePromptMode = "auto" | "native" | "merge" | "reject";
 export type RevisedPromptPolicy = "include" | "omit" | "require";
@@ -65,6 +66,7 @@ export interface OutputOptions {
   directory?: string | null;
   filename?: string | null;
   collision?: ArtifactCollisionPolicy;
+  metadata?: ArtifactMetadataPolicy;
 }
 
 export interface RequestPolicies {
@@ -116,6 +118,7 @@ interface GeneratedImageBase {
   bytes: number;
   sha256: string;
   generation_ms?: number | null;
+  metadata_name?: string | null;
 }
 
 export type GeneratedImage =

@@ -8,10 +8,12 @@ use imagegen_bridge_artifacts::{
     inspect_image,
 };
 use imagegen_bridge_core::{
-    BridgeError, CompatibilityMode, ErrorCode, GeneratedImage, GenerationParameters, ImagePayload,
-    ImageResponse, ImageSize, MultiImageFailurePolicy, Normalization, OutputFormat, OutputOptions,
+    ArtifactMetadataPolicy, BridgeError, CompatibilityMode, ErrorCode, GeneratedImage,
+    GenerationParameters, ImageOperation, ImagePayload, ImageRequest, ImageResponse, ImageSize,
+    MultiImageFailurePolicy, Normalization, OutputFormat, OutputOptions, RequestPolicies,
     ResponseFormat,
 };
+use serde::Serialize;
 use url::Url;
 
 /// Output verification, remote retrieval, and artifact delivery configuration.
@@ -111,6 +113,70 @@ impl OutputMaterializer {
         }
         response.data = projected;
         Ok(response)
+    }
+
+    pub(crate) fn attach_metadata(
+        &self,
+        original: &ImageRequest,
+        effective: &ImageRequest,
+        response: &mut ImageResponse,
+    ) -> Result<(), BridgeError> {
+        if effective.output.metadata == ArtifactMetadataPolicy::None {
+            return Ok(());
+        }
+        let store = self
+            .config
+            .artifact_store
+            .as_ref()
+            .ok_or_else(|| configuration_error("artifact output is not configured"))?;
+        let snapshot = response.clone();
+        let operation = operation_summary(&original.operation);
+        for image in &mut response.data {
+            let (id, name) = match &image.payload {
+                ImagePayload::Artifact {
+                    id,
+                    name: Some(name),
+                } => (id.as_str(), name.as_str()),
+                _ => {
+                    return Err(protocol_error(
+                        "metadata sidecars require bridge artifact output",
+                    ));
+                }
+            };
+            let encoded = serde_json::to_vec_pretty(&ArtifactMetadataSidecar {
+                version: 1,
+                request_id: &snapshot.id,
+                created: snapshot.created,
+                operation: &operation,
+                original_prompt: &original.prompt,
+                effective_prompt: &effective.prompt,
+                negative_prompt: original.negative_prompt.as_deref(),
+                policies: &effective.policies,
+                provider: &snapshot.provider,
+                model: &snapshot.model,
+                requested: &snapshot.requested,
+                effective: &snapshot.effective,
+                normalizations: &snapshot.normalizations,
+                revised_prompt: snapshot.revised_prompt.as_deref(),
+                usage: snapshot.usage.as_ref(),
+                session: snapshot.session.as_ref(),
+                timings: &snapshot.timings,
+                warnings: &snapshot.warnings,
+                image: ArtifactMetadataImage {
+                    index: image.index,
+                    artifact_name: name,
+                    format: image.format,
+                    width: image.width,
+                    height: image.height,
+                    bytes: image.bytes,
+                    sha256: &image.sha256,
+                    generation_ms: image.generation_ms,
+                },
+            })
+            .map_err(|_| artifact_error("could not encode artifact metadata"))?;
+            image.metadata_name = Some(store.attach_metadata(id, name, &encoded)?.name);
+        }
+        Ok(())
     }
 
     fn validate_output_set(
@@ -331,7 +397,77 @@ impl OutputMaterializer {
             bytes: image.metadata.bytes,
             sha256: image.metadata.sha256,
             generation_ms: image.generation_ms,
+            metadata_name: None,
         })
+    }
+}
+
+#[derive(Serialize)]
+struct ArtifactMetadataSidecar<'a> {
+    version: u8,
+    request_id: &'a str,
+    created: u64,
+    operation: &'a ArtifactOperationSummary,
+    original_prompt: &'a str,
+    effective_prompt: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    negative_prompt: Option<&'a str>,
+    policies: &'a RequestPolicies,
+    provider: &'a str,
+    model: &'a str,
+    requested: &'a GenerationParameters,
+    effective: &'a GenerationParameters,
+    normalizations: &'a [Normalization],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    revised_prompt: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    usage: Option<&'a imagegen_bridge_core::Usage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session: Option<&'a imagegen_bridge_core::SessionMetadata>,
+    timings: &'a imagegen_bridge_core::Timings,
+    warnings: &'a [String],
+    image: ArtifactMetadataImage<'a>,
+}
+
+#[derive(Serialize)]
+struct ArtifactMetadataImage<'a> {
+    index: u8,
+    artifact_name: &'a str,
+    format: OutputFormat,
+    width: u32,
+    height: u32,
+    bytes: u64,
+    sha256: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    generation_ms: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct ArtifactOperationSummary {
+    kind: &'static str,
+    input_images: usize,
+    reference_images: usize,
+    mask: bool,
+}
+
+fn operation_summary(operation: &ImageOperation) -> ArtifactOperationSummary {
+    match operation {
+        ImageOperation::Generate { reference_images } => ArtifactOperationSummary {
+            kind: "generate",
+            input_images: 0,
+            reference_images: reference_images.len(),
+            mask: false,
+        },
+        ImageOperation::Edit {
+            images,
+            mask,
+            reference_images,
+        } => ArtifactOperationSummary {
+            kind: "edit",
+            input_images: images.len(),
+            reference_images: reference_images.len(),
+            mask: mask.is_some(),
+        },
     }
 }
 
@@ -356,6 +492,10 @@ fn configuration_error(message: impl Into<String>) -> BridgeError {
     BridgeError::new(ErrorCode::Configuration, message)
 }
 
+fn artifact_error(message: impl Into<String>) -> BridgeError {
+    BridgeError::new(ErrorCode::Artifact, message)
+}
+
 fn protocol_error(message: impl Into<String>) -> BridgeError {
     BridgeError::new(ErrorCode::Protocol, message)
 }
@@ -363,6 +503,8 @@ fn protocol_error(message: impl Into<String>) -> BridgeError {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
+
+    use std::fs;
 
     use imagegen_bridge_core::{GenerationParameters, ImageFailure, Timings};
 
@@ -380,6 +522,7 @@ mod tests {
             bytes: 1,
             sha256: "0".repeat(64),
             generation_ms: Some(1),
+            metadata_name: None,
         }
     }
 
@@ -449,12 +592,19 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let store = Arc::new(ArtifactStore::new(root.path(), ImageLimits::default()).unwrap());
         let materializer = OutputMaterializer::new(MaterializationConfig {
-            artifact_store: Some(store),
+            artifact_store: Some(Arc::clone(&store)),
             ..MaterializationConfig::default()
         })
         .unwrap();
         let bytes = STANDARD.decode(ONE_PIXEL_PNG).unwrap();
         let metadata = inspect_image(&bytes, ImageLimits::default()).unwrap();
+        let output = OutputOptions {
+            response_format: ResponseFormat::Artifact,
+            directory: Some("portraits".to_owned()),
+            filename: Some("woman.png".to_owned()),
+            metadata: ArtifactMetadataPolicy::Sidecar,
+            ..OutputOptions::default()
+        };
         let projected = materializer
             .project(
                 VerifiedImage {
@@ -463,12 +613,7 @@ mod tests {
                     metadata,
                     generation_ms: Some(1),
                 },
-                &OutputOptions {
-                    response_format: ResponseFormat::Artifact,
-                    directory: Some("portraits".to_owned()),
-                    filename: Some("woman.png".to_owned()),
-                    ..OutputOptions::default()
-                },
+                &output,
             )
             .unwrap();
         assert!(matches!(
@@ -476,5 +621,24 @@ mod tests {
             ImagePayload::Artifact { name: Some(ref name), .. } if name == "portraits/woman.png"
         ));
         assert!(root.path().join("portraits/woman.png").is_file());
+
+        let mut original = ImageRequest::generate("an original prompt");
+        original.negative_prompt = Some("blur".to_owned());
+        original.output = output;
+        let mut response = response(vec![projected], Vec::new());
+        response.provider = "codex-app-server".to_owned();
+        response.model = "gpt-image-2".to_owned();
+        materializer
+            .attach_metadata(&original, &original, &mut response)
+            .unwrap();
+        let metadata_name = response.data[0].metadata_name.as_deref().unwrap();
+        let sidecar: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.path().join(metadata_name)).unwrap()).unwrap();
+        assert_eq!(sidecar["original_prompt"], "an original prompt");
+        assert_eq!(sidecar["negative_prompt"], "blur");
+        assert_eq!(sidecar["provider"], "codex-app-server");
+        assert_eq!(sidecar["model"], "gpt-image-2");
+        assert_eq!(sidecar["image"]["artifact_name"], "portraits/woman.png");
+        assert_eq!(sidecar["image"]["width"], 1);
     }
 }

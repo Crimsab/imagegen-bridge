@@ -41,6 +41,18 @@ deterministic `-2`, `-3`, … name. The suffix policy is valid only with an exac
 filename. Filesystem paths are never accepted by the HTTP contract and absolute
 server paths are never returned to clients.
 
+`output.metadata` is `none` by default. `sidecar` is accepted only with
+artifact delivery and writes a bounded JSON object next to every image. The
+sidecar includes version/request identity, completion timestamp, a path-free
+operation summary, original/effective/negative prompts, effective policies,
+requested/effective parameters, normalizations, revised prompt, provider/model,
+usage, session, timings, warnings, and verified per-image dimensions, format,
+byte count and checksum. Its portable relative path is returned in each
+image's optional `metadata_name`. Sidecar JSON is independently checksummed in
+the ownership record and participates in conservative retention cleanup. It is
+an explicit privacy choice: deployments that publicly serve the artifact root
+must treat sidecars as equally public.
+
 `parameters.input_fidelity` is optional and accepts `low` or `high` only when
 the selected model advertises it. `parameters.action` is `auto`, `generate`, or
 `edit`; intrinsic operation conflicts fail before provider work. Provider

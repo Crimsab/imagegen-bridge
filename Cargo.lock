@@ -1030,6 +1030,7 @@ name = "imagegen-bridge-cli"
 version = "0.1.0"
 dependencies = [
  "assert_cmd",
+ "base64",
  "clap",
  "clap_complete",
  "clap_mangen",

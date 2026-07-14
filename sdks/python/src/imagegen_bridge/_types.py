@@ -16,6 +16,7 @@ ImageAction: TypeAlias = Literal["auto", "generate", "edit"]
 Resolution: TypeAlias = Literal["1k", "2k", "4k"]
 ResponseFormat: TypeAlias = Literal["b64_json", "url", "artifact", "metadata"]
 ArtifactCollisionPolicy: TypeAlias = Literal["error", "suffix"]
+ArtifactMetadataPolicy: TypeAlias = Literal["none", "sidecar"]
 CompatibilityMode: TypeAlias = Literal["strict", "normalize", "best_effort"]
 NegativePromptMode: TypeAlias = Literal["auto", "native", "merge", "reject"]
 RevisedPromptPolicy: TypeAlias = Literal["include", "omit", "require"]
@@ -129,6 +130,7 @@ class OutputOptions:
     directory: str | None = None
     filename: str | None = None
     collision: ArtifactCollisionPolicy = "error"
+    metadata: ArtifactMetadataPolicy = "none"
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,6 +233,7 @@ class GeneratedImage:
     bytes: int
     sha256: str
     generation_ms: int | None = None
+    metadata_name: str | None = None
     b64_json: str | None = None
     url: str | None = None
     id: str | None = None

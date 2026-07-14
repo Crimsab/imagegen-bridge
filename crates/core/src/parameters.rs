@@ -162,6 +162,20 @@ impl Default for ArtifactCollisionPolicy {
 }
 
 string_enum! {
+    /// Optional portable generation-metadata persistence policy.
+    pub enum ArtifactMetadataPolicy {
+        None => "none",
+        Sidecar => "sidecar",
+    }
+}
+
+impl Default for ArtifactMetadataPolicy {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+string_enum! {
     /// Compatibility policy used during provider negotiation.
     pub enum CompatibilityMode {
         Strict => "strict",

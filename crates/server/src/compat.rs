@@ -545,6 +545,7 @@ mod tests {
                 bytes: 1,
                 sha256: "00".repeat(32),
                 generation_ms: None,
+                metadata_name: None,
             }],
             failures: Vec::new(),
             revised_prompt: Some("revised".to_owned()),

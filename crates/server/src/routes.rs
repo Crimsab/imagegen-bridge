@@ -727,6 +727,7 @@ mod tests {
                     sha256: "431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460"
                         .to_owned(),
                     generation_ms: None,
+                    metadata_name: None,
                 }],
                 failures: Vec::new(),
                 revised_prompt: Some("revised".to_owned()),

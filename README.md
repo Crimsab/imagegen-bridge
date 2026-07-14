@@ -84,7 +84,9 @@ Generate an artifact using the default app-server provider:
 imagegen-bridge generate \
   "A red paper fox on a charcoal background" \
   --output portraits/paper-fox.png \
-  --collision suffix
+  --collision suffix \
+  --metadata sidecar \
+  --preview
 ```
 
 `--output` selects an exact filename for a single image and automatically uses
@@ -93,6 +95,12 @@ inside that directory. Paths are constrained below the configured artifact
 root; existing exact names fail atomically unless `--collision suffix` is
 selected. The native API and SDKs expose the same controls as
 `output.directory`, `output.filename`, and `output.collision`.
+`--metadata sidecar` writes an owned JSON record containing prompts,
+requested/effective parameters, model/provider, timings, warnings, session and
+verified image properties; its portable name is returned as `metadata_name`.
+Because the sidecar contains prompt content, it is disabled by default.
+`--preview` renders in supported Kitty/iTerm2-compatible terminals and degrades
+to a status message elsewhere; `--open` launches the system image viewer.
 
 Edit an image or add visual references:
 

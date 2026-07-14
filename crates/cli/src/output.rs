@@ -84,6 +84,10 @@ impl Output {
                 image.index, image.width, image.height, image.format, image.bytes, image.sha256
             )
             .map_err(|_| output_error("could not write command output"))?;
+            if let Some(metadata_name) = image.metadata_name.as_deref() {
+                writeln!(stdout, "metadata[{}]\t{metadata_name}", image.index)
+                    .map_err(|_| output_error("could not write command output"))?;
+            }
         }
         for failure in &response.failures {
             writeln!(

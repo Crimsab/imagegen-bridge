@@ -9,6 +9,7 @@ from ._errors import (
 )
 from ._types import (
     ArtifactCollisionPolicy,
+    ArtifactMetadataPolicy,
     Background,
     BridgeErrorData,
     CompatibilityMode,
@@ -54,6 +55,7 @@ from ._types import (
 
 __all__ = [
     "ArtifactCollisionPolicy",
+    "ArtifactMetadataPolicy",
     "AsyncImagegenBridgeClient",
     "Background",
     "BridgeAPIError",

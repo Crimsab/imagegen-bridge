@@ -4,6 +4,7 @@ mod args;
 mod commands;
 mod doctor;
 mod output;
+mod presentation;
 mod setup;
 
 use clap::Parser as _;

@@ -128,6 +128,8 @@ fn generation_maps_output_paths_below_the_artifact_root() {
             "portraits/woman.png",
             "--collision",
             "suffix",
+            "--metadata",
+            "sidecar",
             "--dry-run",
             "--json",
         ])
@@ -141,6 +143,7 @@ fn generation_maps_output_paths_below_the_artifact_root() {
     assert_eq!(value["output"]["directory"], "portraits");
     assert_eq!(value["output"]["filename"], "woman.png");
     assert_eq!(value["output"]["collision"], "suffix");
+    assert_eq!(value["output"]["metadata"], "sidecar");
 }
 
 #[test]
@@ -153,6 +156,56 @@ fn generation_rejects_output_paths_outside_the_artifact_root() {
         .failure()
         .stderr(predicate::str::contains(
             "output path must remain below the configured artifact root",
+        ));
+}
+
+#[test]
+fn explicit_incompatible_response_format_is_not_silently_overridden() {
+    cargo_bin_cmd!("imagegen-bridge")
+        .args([
+            "generate",
+            "test",
+            "--output",
+            "image.png",
+            "--response-format",
+            "b64_json",
+            "--dry-run",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("request validation failed"));
+}
+
+#[test]
+fn metadata_sidecar_selects_artifact_delivery_by_default() {
+    cargo_bin_cmd!("imagegen-bridge")
+        .args(["generate", "test", "--metadata", "sidecar", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"response_format\": \"artifact\"",
+        ));
+}
+
+#[test]
+fn preview_selects_artifact_delivery_for_natural_cli_requests() {
+    cargo_bin_cmd!("imagegen-bridge")
+        .args(["generate", "paper fox", "--preview", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"response_format\": \"artifact\"",
+        ));
+}
+
+#[test]
+fn preview_refuses_to_corrupt_machine_output() {
+    cargo_bin_cmd!("imagegen-bridge")
+        .args(["generate", "paper fox", "--preview", "--dry-run", "--json"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "--preview cannot be combined with machine output",
         ));
 }
 

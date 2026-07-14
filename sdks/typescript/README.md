@@ -17,6 +17,7 @@ const result = await bridge.images.generate({
     directory: "illustrations",
     filename: "fox.png",
     collision: "suffix",
+    metadata: "sidecar",
   },
 });
 ```

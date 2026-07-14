@@ -44,6 +44,21 @@
           }
         ]
       },
+      "ArtifactMetadataPolicy": {
+        "description": "Optional portable generation-metadata persistence policy.",
+        "oneOf": [
+          {
+            "const": "none",
+            "description": "Wire value `none`.",
+            "type": "string"
+          },
+          {
+            "const": "sidecar",
+            "description": "Wire value `sidecar`.",
+            "type": "string"
+          }
+        ]
+      },
       "AspectRatio": {
         "examples": [
           "1:1",
@@ -630,6 +645,13 @@
             "minimum": 0,
             "type": "integer"
           },
+          "metadata_name": {
+            "description": "Portable relative name of an opt-in metadata sidecar.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "sha256": {
             "description": "Lowercase hexadecimal SHA-256 digest.",
             "type": "string"
@@ -979,6 +1001,7 @@
             "$ref": "#/components/schemas/OutputOptions",
             "default": {
               "collision": "error",
+              "metadata": "none",
               "response_format": "b64_json"
             },
             "description": "Output delivery and artifact controls."
@@ -1390,6 +1413,11 @@
               "string",
               "null"
             ]
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ArtifactMetadataPolicy",
+            "default": "none",
+            "description": "Optional portable metadata persistence beside each artifact."
           },
           "response_format": {
             "$ref": "#/components/schemas/ResponseFormat",

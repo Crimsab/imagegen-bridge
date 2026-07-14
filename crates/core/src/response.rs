@@ -71,6 +71,9 @@ pub struct GeneratedImage {
     /// Provider time for this output when measured independently.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generation_ms: Option<u64>,
+    /// Portable relative name of an opt-in metadata sidecar.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata_name: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for GeneratedImage {
@@ -90,6 +93,11 @@ impl<'de> Deserialize<'de> for GeneratedImage {
             .map(serde_json::from_value)
             .transpose()
             .map_err(de::Error::custom)?;
+        let metadata_name = fields
+            .remove("metadata_name")
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(de::Error::custom)?;
         let payload =
             serde_json::from_value(serde_json::Value::Object(fields)).map_err(de::Error::custom)?;
         Ok(Self {
@@ -101,6 +109,7 @@ impl<'de> Deserialize<'de> for GeneratedImage {
             bytes,
             sha256,
             generation_ms,
+            metadata_name,
         })
     }
 }
@@ -265,6 +274,7 @@ mod tests {
             bytes: 5,
             sha256: "0".repeat(64),
             generation_ms: Some(12),
+            metadata_name: None,
         };
         let encoded = serde_json::to_value(&image).unwrap();
         assert_eq!(

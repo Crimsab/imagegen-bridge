@@ -6,9 +6,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, de};
 
 use crate::{
-    ArtifactCollisionPolicy, AspectRatio, Background, CompatibilityMode, ImageAction, ImageSize,
-    InputFidelity, Moderation, MultiImageFailurePolicy, NegativePromptMode, OutputFormat, Quality,
-    Resolution, ResponseFormat, RevisedPromptPolicy, SessionMode,
+    ArtifactCollisionPolicy, ArtifactMetadataPolicy, AspectRatio, Background, CompatibilityMode,
+    ImageAction, ImageSize, InputFidelity, Moderation, MultiImageFailurePolicy, NegativePromptMode,
+    OutputFormat, Quality, Resolution, ResponseFormat, RevisedPromptPolicy, SessionMode,
 };
 
 const COMMON_REQUEST_FIELDS: &[&str] = &[
@@ -485,6 +485,8 @@ pub struct OutputOptions {
     pub filename: Option<String>,
     /// Atomic behavior if an explicit filename already exists.
     pub collision: ArtifactCollisionPolicy,
+    /// Optional portable metadata persistence beside each artifact.
+    pub metadata: ArtifactMetadataPolicy,
 }
 
 /// Explicit fallback and visibility controls.

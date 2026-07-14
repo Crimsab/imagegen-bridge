@@ -24,11 +24,11 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     args::{
         ArtifactCommand, Cli, Command, ConfigCommand, EditArgs, GenerateArgs, ImageArgs,
-        ProviderCommand, SchemaArgs, SchemaKind, SessionCommand,
+        PresentationArgs, ProviderCommand, SchemaArgs, SchemaKind, SessionCommand,
     },
     doctor,
     output::Output,
-    setup,
+    presentation, setup,
 };
 
 pub(crate) async fn run(cli: Cli, output: &Output) -> Result<(), BridgeError> {
@@ -52,8 +52,8 @@ pub(crate) async fn run(cli: Cli, output: &Output) -> Result<(), BridgeError> {
     let (resolved, config_path) = resolve_config(&cli)?;
     match cli.command {
         Command::Doctor(args) => doctor::run(config_path.as_deref(), resolved, &args, output).await,
-        Command::Generate(args) => generate(args, &resolved, output).await,
-        Command::Edit(args) => edit(args, &resolved, output).await,
+        Command::Generate(args) => Box::pin(generate(args, &resolved, output)).await,
+        Command::Edit(args) => Box::pin(edit(args, &resolved, output)).await,
         Command::Serve(args) => serve_command(args.bind, resolved, output).await,
         Command::Providers(args) => providers(args.command, resolved, output).await,
         Command::Session(args) => session(args.command, resolved, output).await,
@@ -89,7 +89,9 @@ async fn generate(
     resolved: &ResolvedConfig,
     output: &Output,
 ) -> Result<(), BridgeError> {
-    let request = if let Some(path) = args.request.as_deref() {
+    let presentation = args.presentation;
+    let allow_implicit_artifact = args.request.is_none() && args.image.response_format.is_none();
+    let mut request = if let Some(path) = args.request.as_deref() {
         ensure_request_only(
             args.prompt.is_some() || args.prompt_text.is_some() || !args.references.is_empty(),
             &args.image,
@@ -111,7 +113,8 @@ async fn generate(
         apply_image_args(&mut request, args.image, &resolved.config.artifacts.root)?;
         request
     };
-    execute_or_preview(request, args.dry_run, resolved, output).await
+    presentation::prepare_request(&mut request, presentation, allow_implicit_artifact, output)?;
+    execute_or_preview(request, args.dry_run, presentation, resolved, output).await
 }
 
 async fn edit(
@@ -119,7 +122,9 @@ async fn edit(
     resolved: &ResolvedConfig,
     output: &Output,
 ) -> Result<(), BridgeError> {
-    let request = if let Some(path) = args.request.as_deref() {
+    let presentation = args.presentation;
+    let allow_implicit_artifact = args.request.is_none() && args.image.response_format.is_none();
+    let mut request = if let Some(path) = args.request.as_deref() {
         ensure_request_only(
             args.prompt.is_some()
                 || args.prompt_text.is_some()
@@ -147,7 +152,8 @@ async fn edit(
         apply_image_args(&mut request, args.image, &resolved.config.artifacts.root)?;
         request
     };
-    execute_or_preview(request, args.dry_run, resolved, output).await
+    presentation::prepare_request(&mut request, presentation, allow_implicit_artifact, output)?;
+    execute_or_preview(request, args.dry_run, presentation, resolved, output).await
 }
 
 fn ensure_request_only(has_operation_fields: bool, image: &ImageArgs) -> Result<(), BridgeError> {
@@ -163,6 +169,7 @@ fn ensure_request_only(has_operation_fields: bool, image: &ImageArgs) -> Result<
 async fn execute_or_preview(
     request: ImageRequest,
     dry_run: bool,
+    presentation_options: PresentationArgs,
     resolved: &ResolvedConfig,
     output: &Output,
 ) -> Result<(), BridgeError> {
@@ -191,7 +198,16 @@ async fn execute_or_preview(
     };
     let shutdown = application.shutdown().await;
     match (result, shutdown) {
-        (Ok(response), Ok(())) => output.response(&response),
+        (Ok(response), Ok(())) => {
+            output.response(&response)?;
+            presentation::present(
+                &response,
+                presentation_options,
+                &resolved.config.artifacts.root,
+                resolved.config.artifacts.image.max_encoded_bytes,
+                output,
+            )
+        }
         (Err(error), _) | (Ok(_), Err(error)) => Err(error),
     }
 }
@@ -235,7 +251,8 @@ fn apply_image_args(
     if let Some(value) = args.action {
         request.parameters.action = value;
     }
-    if let Some(value) = args.response_format {
+    let explicit_response_format = args.response_format;
+    if let Some(value) = explicit_response_format {
         request.output.response_format = value;
     }
     request.output.filename_prefix = args.filename_prefix;
@@ -244,9 +261,19 @@ fn apply_image_args(
         artifact_root,
         args.output_path.as_deref(),
         args.output_dir.as_deref(),
+        explicit_response_format.is_none(),
     )?;
     if let Some(collision) = args.collision {
         request.output.collision = collision;
+    }
+    if let Some(metadata) = args.metadata {
+        request.output.metadata = metadata;
+        if metadata == imagegen_bridge::core::ArtifactMetadataPolicy::Sidecar
+            && explicit_response_format.is_none()
+            && request.output.response_format == imagegen_bridge::core::ResponseFormat::B64Json
+        {
+            request.output.response_format = imagegen_bridge::core::ResponseFormat::Artifact;
+        }
     }
     if let Some(value) = args.compatibility {
         request.policies.compatibility = value;
@@ -279,6 +306,7 @@ fn apply_output_location(
     artifact_root: &Path,
     output_path: Option<&Path>,
     output_dir: Option<&Path>,
+    allow_implicit_artifact: bool,
 ) -> Result<(), BridgeError> {
     let Some(requested) = output_path.or(output_dir) else {
         return Ok(());
@@ -302,7 +330,9 @@ fn apply_output_location(
     } else {
         request.output.directory = portable_path(relative)?;
     }
-    if request.output.response_format == imagegen_bridge::core::ResponseFormat::B64Json {
+    if allow_implicit_artifact
+        && request.output.response_format == imagegen_bridge::core::ResponseFormat::B64Json
+    {
         request.output.response_format = imagegen_bridge::core::ResponseFormat::Artifact;
     }
     Ok(())
@@ -335,7 +365,10 @@ fn lexical_absolute(path: &Path) -> Result<PathBuf, BridgeError> {
 }
 
 fn portable_parent(path: Option<&Path>) -> Result<Option<String>, BridgeError> {
-    path.map(portable_relative).transpose()
+    match path {
+        Some(path) if !path.as_os_str().is_empty() => portable_relative(path).map(Some),
+        Some(_) | None => Ok(None),
+    }
 }
 
 fn portable_path(path: &Path) -> Result<Option<String>, BridgeError> {

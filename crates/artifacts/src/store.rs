@@ -17,6 +17,7 @@ use crate::{ImageLimits, ImageMetadata, inspect_image};
 
 const OWNERSHIP_DIRECTORY: &str = ".imagegen-bridge-ownership";
 const MAX_MARKER_BYTES: u64 = 4 * 1024;
+const MAX_SIDECAR_BYTES: u64 = 1024 * 1024;
 
 /// Bridge-owned artifact returned to the runtime.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,6 +30,13 @@ pub struct StoredArtifact {
     pub path: PathBuf,
     /// Verified image metadata.
     pub metadata: ImageMetadata,
+}
+
+/// Portable reference to an attached generation-metadata sidecar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredSidecar {
+    /// Safe relative name below the artifact root.
+    pub name: String,
 }
 
 /// Per-request artifact placement below the configured owned root.
@@ -92,11 +100,16 @@ struct OwnershipRecord {
     name: String,
     created_at: u64,
     sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sidecar_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sidecar_sha256: Option<String>,
 }
 
 struct OwnedCandidate {
     marker: PathBuf,
     artifact: PathBuf,
+    sidecar: Option<PathBuf>,
     record: OwnershipRecord,
 }
 
@@ -220,6 +233,8 @@ impl ArtifactStore {
             name: name.clone(),
             created_at: unix_timestamp(SystemTime::now())?,
             sha256: metadata.sha256.clone(),
+            sidecar_name: None,
+            sidecar_sha256: None,
         };
         if let Err(error) = self.publish_ownership(&record) {
             let _ = fs::remove_file(&destination);
@@ -232,6 +247,74 @@ impl ArtifactStore {
             name,
             path: destination,
             metadata,
+        })
+    }
+
+    /// Atomically attaches bounded JSON metadata to an owned artifact.
+    pub fn attach_metadata(
+        &self,
+        artifact_id: &str,
+        artifact_name: &str,
+        encoded: &[u8],
+    ) -> Result<StoredSidecar, BridgeError> {
+        if Uuid::parse_str(artifact_id).is_err() || !safe_relative(artifact_name) {
+            return Err(artifact_error("artifact identity is invalid"));
+        }
+        if encoded.is_empty()
+            || u64::try_from(encoded.len()).unwrap_or(u64::MAX) > MAX_SIDECAR_BYTES
+            || !matches!(
+                serde_json::from_slice::<serde_json::Value>(encoded),
+                Ok(serde_json::Value::Object(_))
+            )
+        {
+            return Err(artifact_error(
+                "artifact metadata must be a bounded JSON object",
+            ));
+        }
+        let marker = self.ownership_root.join(format!("{artifact_id}.json"));
+        let mut candidate = self
+            .read_candidate(&marker)
+            .map_err(|()| artifact_error("artifact ownership record is invalid"))?;
+        if candidate.record.name != artifact_name
+            || candidate.record.sidecar_name.is_some()
+            || candidate.record.sidecar_sha256.is_some()
+            || self.verify_candidate(&candidate).is_err()
+        {
+            return Err(artifact_error(
+                "artifact metadata cannot be attached to this artifact",
+            ));
+        }
+        let directory = candidate
+            .artifact
+            .parent()
+            .ok_or_else(|| artifact_error("artifact directory is invalid"))?;
+        let filename = format!("metadata-{artifact_id}.json");
+        let destination = directory.join(&filename);
+        let mut temporary = NamedTempFile::new_in(directory)
+            .map_err(|_| artifact_error("could not create metadata sidecar"))?;
+        temporary
+            .write_all(encoded)
+            .and_then(|()| temporary.as_file().sync_all())
+            .map_err(|_| artifact_error("could not write metadata sidecar"))?;
+        temporary
+            .persist_noclobber(&destination)
+            .map_err(|_| artifact_error("could not publish metadata sidecar without overwrite"))?;
+        sync_directory(directory)?;
+
+        let portable_name = Path::new(artifact_name)
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .and_then(Path::to_str)
+            .map_or_else(|| filename.clone(), |parent| format!("{parent}/{filename}"));
+        candidate.record.sidecar_name = Some(portable_name.clone());
+        candidate.record.sidecar_sha256 = Some(format!("{:x}", Sha256::digest(encoded)));
+        if let Err(error) = self.replace_ownership(&candidate.record) {
+            let _ = fs::remove_file(&destination);
+            let _ = sync_directory(directory);
+            return Err(error);
+        }
+        Ok(StoredSidecar {
+            name: portable_name,
         })
     }
 
@@ -358,6 +441,25 @@ impl ArtifactStore {
         sync_directory(&self.ownership_root)
     }
 
+    fn replace_ownership(&self, record: &OwnershipRecord) -> Result<(), BridgeError> {
+        let encoded = serde_json::to_vec(record)
+            .map_err(|_| artifact_error("could not encode artifact ownership record"))?;
+        if u64::try_from(encoded.len()).unwrap_or(u64::MAX) > MAX_MARKER_BYTES {
+            return Err(artifact_error("artifact ownership record is too large"));
+        }
+        let destination = self.ownership_root.join(format!("{}.json", record.id));
+        let mut temporary = NamedTempFile::new_in(&self.ownership_root)
+            .map_err(|_| artifact_error("could not create ownership record"))?;
+        temporary
+            .write_all(&encoded)
+            .and_then(|()| temporary.as_file().sync_all())
+            .map_err(|_| artifact_error("could not write ownership record"))?;
+        temporary
+            .persist(&destination)
+            .map_err(|_| artifact_error("could not replace ownership record"))?;
+        sync_directory(&self.ownership_root)
+    }
+
     fn read_candidate(&self, marker: &Path) -> Result<OwnedCandidate, ()> {
         let marker_metadata = fs::symlink_metadata(marker).map_err(|_| ())?;
         if !marker_metadata.file_type().is_file() || marker_metadata.len() > MAX_MARKER_BYTES {
@@ -369,24 +471,41 @@ impl ArtifactStore {
             .ok_or(())?;
         let encoded = fs::read(marker).map_err(|_| ())?;
         let record: OwnershipRecord = serde_json::from_slice(&encoded).map_err(|_| ())?;
+        let sidecar_valid = match (&record.sidecar_name, &record.sidecar_sha256) {
+            (None, None) => true,
+            (Some(name), Some(sha256)) => {
+                safe_relative(name)
+                    && sha256.len() == 64
+                    && sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+            }
+            _ => false,
+        };
         if record.version != 1
             || marker_name != format!("{}.json", record.id)
             || Uuid::parse_str(&record.id).is_err()
             || !safe_relative(&record.name)
             || record.sha256.len() != 64
             || !record.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || !sidecar_valid
         {
             return Err(());
         }
         Ok(OwnedCandidate {
             marker: marker.to_owned(),
             artifact: self.root.join(&record.name),
+            sidecar: record
+                .sidecar_name
+                .as_deref()
+                .map(|name| self.root.join(name)),
             record,
         })
     }
 
     fn remove_verified(&self, candidate: &OwnedCandidate) -> Result<(), ()> {
         self.verify_candidate(candidate)?;
+        if let Some(sidecar) = &candidate.sidecar {
+            fs::remove_file(sidecar).map_err(|_| ())?;
+        }
         fs::remove_file(&candidate.artifact).map_err(|_| ())?;
         fs::remove_file(&candidate.marker).map_err(|_| ())?;
         sync_directory(&self.root).map_err(|_| ())?;
@@ -402,6 +521,23 @@ impl ArtifactStore {
         let digest = format!("{:x}", Sha256::digest(&bytes));
         if digest != candidate.record.sha256 || inspect_image(&bytes, self.limits).is_err() {
             return Err(());
+        }
+        if let (Some(sidecar), Some(expected)) =
+            (&candidate.sidecar, &candidate.record.sidecar_sha256)
+        {
+            let metadata = fs::symlink_metadata(sidecar).map_err(|_| ())?;
+            if !metadata.file_type().is_file() || metadata.len() > MAX_SIDECAR_BYTES {
+                return Err(());
+            }
+            let encoded = fs::read(sidecar).map_err(|_| ())?;
+            if format!("{:x}", Sha256::digest(&encoded)) != *expected
+                || !matches!(
+                    serde_json::from_slice::<serde_json::Value>(&encoded),
+                    Ok(serde_json::Value::Object(_))
+                )
+            {
+                return Err(());
+            }
         }
         Ok(())
     }
@@ -691,6 +827,10 @@ mod tests {
             .unwrap();
         assert_eq!(owned.name, "portraits/people/alice.png");
         assert_eq!(fs::read(&owned.path).unwrap(), bytes);
+        let sidecar = store
+            .attach_metadata(&owned.id, &owned.name, br#"{"prompt":"test"}"#)
+            .unwrap();
+        assert!(root.path().join(&sidecar.name).is_file());
 
         let report = store
             .cleanup(
@@ -703,6 +843,7 @@ mod tests {
             .unwrap();
         assert_eq!(report.deleted, 1);
         assert!(!owned.path.exists());
+        assert!(!root.path().join(sidecar.name).exists());
     }
 
     #[test]
@@ -772,5 +913,27 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    #[test]
+    fn metadata_attachment_rejects_non_json_and_duplicate_sidecars() {
+        let root = tempfile::tempdir().unwrap();
+        let store = ArtifactStore::new(root.path(), ImageLimits::default()).unwrap();
+        let owned = store
+            .publish(&test_png(2, 2), None, Some(OutputFormat::Png))
+            .unwrap();
+        assert!(
+            store
+                .attach_metadata(&owned.id, &owned.name, b"not-json")
+                .is_err()
+        );
+        store
+            .attach_metadata(&owned.id, &owned.name, br#"{"version":1}"#)
+            .unwrap();
+        assert!(
+            store
+                .attach_metadata(&owned.id, &owned.name, br#"{"version":2}"#)
+                .is_err()
+        );
     }
 }

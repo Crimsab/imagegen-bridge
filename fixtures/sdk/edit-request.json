@@ -40,7 +40,8 @@
     "filename_prefix": null,
     "directory": null,
     "filename": null,
-    "collision": "error"
+    "collision": "error",
+    "metadata": "none"
   },
   "policies": {
     "compatibility": "strict",
