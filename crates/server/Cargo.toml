@@ -12,6 +12,8 @@ publish = false
 [dependencies]
 axum = { version = "0.8.8", features = ["json", "multipart", "tokio"] }
 base64 = "0.22"
+bytes = "1"
+imagegen-bridge-artifacts = { path = "../artifacts", version = "0.1.0" }
 imagegen-bridge-config = { path = "../config", version = "0.1.0" }
 imagegen-bridge-core = { path = "../core", version = "0.1.0" }
 imagegen-bridge-runtime = { path = "../runtime", version = "0.1.0" }

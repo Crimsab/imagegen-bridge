@@ -64,6 +64,7 @@ def test_sync_client_matches_shared_http_contract(
         completed = client.jobs.get(queued.id)
         assert completed.status == "succeeded"
         assert completed.result is not None and completed.result.data[0].type == "artifact"
+        assert client.jobs.partial(queued.id).startswith(b"\x89PNG\r\n\x1a\n")
         page = client.jobs.list(
             status="succeeded", visibility="active", favorite=True, search="fixture"
         )
@@ -125,6 +126,7 @@ def test_async_client_matches_shared_http_contract(
             await client.delete_session("sdk-fixture")
             queued = await client.jobs.create(request)
             assert (await client.jobs.get(queued.id)).result is not None
+            assert (await client.jobs.partial(queued.id)).startswith(b"\x89PNG\r\n\x1a\n")
             assert (await client.jobs.list()).items[0].status == "succeeded"
             assert (await client.jobs.update(queued.id, favorite=True, deleted=False)).favorite
             assert (await client.jobs.cancel(queued.id)).cancel_requested

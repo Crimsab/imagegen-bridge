@@ -95,6 +95,10 @@ export class BridgeApi {
 		});
 	}
 
+	async jobPartial(id) {
+		return this.requestBlob(`/v1/jobs/${encodeURIComponent(id)}/partial`);
+	}
+
 	async thumbnail(id, edge = 640) {
 		return this.requestBlob(
 			`/v1/artifacts/${encodeURIComponent(id)}/thumbnail?edge=${encodeURIComponent(edge)}`,

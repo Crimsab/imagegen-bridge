@@ -4222,6 +4222,81 @@
         ]
       }
     },
+    "/v1/jobs/{id}/partial": {
+      "get": {
+        "description": "Returns the latest fully verified transient partial preview while a durable job is running. The preview is bounded, held in memory, never persisted, and may disappear before the next poll.",
+        "operationId": "getImageJobPartialPreview",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "example": "019f0000-0000-7000-8000-000000000000",
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "image/png": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "image/webp": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Latest partial preview",
+            "headers": {
+              "X-Image-Output-Index": {
+                "schema": {
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "X-Image-Partial-Index": {
+                "schema": {
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Bridge authentication required"
+          },
+          "404": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Partial preview not available"
+          }
+        },
+        "security": [
+          {
+            "bridgeBearer": []
+          }
+        ],
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
     "/v1/providers": {
       "get": {
         "operationId": "listProviders",

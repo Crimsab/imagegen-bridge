@@ -96,6 +96,7 @@ pub(crate) fn redacted_route(path: &str) -> Option<&'static str> {
         "/metrics" => "/metrics",
         "/v1/openapi.json" => return None,
         path if one_component_after(path, "/v1/jobs/") => "/v1/jobs/{id}",
+        path if two_components_after(path, "/v1/jobs/", "partial") => "/v1/jobs/{id}/partial",
         path if one_component_after(path, "/v1/sessions/") => "/v1/sessions/{key}",
         path if one_component_after(path, "/v1/artifacts/") => "/v1/artifacts/{id}",
         path if artifact_thumbnail(path) => "/v1/artifacts/{id}/thumbnail",
@@ -104,6 +105,14 @@ pub(crate) fn redacted_route(path: &str) -> Option<&'static str> {
         _ => return None,
     };
     Some(route)
+}
+
+fn two_components_after(path: &str, prefix: &str, tail: &str) -> bool {
+    path.strip_prefix(prefix).is_some_and(|remainder| {
+        remainder
+            .split_once('/')
+            .is_some_and(|(component, last)| !component.is_empty() && last == tail)
+    })
 }
 
 fn one_component_after(path: &str, prefix: &str) -> bool {
@@ -161,6 +170,10 @@ mod tests {
         assert_eq!(
             redacted_route("/v1/providers/private-provider/capabilities"),
             Some("/v1/providers/{provider}/capabilities")
+        );
+        assert_eq!(
+            redacted_route("/v1/jobs/private-job-id/partial"),
+            Some("/v1/jobs/{id}/partial")
         );
         assert_eq!(
             redacted_route("/v1/prompt-like-secret"),

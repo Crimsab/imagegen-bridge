@@ -20,6 +20,22 @@ const state = {
 	providers: [],
 };
 
+const PARAMETER_LABELS = {
+	n: "Outputs",
+	size: "Size",
+	aspect_ratio: "Aspect ratio",
+	resolution: "Resolution",
+	quality: "Quality",
+	output_format: "Format",
+	output_compression: "Compression",
+	background: "Background",
+	moderation: "Moderation",
+	partial_images: "Partial images",
+	failure_policy: "Failure policy",
+	input_fidelity: "Input fidelity",
+	action: "Action",
+};
+
 const elements = {
 	form: document.querySelector("#generation-form"),
 	formMessage: document.querySelector("#form-message"),
@@ -541,6 +557,22 @@ function renderCard(summary) {
 				create("span", "job-placeholder", "Preview unavailable"),
 			);
 		});
+	} else if (
+		summary.status === "running" &&
+		Number(summary.progress?.partial_images) > 0
+	) {
+		const partial = create("img");
+		partial.alt = `Latest partial preview for ${truncate(detail?.request?.prompt, 90)}`;
+		visual.append(partial);
+		loadPartialImage(
+			partial,
+			summary.id,
+			Number(summary.progress.partial_images),
+		).catch(() => {
+			visual.replaceChildren(
+				create("span", "job-placeholder", "Partial preview unavailable"),
+			);
+		});
 	} else {
 		visual.append(
 			create("span", "job-placeholder", placeholderText(summary, detail)),
@@ -592,6 +624,11 @@ function renderCard(summary) {
 				"",
 				`${detail.result.data.length} output${detail.result.data.length === 1 ? "" : "s"}`,
 			),
+		);
+	}
+	if (summary.progress?.stage) {
+		metadata.append(
+			create("span", "", summary.progress.stage.replaceAll("_", " ")),
 		);
 	}
 
@@ -649,6 +686,17 @@ async function loadImage(element, artifactId, edge) {
 	let url = state.assetUrls.get(key);
 	if (!url) {
 		const blob = await api.thumbnail(artifactId, edge);
+		url = URL.createObjectURL(blob);
+		state.assetUrls.set(key, url);
+	}
+	element.src = url;
+}
+
+async function loadPartialImage(element, jobId, partialCount) {
+	const key = `partial:${jobId}:${partialCount}`;
+	let url = state.assetUrls.get(key);
+	if (!url) {
+		const blob = await api.jobPartial(jobId);
 		url = URL.createObjectURL(blob);
 		state.assetUrls.set(key, url);
 	}
@@ -729,6 +777,25 @@ function renderDetail(job) {
 	const layout = create("div", "detail-layout");
 	const primary = create("div", "detail-section");
 	const images = create("div", "detail-images");
+	if (job.status === "running" && Number(job.progress?.partial_images) > 0) {
+		const figure = create("figure", "detail-image partial-preview");
+		const image = create("img");
+		image.alt = `Latest partial preview after ${job.progress.partial_images} partial image events`;
+		figure.append(
+			image,
+			create(
+				"figcaption",
+				"",
+				`Live partial preview · ${job.progress.partial_images} received · not retained`,
+			),
+		);
+		images.append(figure);
+		loadPartialImage(image, job.id, job.progress.partial_images).catch(() => {
+			figure.replaceChildren(
+				create("span", "job-placeholder", "Partial preview unavailable"),
+			);
+		});
+	}
 	const outputs = job.result?.data || [];
 	for (const output of outputs) {
 		if (output.type !== "artifact" || !output.id) continue;
@@ -775,13 +842,39 @@ function renderDetail(job) {
 	if (job.result?.revised_prompt)
 		primary.append(detailSection("Revised prompt", job.result.revised_prompt));
 	if (job.error) {
-		primary.append(
-			create(
-				"div",
-				"error-panel",
-				job.error.message || "The operation failed.",
-			),
+		const error = create(
+			"div",
+			"error-panel",
+			job.error.message || "The operation failed.",
 		);
+		error.setAttribute("role", "alert");
+		primary.append(error);
+	}
+	if (job.result) {
+		primary.append(parameterComparison(job.result));
+		if (job.result.normalizations?.length)
+			primary.append(
+				messageList(
+					"Applied normalizations",
+					job.result.normalizations.map(
+						(item) =>
+							`${item.field}: ${displayValue(item.requested)} → ${displayValue(item.effective)} (${item.reason})`,
+					),
+				),
+			);
+		if (job.result.warnings?.length)
+			primary.append(messageList("Warnings", job.result.warnings, "warning"));
+		if (job.result.failures?.length)
+			primary.append(
+				messageList(
+					"Output failures",
+					job.result.failures.map(
+						(item) =>
+							`Output ${Number(item.index) + 1}: ${item.error?.message || item.error?.code || "generation failed"} (${formatDuration(item.generation_ms)})`,
+					),
+					"error",
+				),
+			);
 	}
 
 	const secondary = create("div", "detail-section");
@@ -823,6 +916,56 @@ function detailSection(title, content) {
 	return section;
 }
 
+function messageList(title, items, kind = "") {
+	const section = create("section", "detail-section");
+	section.append(create("h3", "", title));
+	const list = create("ul", `detail-messages${kind ? ` ${kind}` : ""}`);
+	for (const item of items) list.append(create("li", "", String(item)));
+	section.append(list);
+	return section;
+}
+
+function parameterComparison(result) {
+	const section = create("section", "detail-section");
+	section.append(create("h3", "", "Requested and effective parameters"));
+	const scroll = create("div", "table-scroll");
+	scroll.tabIndex = 0;
+	scroll.setAttribute("aria-label", "Scrollable requested and effective parameter comparison");
+	const table = create("table", "parameter-table");
+	const head = create("thead");
+	const heading = create("tr");
+	for (const label of ["Parameter", "Requested", "Effective"])
+		heading.append(create("th", "", label));
+	for (const cell of heading.children) cell.scope = "col";
+	head.append(heading);
+	const body = create("tbody");
+	const requested = result.requested || {};
+	const effective = result.effective || {};
+	for (const [field, label] of Object.entries(PARAMETER_LABELS)) {
+		const row = create("tr");
+		const changed =
+			JSON.stringify(requested[field]) !== JSON.stringify(effective[field]);
+		if (changed) row.className = "changed";
+		row.append(
+			create("th", "", label),
+			create("td", "", displayValue(requested[field])),
+			create("td", "", displayValue(effective[field])),
+		);
+		row.firstElementChild.scope = "row";
+		body.append(row);
+	}
+	table.append(head, body);
+	scroll.append(table);
+	section.append(scroll);
+	return section;
+}
+
+function displayValue(value) {
+	if (value == null || value === "") return "—";
+	if (typeof value === "object") return JSON.stringify(value);
+	return String(value);
+}
+
 function metadataList(job) {
 	const list = create("dl", "detail-meta");
 	const result = job.result;
@@ -836,6 +979,8 @@ function metadataList(job) {
 		],
 		["Model", result?.model || job.request.routing?.model || "auto"],
 		["Operation", job.request.operation],
+		["Progress", job.progress?.stage?.replaceAll("_", " ") || "complete"],
+		["Cancel requested", job.cancel_requested ? "yes" : "no"],
 		["Outputs", String(result?.data?.length ?? job.request.parameters?.n ?? 1)],
 		[
 			"Size",
@@ -852,12 +997,24 @@ function metadataList(job) {
 			output?.format || job.request.parameters?.output_format || "auto",
 		],
 		[
+			"Queue time",
+			result ? formatDuration(result.timings?.queue_ms) : "pending",
+		],
+		[
+			"Input time",
+			result ? formatDuration(result.timings?.input_ms) : "pending",
+		],
+		[
 			"Total time",
 			result ? formatDuration(result.timings?.total_ms) : "pending",
 		],
 		[
 			"Provider time",
 			result ? formatDuration(result.timings?.provider_ms) : "pending",
+		],
+		[
+			"Artifact time",
+			result ? formatDuration(result.timings?.artifact_ms) : "pending",
 		],
 		["Partial images", String(job.progress?.partial_images ?? 0)],
 	];

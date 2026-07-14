@@ -28,6 +28,8 @@ from ._types import (
 )
 
 Timeout = float | httpx.Timeout | None
+_MAX_PARTIAL_PREVIEW_BYTES = 16 * 1024 * 1024
+_IMAGE_CONTENT_TYPES = {"image/png", "image/jpeg", "image/webp"}
 
 
 def _decode_json(response: httpx.Response) -> dict[str, Any]:
@@ -62,6 +64,16 @@ def _decode_job_page(response: httpx.Response) -> ImageJobPage:
         return ImageJobPage.from_dict(_decode_json(response))
     except (KeyError, TypeError, ValueError) as error:
         raise BridgeProtocolError("bridge returned an invalid durable job page") from error
+
+
+def _decode_partial_preview(response: httpx.Response) -> bytes:
+    content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    content = response.content
+    if content_type not in _IMAGE_CONTENT_TYPES or not content:
+        raise BridgeProtocolError("bridge returned an invalid partial image preview")
+    if len(content) > _MAX_PARTIAL_PREVIEW_BYTES:
+        raise BridgeProtocolError("bridge partial image preview exceeds the SDK limit")
+    return content
 
 
 def _job_update(favorite: bool | None, deleted: bool | None) -> dict[str, bool]:
@@ -187,6 +199,10 @@ class AsyncJobsResource:
     async def cancel(self, job_id: str, *, timeout: Timeout = None) -> ImageJob:
         return await self._client._cancel_job(job_id, timeout)
 
+    async def partial(self, job_id: str, *, timeout: Timeout = None) -> bytes:
+        """Return the latest transient verified preview for a running job."""
+        return await self._client._job_partial(job_id, timeout)
+
     async def update(
         self,
         job_id: str,
@@ -226,6 +242,10 @@ class JobsResource:
 
     def cancel(self, job_id: str, *, timeout: Timeout = None) -> ImageJob:
         return self._client._cancel_job(job_id, timeout)
+
+    def partial(self, job_id: str, *, timeout: Timeout = None) -> bytes:
+        """Return the latest transient verified preview for a running job."""
+        return self._client._job_partial(job_id, timeout)
 
     def update(
         self,
@@ -354,6 +374,12 @@ class AsyncImagegenBridgeClient:
     async def _cancel_job(self, job_id: str, timeout: Timeout) -> ImageJob:
         response = await self._send("DELETE", f"/v1/jobs/{quote(job_id, safe='')}", timeout=timeout)
         return _decode_job(response)
+
+    async def _job_partial(self, job_id: str, timeout: Timeout) -> bytes:
+        response = await self._send(
+            "GET", f"/v1/jobs/{quote(job_id, safe='')}/partial", timeout=timeout
+        )
+        return _decode_partial_preview(response)
 
     async def _update_job(
         self,
@@ -537,6 +563,10 @@ class ImagegenBridgeClient:
     def _cancel_job(self, job_id: str, timeout: Timeout) -> ImageJob:
         response = self._send("DELETE", f"/v1/jobs/{quote(job_id, safe='')}", timeout=timeout)
         return _decode_job(response)
+
+    def _job_partial(self, job_id: str, timeout: Timeout) -> bytes:
+        response = self._send("GET", f"/v1/jobs/{quote(job_id, safe='')}/partial", timeout=timeout)
+        return _decode_partial_preview(response)
 
     def _update_job(
         self,

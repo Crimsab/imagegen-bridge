@@ -214,6 +214,31 @@ pub fn openapi_document() -> Value {
                     }
                 }
             },
+            "/v1/jobs/{id}/partial": {
+                "get": {
+                    "operationId":"getImageJobPartialPreview",
+                    "tags":["jobs"],
+                    "security":[{"bridgeBearer":[]}],
+                    "description":"Returns the latest fully verified transient partial preview while a durable job is running. The preview is bounded, held in memory, never persisted, and may disappear before the next poll.",
+                    "parameters":[job_id_parameter()],
+                    "responses": {
+                        "200": {
+                            "description":"Latest partial preview",
+                            "headers": {
+                                "X-Image-Output-Index":{"schema":{"type":"integer","minimum":0,"maximum":255}},
+                                "X-Image-Partial-Index":{"schema":{"type":"integer","minimum":0,"maximum":255}}
+                            },
+                            "content": {
+                                "image/png":{"schema":{"type":"string","format":"binary"}},
+                                "image/jpeg":{"schema":{"type":"string","format":"binary"}},
+                                "image/webp":{"schema":{"type":"string","format":"binary"}}
+                            }
+                        },
+                        "401": error_response("Bridge authentication required"),
+                        "404": error_response("Partial preview not available")
+                    }
+                }
+            },
             "/v1/artifacts/{id}": {
                 "get": {
                     "operationId":"getImageArtifact",

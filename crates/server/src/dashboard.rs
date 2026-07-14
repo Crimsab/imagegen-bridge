@@ -112,6 +112,9 @@ mod tests {
         assert!(INDEX_HTML.contains("id=\"event-table-body\""));
         assert!(APP_JS.contains("copyArtifactFolder"));
         assert!(APP_JS.contains("renderOperatorEvents"));
+        assert!(APP_JS.contains("Requested and effective parameters"));
+        assert!(APP_JS.contains("Applied normalizations"));
+        assert!(APP_JS.contains("loadPartialImage"));
         assert!(!INDEX_HTML.contains("<script>"));
         assert!(!INDEX_HTML.contains("style=\""));
     }

@@ -43,6 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/v1/jobs/{id}",
             get(get_job).delete(cancel_job).patch(update_job),
         )
+        .route("/v1/jobs/{id}/partial", get(job_partial))
         .route("/v1/providers", get(providers))
         .route("/v1/diagnostics", get(diagnostics))
         .route("/v1/providers/{provider}/capabilities", get(capabilities))
@@ -255,6 +256,22 @@ async fn cancel_job(headers: HeaderMap, Path(id): Path<String>) -> Response {
     job_response(StatusCode::OK, "cancelled", false)
 }
 
+async fn job_partial(headers: HeaderMap, Path(id): Path<String>) -> Response {
+    if let Some(response) = authenticate(&headers) {
+        return response;
+    }
+    if id != "019f0000-0000-7000-8000-000000000001" {
+        return error(StatusCode::NOT_FOUND, "partial preview is not available");
+    }
+    let Ok(bytes) = STANDARD.decode(ONE_PIXEL_PNG) else {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "partial fixture is invalid",
+        );
+    };
+    response_with_headers(StatusCode::OK, Body::from(bytes), "image/png")
+}
+
 async fn update_job(
     headers: HeaderMap,
     Path(id): Path<String>,
@@ -326,6 +343,7 @@ fn job_value(status: &str, include_detail: bool) -> Option<Value> {
             "bytes":70,
             "sha256":"0000000000000000000000000000000000000000000000000000000000000000"
         });
+        result["warnings"] = json!(["fixture_warning"]);
         value["result"] = result;
     }
     Some(value)

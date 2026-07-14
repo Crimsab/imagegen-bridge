@@ -2,10 +2,13 @@
 
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use bytes::Bytes;
+use imagegen_bridge_artifacts::{ImageLimits, inspect_image};
 use imagegen_bridge_config::JobSettings;
 use imagegen_bridge_core::{
-    BridgeError, ErrorCode, ImageJob, ImageJobStatus, ImageJobSummary, ImageRequest, ProviderEvent,
-    ResponseFormat,
+    BridgeError, ErrorCode, ImageJob, ImageJobStatus, ImageJobSummary, ImageRequest, OutputFormat,
+    ProviderEvent, ResponseFormat,
 };
 use imagegen_bridge_runtime::{
     ExecutionContext, ImageJobListFilter, ImagegenRuntime, SqliteImageJobStore,
@@ -15,6 +18,20 @@ use tokio::sync::{Mutex, Notify, Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+const MAX_PARTIAL_PREVIEW_BYTES: usize = 16 * 1024 * 1024;
+const MAX_PARTIAL_PREVIEW_BYTES_U64: u64 = 16 * 1024 * 1024;
+const MAX_PARTIAL_PREVIEW_BASE64_CHARS: usize =
+    (MAX_PARTIAL_PREVIEW_BYTES.saturating_add(2) / 3).saturating_mul(4);
+
+/// Latest verified transient preview for one running durable job.
+#[derive(Debug, Clone)]
+pub(crate) struct PartialPreview {
+    pub(crate) bytes: Bytes,
+    pub(crate) content_type: &'static str,
+    pub(crate) output_index: u8,
+    pub(crate) partial_index: u8,
+}
+
 /// Owns the bounded durable queue and its active cancellation handles.
 pub struct JobManager {
     runtime: Arc<ImagegenRuntime>,
@@ -23,6 +40,7 @@ pub struct JobManager {
     permits: Arc<Semaphore>,
     shutdown: CancellationToken,
     active: Mutex<BTreeMap<String, CancellationToken>>,
+    partials: Mutex<BTreeMap<String, PartialPreview>>,
     active_changed: Notify,
 }
 
@@ -76,6 +94,7 @@ impl JobManager {
             settings,
             shutdown: CancellationToken::new(),
             active: Mutex::new(BTreeMap::new()),
+            partials: Mutex::new(BTreeMap::new()),
             active_changed: Notify::new(),
         });
         let mut queued = manager
@@ -119,6 +138,11 @@ impl JobManager {
     /// Returns a complete durable job.
     pub async fn get(&self, id: &str) -> Result<ImageJob, BridgeError> {
         self.store.get(id).await
+    }
+
+    /// Returns the latest verified preview retained only while a job is active.
+    pub(crate) async fn partial_preview(&self, id: &str) -> Option<PartialPreview> {
+        self.partials.lock().await.get(id).cloned()
     }
 
     /// Returns newest-first durable job summaries.
@@ -204,6 +228,7 @@ impl JobManager {
         self.active_changed.notify_waiters();
         let result = self.execute_claimed(&id, cancellation.clone()).await;
         self.active.lock().await.remove(&id);
+        self.partials.lock().await.remove(&id);
         self.active_changed.notify_waiters();
         drop(permit);
 
@@ -244,23 +269,41 @@ impl JobManager {
         let mut partial_images = 0_u32;
         loop {
             tokio::select! {
-                result = &mut execution => return result,
+                biased;
                 event = receiver.recv() => match event {
-                    Some(ProviderEvent::Started) => {
-                        self.progress(id, "provider", partial_images).await;
-                    }
-                    Some(ProviderEvent::Progress { .. }) => {
-                        self.progress(id, "provider_progress", partial_images).await;
-                    }
-                    Some(ProviderEvent::PartialImage { .. }) => {
-                        partial_images = partial_images.saturating_add(1);
-                        self.progress(id, "partial_image", partial_images).await;
-                    }
-                    Some(ProviderEvent::Completed { .. }) => {
-                        self.progress(id, "materializing", partial_images).await;
-                    }
+                    Some(event) => self.handle_job_event(id, event, &mut partial_images).await,
                     None => return execution.await,
+                },
+                result = &mut execution => {
+                    while let Ok(event) = receiver.try_recv() {
+                        self.handle_job_event(id, event, &mut partial_images).await;
+                    }
+                    return result;
+                },
+            }
+        }
+    }
+
+    async fn handle_job_event(&self, id: &str, event: ProviderEvent, partial_images: &mut u32) {
+        match event {
+            ProviderEvent::Started => self.progress(id, "provider", *partial_images).await,
+            ProviderEvent::Progress { .. } => {
+                self.progress(id, "provider_progress", *partial_images)
+                    .await;
+            }
+            ProviderEvent::PartialImage {
+                index,
+                partial_index,
+                b64_json,
+            } => {
+                *partial_images = partial_images.saturating_add(1);
+                if let Err(error) = self.cache_partial(id, index, partial_index, b64_json).await {
+                    tracing::warn!(job_id = %id, error_code = ?error.code, "ignored invalid partial preview");
                 }
+                self.progress(id, "partial_image", *partial_images).await;
+            }
+            ProviderEvent::Completed { .. } => {
+                self.progress(id, "materializing", *partial_images).await;
             }
         }
     }
@@ -273,6 +316,53 @@ impl JobManager {
         {
             tracing::warn!(job_id = %id, error_code = ?error.code, "could not persist job progress");
         }
+    }
+
+    async fn cache_partial(
+        &self,
+        id: &str,
+        output_index: u8,
+        partial_index: u8,
+        b64_json: String,
+    ) -> Result<(), BridgeError> {
+        if b64_json.len() > MAX_PARTIAL_PREVIEW_BASE64_CHARS {
+            return Err(BridgeError::new(
+                ErrorCode::Input,
+                "partial preview exceeds the in-memory preview limit",
+            ));
+        }
+        let preview = tokio::task::spawn_blocking(move || {
+            let bytes = STANDARD.decode(b64_json).map_err(|_| {
+                BridgeError::new(ErrorCode::Input, "partial preview is not valid base64")
+            })?;
+            let metadata = inspect_image(
+                &bytes,
+                ImageLimits {
+                    max_encoded_bytes: MAX_PARTIAL_PREVIEW_BYTES_U64,
+                    ..ImageLimits::default()
+                },
+            )?;
+            let content_type = match metadata.format {
+                OutputFormat::Png => "image/png",
+                OutputFormat::Jpeg => "image/jpeg",
+                OutputFormat::Webp => "image/webp",
+            };
+            Ok::<_, BridgeError>(PartialPreview {
+                bytes: Bytes::from(bytes),
+                content_type,
+                output_index,
+                partial_index,
+            })
+        })
+        .await
+        .map_err(|_| {
+            BridgeError::new(
+                ErrorCode::Internal,
+                "partial preview validation task failed",
+            )
+        })??;
+        self.partials.lock().await.insert(id.to_owned(), preview);
+        Ok(())
     }
 }
 

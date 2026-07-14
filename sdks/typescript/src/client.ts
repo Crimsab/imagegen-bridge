@@ -32,6 +32,9 @@ interface OpenRequest {
   cleanup: () => void;
 }
 
+const MAX_PARTIAL_PREVIEW_BYTES = 16 * 1024 * 1024;
+const IMAGE_CONTENT_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+
 export class ImagesResource {
   readonly #client: ImagegenBridgeClient;
 
@@ -73,6 +76,10 @@ export class JobsResource {
 
   cancel(id: string, options: RequestOptions = {}): Promise<ImageJob> {
     return this.#client.cancelJob(id, options);
+  }
+
+  partial(id: string, options: RequestOptions = {}): Promise<Uint8Array> {
+    return this.#client.jobPartial(id, options);
   }
 
   update(id: string, update: ImageJobUpdate, options: RequestOptions = {}): Promise<ImageJob> {
@@ -182,6 +189,33 @@ export class ImagegenBridgeClient {
 
   async cancelJob(id: string, options: RequestOptions): Promise<ImageJob> {
     return imageJob(await this.#json("DELETE", `v1/jobs/${encodeURIComponent(id)}`, { options }));
+  }
+
+  async jobPartial(id: string, options: RequestOptions): Promise<Uint8Array> {
+    const opened = await this.#open("GET", `v1/jobs/${encodeURIComponent(id)}/partial`, {
+      options,
+      accept: "image/png, image/jpeg, image/webp",
+    });
+    try {
+      await throwForStatus(opened.response);
+      const contentType = (opened.response.headers.get("content-type") ?? "")
+        .split(";", 1)[0]
+        ?.trim()
+        .toLowerCase();
+      if (!contentType || !IMAGE_CONTENT_TYPES.has(contentType))
+        throw new BridgeProtocolError("bridge returned an invalid partial image preview");
+      const bytes = new Uint8Array(await opened.response.arrayBuffer());
+      if (bytes.byteLength === 0)
+        throw new BridgeProtocolError("bridge returned an empty partial image preview");
+      if (bytes.byteLength > MAX_PARTIAL_PREVIEW_BYTES)
+        throw new BridgeProtocolError("bridge partial image preview exceeds the SDK limit");
+      return bytes;
+    } catch (error) {
+      if (error instanceof BridgeAPIError || error instanceof BridgeProtocolError) throw error;
+      throw new BridgeTransportError("bridge request failed", { cause: error });
+    } finally {
+      opened.cleanup();
+    }
   }
 
   async updateJob(id: string, update: ImageJobUpdate, options: RequestOptions): Promise<ImageJob> {

@@ -89,6 +89,9 @@ describe("ImagegenBridgeClient", () => {
     const completed = await client.jobs.get(queued.id);
     expect(completed.status).toBe("succeeded");
     expect(completed.result?.data[0]?.type).toBe("artifact");
+    expect(Array.from((await client.jobs.partial(queued.id)).slice(0, 8))).toEqual([
+      137, 80, 78, 71, 13, 10, 26, 10,
+    ]);
     const jobs = await client.jobs.list({
       status: "succeeded",
       visibility: "active",

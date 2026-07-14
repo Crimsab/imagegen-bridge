@@ -21,6 +21,7 @@ const result = await bridge.images.generate({
   },
 });
 const queued = await bridge.jobs.create({ operation: "generate", prompt: "a second paper fox" });
+const partial = await bridge.jobs.partial(queued.id); // Uint8Array; transient while running
 const completed = await bridge.jobs.get(queued.id);
 const page = await bridge.jobs.list({
   status: "succeeded",
@@ -34,8 +35,10 @@ console.log(diagnostics.configuration.listener_scope, diagnostics.providers);
 
 Changing `routing.provider` is the only SDK change needed to select another
 configured provider.
-`bridge.jobs` exposes typed `create`, `get`, `list`, `cancel`, and `update` operations for
-durable artifact-backed work.
+`bridge.jobs` exposes typed `create`, `get`, `list`, `partial`, `cancel`, and
+`update` operations for durable artifact-backed work. `partial` returns the
+latest verified in-memory preview and normally returns 404 before the first
+partial event or after the job becomes terminal.
 List filters include stable cursor pagination, status, active/hidden/all
 visibility, favorite state, and literal prompt search.
 `diagnostics()` exposes the typed, redaction-safe operator snapshot used by the

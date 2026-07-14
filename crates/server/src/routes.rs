@@ -197,6 +197,7 @@ pub fn router(state: ServerState, settings: &ServerSettings) -> Router {
     if state.jobs.is_some() {
         protected = protected
             .route("/v1/jobs", post(create_job).get(list_jobs))
+            .route("/v1/jobs/{id}/partial", get(get_job_partial))
             .route(
                 "/v1/jobs/{id}",
                 get(get_job).delete(cancel_job).patch(update_job),
@@ -708,6 +709,47 @@ async fn get_job(
         .map_err(|error| job_api_error(error, request_id))
 }
 
+async fn get_job_partial(
+    State(state): State<ServerState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    let manager = state.jobs.as_ref().ok_or_else(|| {
+        ApiError::from_bridge(
+            BridgeError::new(ErrorCode::Configuration, "durable jobs are disabled"),
+            request_id.clone(),
+        )
+    })?;
+    let preview = manager.partial_preview(&id).await.ok_or_else(|| {
+        ApiError::bad_request("partial preview is not available", request_id)
+            .with_status(StatusCode::NOT_FOUND)
+    })?;
+    let mut response = Response::new(axum::body::Body::from(preview.bytes));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(preview.content_type),
+    );
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    response.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    response.headers_mut().insert(
+        "x-image-output-index",
+        HeaderValue::from_str(&preview.output_index.to_string())
+            .unwrap_or(HeaderValue::from_static("0")),
+    );
+    response.headers_mut().insert(
+        "x-image-partial-index",
+        HeaderValue::from_str(&preview.partial_index.to_string())
+            .unwrap_or(HeaderValue::from_static("0")),
+    );
+    Ok(response)
+}
+
 async fn cancel_job(
     State(state): State<ServerState>,
     Extension(request_id): Extension<RequestId>,
@@ -1077,6 +1119,7 @@ mod tests {
 
     use async_trait::async_trait;
     use axum::{body::Body, http::Request};
+    use base64::engine::general_purpose::STANDARD;
     use http_body_util::BodyExt as _;
     use imagegen_bridge_core::{
         Background, GeneratedImage, ImageAction, ImagePayload, ImageProvider, ImageResponse,
@@ -1176,10 +1219,17 @@ mod tests {
                     .send(ProviderEvent::PartialImage {
                         index: 0,
                         partial_index: 0,
-                        b64_json: "partial-fixture".to_owned(),
+                        b64_json: if request.prompt == "invalid partial preview" {
+                            "not-base64".to_owned()
+                        } else {
+                            ONE_PIXEL_PNG.to_owned()
+                        },
                     })
                     .await
                     .unwrap();
+                if request.prompt == "partial preview test" {
+                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                }
             }
             Ok(ImageResponse {
                 id: context.request_id,
@@ -1537,6 +1587,126 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn durable_jobs_expose_only_verified_transient_partial_previews() {
+        let directory = tempfile::tempdir().unwrap();
+        let (app, jobs) = test_job_router(directory.path()).await;
+        let mut request = ImageRequest::generate("partial preview test");
+        request.parameters.partial_images = 1;
+        let created = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/jobs")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&request).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::ACCEPTED);
+        let body = created.into_body().collect().await.unwrap().to_bytes();
+        let created: ImageJob = serde_json::from_slice(&body).unwrap();
+        let id = created.summary.id;
+
+        let preview = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        Request::get(format!("/v1/jobs/{id}/partial"))
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                if response.status() == StatusCode::OK {
+                    break response;
+                }
+                assert_eq!(response.status(), StatusCode::NOT_FOUND);
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(preview.headers()[header::CONTENT_TYPE], "image/png");
+        assert_eq!(
+            preview.headers()[header::CACHE_CONTROL],
+            "private, no-store"
+        );
+        assert_eq!(preview.headers()[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+        assert_eq!(preview.headers()["x-image-output-index"], "0");
+        assert_eq!(preview.headers()["x-image-partial-index"], "0");
+        let bytes = preview.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(STANDARD.encode(bytes), ONE_PIXEL_PNG);
+
+        tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+        let expired = app
+            .oneshot(
+                Request::get(format!("/v1/jobs/{id}/partial"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(expired.status(), StatusCode::NOT_FOUND);
+        jobs.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn invalid_partial_preview_does_not_discard_a_verified_final_result() {
+        let directory = tempfile::tempdir().unwrap();
+        let (app, jobs) = test_job_router(directory.path()).await;
+        let mut request = ImageRequest::generate("invalid partial preview");
+        request.parameters.partial_images = 1;
+        let created = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/jobs")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&request).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = created.into_body().collect().await.unwrap().to_bytes();
+        let created: ImageJob = serde_json::from_slice(&body).unwrap();
+        let id = created.summary.id;
+        let completed = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        Request::get(format!("/v1/jobs/{id}"))
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                let body = response.into_body().collect().await.unwrap().to_bytes();
+                let job: ImageJob = serde_json::from_slice(&body).unwrap();
+                if job.summary.status.terminal() {
+                    break job;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(completed.summary.status, ImageJobStatus::Succeeded);
+        assert!(completed.result.is_some());
+        assert_eq!(completed.summary.progress.unwrap().partial_images, 1);
+        let preview = app
+            .oneshot(
+                Request::get(format!("/v1/jobs/{id}/partial"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(preview.status(), StatusCode::NOT_FOUND);
+        jobs.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn embedded_dashboard_is_available_only_with_durable_jobs() {
         let directory = tempfile::tempdir().unwrap();
         let (app, jobs) = test_job_router(directory.path()).await;
@@ -1652,7 +1822,7 @@ mod tests {
         let body = String::from_utf8(body.to_vec()).unwrap();
         assert!(body.contains("event: started"));
         assert!(body.contains("event: partial_image"));
-        assert!(body.contains("\"b64_json\":\"partial-fixture\""));
+        assert!(body.contains(&format!("\"b64_json\":\"{ONE_PIXEL_PNG}\"")));
         assert!(body.contains("event: completed"));
         assert!(body.contains("\"provider\":\"ready\""));
     }

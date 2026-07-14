@@ -200,7 +200,8 @@ Then open `http://127.0.0.1:8787/dashboard`. The dashboard is served by the
 same Rust process and needs no Node runtime, static-file server, CDN, or build
 step. It supports generation and edit uploads, provider/model selection,
 capability-aware controls, durable queue progress, cancellation confirmations,
-server-side prompt search, favorites, hide/restore, verified thumbnails,
+verified transient partial previews, server-side prompt search, favorites,
+hide/restore, verified thumbnails,
 full-image viewing and download, portable output-folder copy, timings, revised
 prompts, raw retained metadata, model-specific capability exploration, and a
 bounded redacted operator event history. The copied folder is relative to the
@@ -262,6 +263,7 @@ Important routes:
 | `PATCH /v1/jobs/{id}` | Favorite, soft-delete, or restore a history item |
 | `GET /v1/artifacts/{id}` | Authenticated ownership-verified image bytes |
 | `GET /v1/artifacts/{id}/thumbnail` | Bounded PNG thumbnail for galleries |
+| `GET /v1/jobs/{id}/partial` | Latest verified transient preview for a running job |
 | `GET /v1/providers` | Provider inventory |
 | `GET /v1/providers/{provider}/capabilities` | Model-aware capabilities |
 | `GET /v1/diagnostics` | Authenticated redaction-safe operator state |

@@ -88,9 +88,12 @@ When durable jobs are enabled, `GET /dashboard` serves a static HTML, CSS, and
 native JavaScript application embedded in the server binary. It adds no runtime
 process, package manager, CDN request, or writable static directory. The UI can
 submit generation and edit requests, attach local edit/reference images as data
-URLs, discover provider capabilities, poll durable jobs, and manage favorite,
-hidden, restored, and cancelled states. Artifact previews are fetched as blobs
-through authenticated requests, so bearer tokens never appear in image URLs.
+URLs, discover provider capabilities, poll durable jobs, show the latest
+verified partial preview, and manage favorite, hidden, restored, and cancelled
+states. Partial previews are bounded to one latest 16 MiB image per active job,
+fully decoded before exposure, retained only in memory, and removed when the job
+becomes terminal. Artifact and partial previews are fetched as blobs through
+authenticated requests, so bearer tokens never appear in image URLs.
 Result details can copy the portable output directory from an artifact name.
 This deliberately copies `.` or a relative directory: the API does not expose
 the server's configured artifact root or offer a remote file-manager action.

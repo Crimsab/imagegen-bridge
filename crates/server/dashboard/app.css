@@ -921,6 +921,14 @@
 		object-fit: contain;
 	}
 
+	.partial-preview {
+		border-color: color-mix(in oklab, var(--warning) 45%, var(--line));
+	}
+
+	.partial-preview img {
+		filter: saturate(0.92);
+	}
+
 	.detail-image figcaption {
 		align-items: center;
 		color: var(--text-muted);
@@ -990,6 +998,64 @@
 		color: var(--danger);
 		font-size: 0.85rem;
 		padding: 0.8rem;
+	}
+
+	.detail-messages {
+		background: var(--surface-muted);
+		border: 1px solid var(--line);
+		border-radius: var(--radius-small);
+		display: grid;
+		font-size: 0.82rem;
+		gap: 0.45rem;
+		padding: 0.75rem 0.75rem 0.75rem 1.8rem;
+	}
+
+	.detail-messages.warning {
+		background: var(--warning-soft);
+		border-color: color-mix(in oklab, var(--warning) 35%, var(--line));
+		color: var(--warning);
+	}
+
+	.detail-messages.error {
+		background: var(--danger-soft);
+		border-color: color-mix(in oklab, var(--danger) 35%, var(--line));
+		color: var(--danger);
+	}
+
+	.parameter-table {
+		border-collapse: collapse;
+		font-size: 0.76rem;
+		inline-size: 100%;
+		min-inline-size: 30rem;
+	}
+
+	.parameter-table th,
+	.parameter-table td {
+		border-block-end: 1px solid var(--line);
+		padding: 0.5rem 0.6rem;
+		text-align: start;
+		vertical-align: top;
+	}
+
+	.parameter-table thead th {
+		background: var(--surface-muted);
+		color: var(--text-muted);
+		font-size: 0.65rem;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+	}
+
+	.parameter-table tbody th {
+		font-weight: 650;
+	}
+
+	.parameter-table td {
+		font-family: var(--font-mono);
+		overflow-wrap: anywhere;
+	}
+
+	.parameter-table tr.changed {
+		background: var(--warning-soft);
 	}
 
 	.raw-details {
