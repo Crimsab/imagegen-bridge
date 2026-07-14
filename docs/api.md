@@ -22,6 +22,11 @@ network clients. Version 1 evolves additively; breaking wire changes use `/v2`.
 | `GET` | `/v1/jobs/{id}` | Complete durable job detail | `200` |
 | `DELETE` | `/v1/jobs/{id}` | Request cancellation | `200` |
 | `PATCH` | `/v1/jobs/{id}` | Favorite, soft-delete, or restore history | `200` |
+| `GET` | `/v1/presets` | Cursor-paginated preset collection | `200` |
+| `POST` | `/v1/presets` | Create a named preset | `201` |
+| `GET` | `/v1/presets/{name}` | Read a preset | `200` |
+| `PUT` | `/v1/presets/{name}` | Fully replace a preset | `200` |
+| `DELETE` | `/v1/presets/{name}` | Delete a preset | `204` |
 | `GET` | `/v1/artifacts/{id}` | Ownership-verified image delivery | `200` |
 | `GET` | `/v1/artifacts/{id}/thumbnail` | Bounded PNG thumbnail | `200` |
 | `GET` | `/v1/openapi.json` | Checked OpenAPI 3.1 contract | `200` |
@@ -108,6 +113,25 @@ image decode, and return only verified PNG/JPEG/WebP bytes. Thumbnail requests
 run off the async reactor, accept a `32..=2048` maximum edge, preserve aspect
 ratio, and always return a verified PNG with private immutable caching.
 
+## Presets
+
+Presets are named, durable `ImagePresetTemplate` values stored in the same
+configured SQLite database as jobs. A template covers prompt defaults,
+generation parameters, routing/fallbacks, session behavior, output settings,
+request policies, timeout, and user metadata. It intentionally cannot contain
+source images, masks, reference images, an idempotency key, or provider result
+data. Applying a preset remains a client operation: the caller reads the
+template, supplies any required image inputs, and posts the resulting native
+request.
+
+Names are 1–64 portable ASCII characters, begin with a letter or number, and
+may subsequently contain letters, numbers, `.`, `_`, or `-`. Descriptions are
+optional and bounded. Creation returns `409` for an existing name; read,
+replace, and delete return `404` for a missing preset. Listing uses the same
+opaque cursor style and `1..=100` limit as other collections. Presets share the
+bridge bearer boundary and are intentionally global within one bridge
+instance, so its CLI, dashboard, and SDK clients see the same set.
+
 ## Embedded dashboard
 
 When durable jobs are enabled, `GET /dashboard` serves a static HTML, CSS, and
@@ -120,9 +144,10 @@ states. Partial previews are bounded to one latest 16 MiB image per active job,
 fully decoded before exposure, retained only in memory, and removed when the job
 becomes terminal. Artifact and partial previews are fetched as blobs through
 authenticated requests, so bearer tokens never appear in image URLs.
-Result details can copy the portable output directory from an artifact name.
-This deliberately copies `.` or a relative directory: the API does not expose
-the server's configured artifact root or offer a remote file-manager action.
+Result details can copy the portable artifact name, including its relative
+directory when one exists. This avoids copying an unhelpful `.` for root-level
+artifacts; the API still does not expose the server's configured artifact root
+or offer a remote file-manager action.
 
 The dashboard shell is intentionally public because browser navigation cannot
 attach an Authorization header. It contains no prompt, history, provider result,

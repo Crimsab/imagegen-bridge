@@ -1,5 +1,7 @@
 //! Bounded HTTP transport over the shared Imagegen Bridge runtime.
 
+#![recursion_limit = "256"]
+
 mod auth;
 mod compat;
 mod dashboard;

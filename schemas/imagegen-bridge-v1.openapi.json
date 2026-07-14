@@ -1384,6 +1384,213 @@
         },
         "type": "object"
       },
+      "ImagePreset": {
+        "additionalProperties": false,
+        "description": "Persisted named preset.",
+        "properties": {
+          "created": {
+            "description": "Unix creation timestamp in seconds.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "description": {
+            "description": "Optional human explanation.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "Stable preset name.",
+            "type": "string"
+          },
+          "template": {
+            "$ref": "#/components/schemas/ImagePresetTemplate",
+            "description": "Complete reusable configuration."
+          },
+          "updated": {
+            "description": "Unix last-update timestamp in seconds.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "template",
+          "created",
+          "updated"
+        ],
+        "type": "object"
+      },
+      "ImagePresetCreate": {
+        "additionalProperties": false,
+        "description": "Create payload for a named preset.",
+        "properties": {
+          "description": {
+            "description": "Optional human explanation.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "Stable URL- and CLI-safe preset name.",
+            "type": "string"
+          },
+          "template": {
+            "$ref": "#/components/schemas/ImagePresetTemplate",
+            "description": "Complete reusable configuration."
+          }
+        },
+        "required": [
+          "name",
+          "template"
+        ],
+        "type": "object"
+      },
+      "ImagePresetPage": {
+        "additionalProperties": false,
+        "description": "Cursor-paginated preset collection.",
+        "properties": {
+          "items": {
+            "description": "Presets in stable name order.",
+            "items": {
+              "$ref": "#/components/schemas/ImagePreset"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Opaque cursor for the next page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "ImagePresetTemplate": {
+        "additionalProperties": false,
+        "description": "Complete reusable request configuration, excluding image inputs and idempotency keys.",
+        "properties": {
+          "negative_prompt": {
+            "description": "Optional reusable negative prompt.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operation": {
+            "$ref": "#/components/schemas/PresetOperation",
+            "default": "generate",
+            "description": "Generate or edit operation; image inputs are always supplied at execution time."
+          },
+          "output": {
+            "$ref": "#/components/schemas/OutputOptions",
+            "default": {
+              "collision": "error",
+              "metadata": "none",
+              "response_format": "b64_json",
+              "transparency": {
+                "despill": true,
+                "mode": "auto",
+                "opaque_threshold": 96,
+                "transparent_threshold": 12
+              }
+            },
+            "description": "Artifact and response configuration."
+          },
+          "parameters": {
+            "$ref": "#/components/schemas/GenerationParameters",
+            "default": {
+              "action": "auto",
+              "background": "auto",
+              "failure_policy": "fail_fast",
+              "moderation": "auto",
+              "n": 1,
+              "output_format": "png",
+              "partial_images": 0,
+              "quality": "auto",
+              "size": "auto"
+            },
+            "description": "Image generation parameters."
+          },
+          "policies": {
+            "$ref": "#/components/schemas/RequestPolicies",
+            "default": {
+              "batch_execution": "auto",
+              "compatibility": "strict",
+              "negative_prompt": "auto",
+              "revised_prompt": "include"
+            },
+            "description": "Compatibility and prompt policies."
+          },
+          "prompt": {
+            "description": "Optional reusable prompt. A caller may replace it when applying the preset.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "routing": {
+            "$ref": "#/components/schemas/RoutingOptions",
+            "default": {
+              "fallback_policy": "on_unavailable"
+            },
+            "description": "Provider and fallback routing."
+          },
+          "session": {
+            "$ref": "#/components/schemas/SessionOptions",
+            "default": {
+              "mode": "isolated"
+            },
+            "description": "Conversation behavior."
+          },
+          "timeout_ms": {
+            "description": "Optional request deadline in milliseconds.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "user": {
+            "description": "Optional opaque end-user identifier.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ImagePresetWrite": {
+        "additionalProperties": false,
+        "description": "Full replacement payload for a preset.",
+        "properties": {
+          "description": {
+            "description": "Optional human explanation.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "template": {
+            "$ref": "#/components/schemas/ImagePresetTemplate",
+            "description": "Complete reusable configuration."
+          }
+        },
+        "required": [
+          "template"
+        ],
+        "type": "object"
+      },
       "ImageRequest": {
         "description": "A complete provider-neutral image request.",
         "oneOf": [
@@ -2115,6 +2322,21 @@
           }
         },
         "type": "object"
+      },
+      "PresetOperation": {
+        "description": "Operation selected by a preset without retaining source image bytes.",
+        "oneOf": [
+          {
+            "const": "generate",
+            "description": "Generate a new image.",
+            "type": "string"
+          },
+          {
+            "const": "edit",
+            "description": "Edit caller-supplied images.",
+            "type": "string"
+          }
+        ]
       },
       "ProviderAttempt": {
         "additionalProperties": false,
@@ -4594,6 +4816,285 @@
         ]
       }
     },
+    "/v1/presets": {
+      "get": {
+        "operationId": "listImagePresets",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "items": []
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ImagePresetPage"
+                }
+              }
+            },
+            "description": "Preset page"
+          },
+          "400": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Invalid preset cursor"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Bridge authentication required"
+          }
+        },
+        "security": [
+          {
+            "bridgeBearer": []
+          }
+        ],
+        "tags": [
+          "presets"
+        ]
+      },
+      "post": {
+        "operationId": "createImagePreset",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "description": "Editorial portraits",
+                "name": "portrait-high",
+                "template": {
+                  "operation": "generate",
+                  "parameters": {
+                    "quality": "high"
+                  }
+                }
+              },
+              "schema": {
+                "$ref": "#/components/schemas/ImagePresetCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "created": 1784000000,
+                  "name": "portrait-high",
+                  "template": {
+                    "operation": "generate"
+                  },
+                  "updated": 1784000000
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ImagePreset"
+                }
+              }
+            },
+            "description": "Preset created"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Bridge authentication required"
+          },
+          "409": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Preset name already exists"
+          },
+          "422": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Preset validation failed"
+          }
+        },
+        "security": [
+          {
+            "bridgeBearer": []
+          }
+        ],
+        "tags": [
+          "presets"
+        ]
+      }
+    },
+    "/v1/presets/{name}": {
+      "delete": {
+        "operationId": "deleteImagePreset",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "example": "portrait-high",
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Preset deleted"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Bridge authentication required"
+          },
+          "404": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Preset not found"
+          }
+        },
+        "security": [
+          {
+            "bridgeBearer": []
+          }
+        ],
+        "tags": [
+          "presets"
+        ]
+      },
+      "get": {
+        "operationId": "getImagePreset",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "example": "portrait-high",
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "created": 1784000000,
+                  "name": "portrait-high",
+                  "template": {
+                    "operation": "generate"
+                  },
+                  "updated": 1784000000
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ImagePreset"
+                }
+              }
+            },
+            "description": "Preset"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Bridge authentication required"
+          },
+          "404": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Preset not found"
+          }
+        },
+        "security": [
+          {
+            "bridgeBearer": []
+          }
+        ],
+        "tags": [
+          "presets"
+        ]
+      },
+      "put": {
+        "operationId": "replaceImagePreset",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "example": "portrait-high",
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImagePresetWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "created": 1784000000,
+                  "name": "portrait-high",
+                  "template": {
+                    "operation": "generate"
+                  },
+                  "updated": 1784000010
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ImagePreset"
+                }
+              }
+            },
+            "description": "Preset replaced"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Bridge authentication required"
+          },
+          "404": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Preset not found"
+          },
+          "422": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Preset validation failed"
+          }
+        },
+        "security": [
+          {
+            "bridgeBearer": []
+          }
+        ],
+        "tags": [
+          "presets"
+        ]
+      }
+    },
     "/v1/providers": {
       "get": {
         "operationId": "listProviders",
@@ -4837,6 +5338,10 @@
     {
       "description": "Durable asynchronous image operations and history",
       "name": "jobs"
+    },
+    {
+      "description": "Durable reusable request configuration",
+      "name": "presets"
     },
     {
       "description": "Authenticated verified image delivery",

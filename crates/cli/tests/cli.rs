@@ -456,6 +456,103 @@ fn request_file_is_lossless_and_exclusive() {
 }
 
 #[test]
+fn preset_cli_supports_crud_and_generate_overrides() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let database = directory.path().join("jobs.sqlite3");
+    let template = directory.path().join("preset.json");
+    std::fs::write(
+        &template,
+        r#"{"prompt":"Stored preset prompt","operation":"generate","parameters":{"n":3,"quality":"low"},"output":{"response_format":"artifact","directory":"preset-output"}}"#,
+    )
+    .expect("write preset template");
+    let database_override = format!("server.jobs.database={database:?}");
+
+    cargo_bin_cmd!("imagegen-bridge")
+        .args([
+            "--set",
+            &database_override,
+            "--json",
+            "preset",
+            "create",
+            "portrait-low",
+            "--from",
+            template.to_str().expect("UTF-8 path"),
+            "--description",
+            "Reusable portrait settings",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"name\":\"portrait-low\""));
+
+    cargo_bin_cmd!("imagegen-bridge")
+        .args([
+            "--set",
+            &database_override,
+            "--json",
+            "generate",
+            "--preset",
+            "portrait-low",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"prompt\":\"Stored preset prompt\"",
+        ));
+
+    cargo_bin_cmd!("imagegen-bridge")
+        .args([
+            "--set",
+            &database_override,
+            "--json",
+            "generate",
+            "A red-haired subject",
+            "--preset",
+            "portrait-low",
+            "--quality",
+            "high",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"n\":3"))
+        .stdout(predicate::str::contains("\"quality\":\"high\""))
+        .stdout(predicate::str::contains("\"directory\":\"preset-output\""));
+
+    cargo_bin_cmd!("imagegen-bridge")
+        .args(["--set", &database_override, "--json", "preset", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("portrait-low"));
+    cargo_bin_cmd!("imagegen-bridge")
+        .args([
+            "--set",
+            &database_override,
+            "preset",
+            "delete",
+            "portrait-low",
+            "--dry-run",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"dry_run\":true"));
+    cargo_bin_cmd!("imagegen-bridge")
+        .args([
+            "--set",
+            &database_override,
+            "preset",
+            "delete",
+            "portrait-low",
+            "--force",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"deleted\":true"));
+}
+
+#[test]
 fn stdin_is_bounded_by_effective_prompt_limit() {
     cargo_bin_cmd!("imagegen-bridge")
         .args([

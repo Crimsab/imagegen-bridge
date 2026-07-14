@@ -99,6 +99,8 @@ pub(crate) enum Command {
     Providers(ProvidersArgs),
     /// Inspect or delete persistent session bindings.
     Session(SessionArgs),
+    /// Create, inspect, update, or delete reusable generation presets.
+    Preset(PresetArgs),
     /// Validate or inspect effective configuration.
     Config(ConfigArgs),
     /// Manage bridge-owned artifacts.
@@ -185,7 +187,7 @@ pub(crate) struct DoctorArgs {
 }
 
 #[derive(Debug, Args)]
-#[group(id = "generate_prompt", required = true, multiple = false)]
+#[group(id = "generate_prompt", required = false, multiple = false)]
 pub(crate) struct GenerateArgs {
     /// Complete native request JSON file, or `-` for stdin.
     #[arg(long, value_name = "FILE", group = "generate_prompt")]
@@ -198,6 +200,10 @@ pub(crate) struct GenerateArgs {
     /// Prompt text, or `-` to read it from stdin; retained for scripts.
     #[arg(long, short, value_name = "TEXT", group = "generate_prompt")]
     pub prompt: Option<String>,
+
+    /// Apply reusable configuration before explicit image flags.
+    #[arg(long, value_name = "NAME", conflicts_with = "request")]
+    pub preset: Option<String>,
 
     /// Local image used as a visual reference. Repeatable.
     #[arg(long = "reference", value_name = "FILE")]
@@ -215,7 +221,7 @@ pub(crate) struct GenerateArgs {
 }
 
 #[derive(Debug, Args)]
-#[group(id = "edit_prompt", required = true, multiple = false)]
+#[group(id = "edit_prompt", required = false, multiple = false)]
 pub(crate) struct EditArgs {
     /// Complete native request JSON file, or `-` for stdin.
     #[arg(long, value_name = "FILE", group = "edit_prompt")]
@@ -228,6 +234,10 @@ pub(crate) struct EditArgs {
     /// Prompt text, or `-` to read it from stdin; retained for scripts.
     #[arg(long, short, value_name = "TEXT", group = "edit_prompt")]
     pub prompt: Option<String>,
+
+    /// Apply reusable edit configuration before explicit image flags.
+    #[arg(long, value_name = "NAME", conflicts_with = "request")]
+    pub preset: Option<String>,
 
     /// Source image to edit. Repeatable.
     #[arg(
@@ -506,6 +516,60 @@ pub(crate) enum SessionCommand {
         key: String,
         #[arg(long)]
         provider: Option<String>,
+        /// Report the operation without deleting anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// Confirm this destructive non-interactive operation.
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct PresetArgs {
+    #[command(subcommand)]
+    pub command: PresetCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum PresetCommand {
+    /// List stored presets in stable name order.
+    List {
+        /// Maximum presets to return.
+        #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u8).range(1..=100))]
+        limit: u8,
+    },
+    /// Print one complete preset.
+    Get {
+        /// Stable preset name.
+        name: String,
+    },
+    /// Create a preset from an `ImagePresetTemplate` or native `ImageRequest` JSON file.
+    Create {
+        /// Stable preset name.
+        name: String,
+        /// JSON file, or `-` for stdin.
+        #[arg(long = "from", value_name = "FILE")]
+        source: PathBuf,
+        /// Optional human explanation.
+        #[arg(long)]
+        description: Option<String>,
+    },
+    /// Fully replace an existing preset from JSON.
+    Update {
+        /// Stable preset name.
+        name: String,
+        /// JSON file, or `-` for stdin.
+        #[arg(long = "from", value_name = "FILE")]
+        source: PathBuf,
+        /// Optional replacement explanation; omit to clear it.
+        #[arg(long)]
+        description: Option<String>,
+    },
+    /// Delete a stored preset.
+    Delete {
+        /// Stable preset name.
+        name: String,
         /// Report the operation without deleting anything.
         #[arg(long)]
         dry_run: bool,

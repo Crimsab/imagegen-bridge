@@ -11,10 +11,11 @@ use imagegen_bridge::{
     BridgeApplication,
     config::{ConfigLoader, ConfigOverride, ConfigSource, ResolvedConfig},
     core::{
-        BridgeError, ErrorCode, ImageInput, ImageOperation, ImageRequest, ImageSource, SessionMode,
+        BridgeError, ErrorCode, ImageInput, ImageOperation, ImagePresetCreate, ImagePresetTemplate,
+        ImagePresetWrite, ImageRequest, ImageSource, PresetOperation, SessionMode,
         validate_request,
     },
-    runtime::{ExecutionContext, ProviderReadinessStatus},
+    runtime::{ExecutionContext, ProviderReadinessStatus, SqlitePresetStore},
 };
 use imagegen_bridge_server::{ServerState, bind, router, serve};
 use serde_json::json;
@@ -24,7 +25,8 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     args::{
         ArtifactCommand, BackgroundCommand, Cli, Command, ConfigCommand, EditArgs, GenerateArgs,
-        ImageArgs, PresentationArgs, ProviderCommand, SchemaArgs, SchemaKind, SessionCommand,
+        ImageArgs, PresentationArgs, PresetCommand, ProviderCommand, SchemaArgs, SchemaKind,
+        SessionCommand,
     },
     dashboard, doctor,
     output::Output,
@@ -71,6 +73,7 @@ pub(crate) async fn run(cli: Cli, output: &Output) -> Result<(), BridgeError> {
         Command::Dashboard(args) => dashboard::run(args, resolved, output).await,
         Command::Providers(args) => providers(args.command, resolved, output).await,
         Command::Session(args) => session(args.command, resolved, output).await,
+        Command::Preset(args) => preset(args.command, &resolved, output).await,
         Command::Config(args) => config(args.command, &resolved, output),
         Command::Artifacts(args) => artifacts(args.command, &resolved, output),
         Command::AuthDoctor(args) => auth_doctor(args.provider, resolved, output).await,
@@ -201,20 +204,24 @@ async fn generate(
     let allow_implicit_artifact = args.request.is_none() && args.image.response_format.is_none();
     let mut request = if let Some(path) = args.request.as_deref() {
         ensure_request_only(
-            args.prompt.is_some() || args.prompt_text.is_some() || !args.references.is_empty(),
+            args.prompt.is_some()
+                || args.prompt_text.is_some()
+                || args.preset.is_some()
+                || !args.references.is_empty(),
             &args.image,
         )?;
         read_request(path, resolved.config.server.max_body_bytes).await?
     } else {
-        let prompt = read_prompt(
-            args.prompt
-                .as_deref()
-                .or(args.prompt_text.as_deref())
-                .ok_or_else(|| invalid("prompt is required"))?,
-            resolved.config.runtime.request.max_prompt_bytes,
-        )
-        .await?;
-        let mut request = ImageRequest::generate(prompt);
+        let prompt = if let Some(value) = args.prompt.as_deref().or(args.prompt_text.as_deref()) {
+            Some(read_prompt(value, resolved.config.runtime.request.max_prompt_bytes).await?)
+        } else {
+            None
+        };
+        let mut request = if let Some(name) = args.preset.as_deref() {
+            preset_request(resolved, name, prompt, PresetOperation::Generate).await?
+        } else {
+            ImageRequest::generate(prompt.ok_or_else(|| invalid("prompt is required"))?)
+        };
         request.operation = ImageOperation::Generate {
             reference_images: file_inputs(args.references),
         };
@@ -243,6 +250,7 @@ async fn edit(
         ensure_request_only(
             args.prompt.is_some()
                 || args.prompt_text.is_some()
+                || args.preset.is_some()
                 || !args.images.is_empty()
                 || args.mask.is_some()
                 || !args.references.is_empty(),
@@ -250,15 +258,16 @@ async fn edit(
         )?;
         read_request(path, resolved.config.server.max_body_bytes).await?
     } else {
-        let prompt = read_prompt(
-            args.prompt
-                .as_deref()
-                .or(args.prompt_text.as_deref())
-                .ok_or_else(|| invalid("prompt is required"))?,
-            resolved.config.runtime.request.max_prompt_bytes,
-        )
-        .await?;
-        let mut request = ImageRequest::generate(prompt);
+        let prompt = if let Some(value) = args.prompt.as_deref().or(args.prompt_text.as_deref()) {
+            Some(read_prompt(value, resolved.config.runtime.request.max_prompt_bytes).await?)
+        } else {
+            None
+        };
+        let mut request = if let Some(name) = args.preset.as_deref() {
+            preset_request(resolved, name, prompt, PresetOperation::Edit).await?
+        } else {
+            ImageRequest::generate(prompt.ok_or_else(|| invalid("prompt is required"))?)
+        };
         request.operation = ImageOperation::Edit {
             images: file_inputs(args.images),
             mask: args.mask.map(file_input).map(Box::new),
@@ -276,6 +285,23 @@ async fn edit(
         output,
     ))
     .await
+}
+
+async fn preset_request(
+    resolved: &ResolvedConfig,
+    name: &str,
+    prompt: Option<String>,
+    operation: PresetOperation,
+) -> Result<ImageRequest, BridgeError> {
+    let store = SqlitePresetStore::open(&resolved.config.server.jobs.database).await?;
+    let preset = store.get(name).await?;
+    if preset.template.operation != operation {
+        return Err(invalid(match operation {
+            PresetOperation::Generate => "edit preset cannot be used by generate",
+            PresetOperation::Edit => "generation preset cannot be used by edit",
+        }));
+    }
+    preset.template.request(prompt)
 }
 
 fn ensure_request_only(has_operation_fields: bool, image: &ImageArgs) -> Result<(), BridgeError> {
@@ -343,10 +369,18 @@ fn apply_image_args(
     args: ImageArgs,
     artifact_root: &Path,
 ) -> Result<(), BridgeError> {
-    request.negative_prompt = args.negative_prompt;
-    request.routing.provider = args.provider;
-    request.routing.model = args.model;
-    request.routing.fallbacks = args.fallbacks;
+    if args.negative_prompt.is_some() {
+        request.negative_prompt = args.negative_prompt;
+    }
+    if args.provider.is_some() {
+        request.routing.provider = args.provider;
+    }
+    if args.model.is_some() {
+        request.routing.model = args.model;
+    }
+    if !args.fallbacks.is_empty() {
+        request.routing.fallbacks = args.fallbacks;
+    }
     if let Some(value) = args.fallback_policy {
         request.routing.fallback_policy = value;
     }
@@ -356,22 +390,30 @@ fn apply_image_args(
     if let Some(value) = args.size {
         request.parameters.size = value;
     }
-    request.parameters.aspect_ratio = args.aspect_ratio;
-    request.parameters.resolution = args.resolution;
+    if args.aspect_ratio.is_some() {
+        request.parameters.aspect_ratio = args.aspect_ratio;
+    }
+    if args.resolution.is_some() {
+        request.parameters.resolution = args.resolution;
+    }
     if let Some(value) = args.quality {
         request.parameters.quality = value;
     }
     if let Some(value) = args.format {
         request.parameters.output_format = value;
     }
-    request.parameters.output_compression = args.compression;
+    if args.compression.is_some() {
+        request.parameters.output_compression = args.compression;
+    }
     if let Some(value) = args.background {
         request.parameters.background = value;
     }
     if let Some(value) = args.transparency {
         request.output.transparency.mode = value;
     }
-    request.output.transparency.key_color = args.chroma_key;
+    if args.chroma_key.is_some() {
+        request.output.transparency.key_color = args.chroma_key;
+    }
     if let Some(value) = args.chroma_transparent_threshold {
         request.output.transparency.transparent_threshold = value;
     }
@@ -393,7 +435,9 @@ fn apply_image_args(
     if let Some(value) = args.batch_execution {
         request.policies.batch_execution = value;
     }
-    request.parameters.input_fidelity = args.input_fidelity;
+    if args.input_fidelity.is_some() {
+        request.parameters.input_fidelity = args.input_fidelity;
+    }
     if let Some(value) = args.action {
         request.parameters.action = value;
     }
@@ -401,7 +445,9 @@ fn apply_image_args(
     if let Some(value) = explicit_response_format {
         request.output.response_format = value;
     }
-    request.output.filename_prefix = args.filename_prefix;
+    if args.filename_prefix.is_some() {
+        request.output.filename_prefix = args.filename_prefix;
+    }
     apply_output_location(
         request,
         artifact_root,
@@ -430,20 +476,28 @@ fn apply_image_args(
     if let Some(value) = args.revised_prompt {
         request.policies.revised_prompt = value;
     }
-    request.session.mode = args.session.unwrap_or_else(|| {
-        if args.thread_id.is_some() {
-            SessionMode::Thread
-        } else if args.session_key.is_some() {
-            SessionMode::Persistent
-        } else {
-            SessionMode::Isolated
-        }
-    });
-    request.session.key = args.session_key;
-    request.session.thread_id = args.thread_id;
-    request.idempotency_key = args.idempotency_key;
-    request.timeout_ms = args.timeout_ms;
-    request.user = args.user;
+    if args.session.is_some() || args.session_key.is_some() || args.thread_id.is_some() {
+        request.session.mode = args.session.unwrap_or_else(|| {
+            if args.thread_id.is_some() {
+                SessionMode::Thread
+            } else if args.session_key.is_some() {
+                SessionMode::Persistent
+            } else {
+                SessionMode::Isolated
+            }
+        });
+        request.session.key = args.session_key;
+        request.session.thread_id = args.thread_id;
+    }
+    if args.idempotency_key.is_some() {
+        request.idempotency_key = args.idempotency_key;
+    }
+    if args.timeout_ms.is_some() {
+        request.timeout_ms = args.timeout_ms;
+    }
+    if args.user.is_some() {
+        request.user = args.user;
+    }
     Ok(())
 }
 
@@ -762,6 +816,102 @@ async fn session(
     };
     let shutdown = application.shutdown().await;
     result.and(shutdown)
+}
+
+async fn preset(
+    command: PresetCommand,
+    resolved: &ResolvedConfig,
+    output: &Output,
+) -> Result<(), BridgeError> {
+    resolved.config.validate()?;
+    if let PresetCommand::Delete {
+        name,
+        dry_run: true,
+        ..
+    } = &command
+    {
+        return output.value(&json!({
+            "action": "delete_preset",
+            "dry_run": true,
+            "name": name,
+        }));
+    }
+    if let PresetCommand::Delete { force: false, .. } = &command {
+        return Err(invalid("preset deletion requires --force or --dry-run"));
+    }
+    let store = SqlitePresetStore::open(&resolved.config.server.jobs.database).await?;
+    match command {
+        PresetCommand::List { limit } => output.value(&store.list(None, usize::from(limit)).await?),
+        PresetCommand::Get { name } => output.value(&store.get(&name).await?),
+        PresetCommand::Create {
+            name,
+            source,
+            description,
+        } => {
+            let template =
+                read_preset_template(&source, resolved.config.server.max_body_bytes).await?;
+            output.value(
+                &store
+                    .create(
+                        ImagePresetCreate {
+                            name,
+                            description,
+                            template,
+                        },
+                        current_timestamp(),
+                    )
+                    .await?,
+            )
+        }
+        PresetCommand::Update {
+            name,
+            source,
+            description,
+        } => {
+            let template =
+                read_preset_template(&source, resolved.config.server.max_body_bytes).await?;
+            output.value(
+                &store
+                    .replace(
+                        &name,
+                        ImagePresetWrite {
+                            description,
+                            template,
+                        },
+                        current_timestamp(),
+                    )
+                    .await?,
+            )
+        }
+        PresetCommand::Delete {
+            name,
+            dry_run: false,
+            ..
+        } => {
+            store.delete(&name).await?;
+            output.value(&json!({"deleted": true, "name": name}))
+        }
+        PresetCommand::Delete { dry_run: true, .. } => unreachable!(),
+    }
+}
+
+async fn read_preset_template(
+    path: &Path,
+    maximum: u64,
+) -> Result<ImagePresetTemplate, BridgeError> {
+    let bytes = read_bounded(path, maximum).await?;
+    if let Ok(template) = serde_json::from_slice(&bytes) {
+        return Ok(template);
+    }
+    serde_json::from_slice::<ImageRequest>(&bytes)
+        .map(|request| ImagePresetTemplate::from_request(&request))
+        .map_err(|_| invalid("preset source is not valid ImagePresetTemplate or ImageRequest JSON"))
+}
+
+fn current_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
 }
 
 fn config(

@@ -7,6 +7,7 @@ mod materialize;
 mod orchestrator;
 mod registry;
 mod sqlite_jobs;
+mod sqlite_presets;
 mod sqlite_sessions;
 mod transparency;
 
@@ -16,4 +17,5 @@ pub use materialize::MaterializationConfig;
 pub use orchestrator::*;
 pub use registry::*;
 pub use sqlite_jobs::*;
+pub use sqlite_presets::*;
 pub use sqlite_sessions::*;

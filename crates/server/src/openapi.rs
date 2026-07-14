@@ -27,6 +27,7 @@ pub fn openapi_document() -> Value {
             {"name":"health","description":"Liveness and provider readiness"},
             {"name":"images","description":"Native lossless image operations"},
             {"name":"jobs","description":"Durable asynchronous image operations and history"},
+            {"name":"presets","description":"Durable reusable request configuration"},
             {"name":"artifacts","description":"Authenticated verified image delivery"},
             {"name":"compatibility","description":"OpenAI-familiar Images API"},
             {"name":"providers","description":"Provider discovery and capability negotiation"},
@@ -81,6 +82,71 @@ pub fn openapi_document() -> Value {
                         "200": json_response("Provider capabilities", json!({"$ref":"#/components/schemas/ProviderCapabilities"}), json!({"provider":"codex-app-server","model":"gpt-image-2","generation":true,"edits":true})),
                         "400": error_response("Provider is unavailable or invalid"),
                         "401": error_response("Bridge authentication required")
+                    }
+                }
+            },
+            "/v1/presets": {
+                "get": {
+                    "operationId":"listImagePresets",
+                    "tags":["presets"],
+                    "security":[{"bridgeBearer":[]}],
+                    "parameters":[
+                        {"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"maximum":100,"default":20}},
+                        {"name":"cursor","in":"query","schema":{"type":"string","maxLength":256}}
+                    ],
+                    "responses": {
+                        "200": json_response("Preset page", json!({"$ref":"#/components/schemas/ImagePresetPage"}), json!({"items":[]})),
+                        "400": error_response("Invalid preset cursor"),
+                        "401": error_response("Bridge authentication required")
+                    }
+                },
+                "post": {
+                    "operationId":"createImagePreset",
+                    "tags":["presets"],
+                    "security":[{"bridgeBearer":[]}],
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ImagePresetCreate"},"example":{"name":"portrait-high","description":"Editorial portraits","template":{"operation":"generate","parameters":{"quality":"high"}}}}}},
+                    "responses": {
+                        "201": json_response("Preset created", json!({"$ref":"#/components/schemas/ImagePreset"}), json!({"name":"portrait-high","template":{"operation":"generate"},"created":1_784_000_000,"updated":1_784_000_000})),
+                        "401": error_response("Bridge authentication required"),
+                        "409": error_response("Preset name already exists"),
+                        "422": error_response("Preset validation failed")
+                    }
+                }
+            },
+            "/v1/presets/{name}": {
+                "get": {
+                    "operationId":"getImagePreset",
+                    "tags":["presets"],
+                    "security":[{"bridgeBearer":[]}],
+                    "parameters":[preset_name_parameter()],
+                    "responses": {
+                        "200": json_response("Preset", json!({"$ref":"#/components/schemas/ImagePreset"}), json!({"name":"portrait-high","template":{"operation":"generate"},"created":1_784_000_000,"updated":1_784_000_000})),
+                        "401": error_response("Bridge authentication required"),
+                        "404": error_response("Preset not found")
+                    }
+                },
+                "put": {
+                    "operationId":"replaceImagePreset",
+                    "tags":["presets"],
+                    "security":[{"bridgeBearer":[]}],
+                    "parameters":[preset_name_parameter()],
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ImagePresetWrite"}}}},
+                    "responses": {
+                        "200": json_response("Preset replaced", json!({"$ref":"#/components/schemas/ImagePreset"}), json!({"name":"portrait-high","template":{"operation":"generate"},"created":1_784_000_000,"updated":1_784_000_010})),
+                        "401": error_response("Bridge authentication required"),
+                        "404": error_response("Preset not found"),
+                        "422": error_response("Preset validation failed")
+                    }
+                },
+                "delete": {
+                    "operationId":"deleteImagePreset",
+                    "tags":["presets"],
+                    "security":[{"bridgeBearer":[]}],
+                    "parameters":[preset_name_parameter()],
+                    "responses": {
+                        "204":{"description":"Preset deleted"},
+                        "401": error_response("Bridge authentication required"),
+                        "404": error_response("Preset not found")
                     }
                 }
             },
@@ -299,6 +365,10 @@ pub fn openapi_document() -> Value {
 
 fn job_id_parameter() -> Value {
     json!({"name":"id","in":"path","required":true,"schema":{"type":"string","format":"uuid","example":"019f0000-0000-7000-8000-000000000000"}})
+}
+
+fn preset_name_parameter() -> Value {
+    json!({"name":"name","in":"path","required":true,"schema":{"type":"string","minLength":1,"maxLength":64,"pattern":"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$","example":"portrait-high"}})
 }
 
 fn artifact_id_parameter() -> Value {

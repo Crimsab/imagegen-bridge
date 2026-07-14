@@ -88,6 +88,28 @@ imagegen-bridge generate \
 or parameter flags. `--dry-run` validates and prints the normalized request
 without opening artifact/session storage or starting Codex.
 
+Reusable presets retain the complete request configuration but never retain
+input-image bytes, masks, reference images, or idempotency keys:
+
+```sh
+imagegen-bridge preset create portrait-high --from request.json \
+  --description "High-quality portrait defaults"
+imagegen-bridge preset list --json
+imagegen-bridge preset get portrait-high --json
+imagegen-bridge generate "A red-haired woman" --preset portrait-high
+imagegen-bridge preset update portrait-high --from updated-template.json
+imagegen-bridge preset delete portrait-high --dry-run
+imagegen-bridge preset delete portrait-high --force
+```
+
+`--from` accepts either an `ImagePresetTemplate` JSON object or a complete
+native `ImageRequest`; the latter is reduced to reusable fields. An explicit
+generation/edit prompt replaces the stored prompt, and explicit CLI flags
+replace only their matching preset fields. Generate and edit presets cannot be
+applied to the opposite operation. Presets use the configured durable SQLite
+state shared with the API and dashboard. Deletion requires `--force`, while
+`--dry-run` is non-mutating.
+
 `--count N` requests multiple outputs. A provider may return them natively or
 the bridge may fan out into bounded upstream calls; inspect `providers
 capabilities --json` and its `batching` field for the exact behavior. Isolated

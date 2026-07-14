@@ -1,6 +1,9 @@
 //! Versioned route graph and native request handlers.
 
-use std::{sync::Arc, time::Instant};
+use std::{
+    sync::Arc,
+    time::{Instant, SystemTime},
+};
 
 use axum::{
     Json, Router,
@@ -16,11 +19,12 @@ use axum::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use imagegen_bridge_config::{ResolvedConfig, ServerSettings};
 use imagegen_bridge_core::{
-    BridgeError, ErrorCode, ImageJob, ImageJobPage, ImageJobStatus, ImageJobUpdate, ImageRequest,
-    ProviderDescriptor, ProviderEvent,
+    BridgeError, ErrorCode, ImageJob, ImageJobPage, ImageJobStatus, ImageJobUpdate, ImagePreset,
+    ImagePresetCreate, ImagePresetPage, ImagePresetWrite, ImageRequest, ProviderDescriptor,
+    ProviderEvent,
 };
 use imagegen_bridge_runtime::{
-    ExecutionContext, ImageJobListFilter, ImageJobVisibility, ImagegenRuntime,
+    ExecutionContext, ImageJobListFilter, ImageJobVisibility, ImagegenRuntime, SqlitePresetStore,
 };
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
@@ -57,6 +61,8 @@ pub struct ServerState {
     pub runtime: Arc<ImagegenRuntime>,
     /// Optional durable asynchronous job manager.
     pub jobs: Option<Arc<JobManager>>,
+    /// Optional durable preset store, enabled with server state storage.
+    pub presets: Option<Arc<SqlitePresetStore>>,
     pub(crate) auth: Option<AuthPolicy>,
     pub(crate) metrics: Option<Arc<ServerMetrics>>,
     pub(crate) diagnostics: Arc<ConfigurationDiagnostics>,
@@ -70,6 +76,7 @@ impl std::fmt::Debug for ServerState {
             .debug_struct("ServerState")
             .field("runtime", &self.runtime)
             .field("jobs", &self.jobs.is_some())
+            .field("presets", &self.presets.is_some())
             .field("auth", &self.auth.is_some())
             .field("metrics", &self.metrics.is_some())
             .field("diagnostics", &self.diagnostics)
@@ -113,9 +120,17 @@ impl ServerState {
         } else {
             None
         };
+        let presets = if settings.jobs.enabled {
+            Some(Arc::new(
+                SqlitePresetStore::open(&settings.jobs.database).await?,
+            ))
+        } else {
+            None
+        };
         Ok(Self {
             runtime,
             jobs,
+            presets,
             auth,
             metrics,
             diagnostics: Arc::new(ConfigurationDiagnostics::from_settings(settings)),
@@ -156,6 +171,7 @@ impl ServerState {
         Self {
             runtime,
             jobs: None,
+            presets: None,
             auth,
             metrics,
             diagnostics: Arc::new(ConfigurationDiagnostics::embedded(
@@ -206,6 +222,14 @@ pub fn router(state: ServerState, settings: &ServerSettings) -> Router {
             .route(
                 "/v1/jobs/{id}",
                 get(get_job).delete(cancel_job).patch(update_job),
+            );
+    }
+    if state.presets.is_some() {
+        protected = protected
+            .route("/v1/presets", post(create_preset).get(list_presets))
+            .route(
+                "/v1/presets/{name}",
+                get(get_preset).put(replace_preset).delete(delete_preset),
             );
     }
     if state.runtime.has_artifact_store() {
@@ -453,6 +477,125 @@ async fn list_providers(
         .then(|| items.last().map(|item| encode_cursor(&item.name)))
         .flatten();
     Ok(Json(ProviderPage { items, next_cursor }))
+}
+
+async fn create_preset(
+    State(state): State<ServerState>,
+    Extension(request_id): Extension<RequestId>,
+    payload: Result<Json<ImagePresetCreate>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let Json(create) = payload.map_err(|_| {
+        ApiError::bad_request(
+            "request body must be valid ImagePresetCreate JSON",
+            request_id.clone(),
+        )
+    })?;
+    let store = preset_store(&state, &request_id)?;
+    let preset = store
+        .create(create, unix_timestamp())
+        .await
+        .map_err(|error| preset_api_error(error, request_id.clone()))?;
+    let location =
+        HeaderValue::from_str(&format!("/v1/presets/{}", preset.name)).map_err(|_| {
+            ApiError::from_bridge(
+                BridgeError::new(ErrorCode::Internal, "preset location header is invalid"),
+                request_id,
+            )
+        })?;
+    Ok((
+        StatusCode::CREATED,
+        [(header::LOCATION, location)],
+        Json(preset),
+    )
+        .into_response())
+}
+
+async fn list_presets(
+    State(state): State<ServerState>,
+    Extension(request_id): Extension<RequestId>,
+    query: Result<Query<ProviderQuery>, QueryRejection>,
+) -> Result<Json<ImagePresetPage>, ApiError> {
+    let Query(query) = query.map_err(|_| {
+        ApiError::bad_request("preset query parameters are invalid", request_id.clone())
+    })?;
+    if query.limit == 0 || query.limit > MAX_PAGE_SIZE {
+        return Err(ApiError::bad_request(
+            "preset page limit must be between 1 and 100",
+            request_id,
+        ));
+    }
+    let after = query
+        .cursor
+        .as_deref()
+        .map(decode_cursor)
+        .transpose()
+        .map_err(|_| ApiError::bad_request("preset cursor is malformed", request_id.clone()))?;
+    let store = preset_store(&state, &request_id)?;
+    let mut items = store
+        .list(after, query.limit.saturating_add(1))
+        .await
+        .map_err(|error| preset_api_error(error, request_id.clone()))?;
+    let has_more = items.len() > query.limit;
+    items.truncate(query.limit);
+    let next_cursor = has_more
+        .then(|| items.last().map(|preset| encode_cursor(&preset.name)))
+        .flatten();
+    Ok(Json(ImagePresetPage { items, next_cursor }))
+}
+
+async fn get_preset(
+    State(state): State<ServerState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(name): Path<String>,
+) -> Result<Json<ImagePreset>, ApiError> {
+    preset_store(&state, &request_id)?
+        .get(&name)
+        .await
+        .map(Json)
+        .map_err(|error| preset_api_error(error, request_id))
+}
+
+async fn replace_preset(
+    State(state): State<ServerState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(name): Path<String>,
+    payload: Result<Json<ImagePresetWrite>, JsonRejection>,
+) -> Result<Json<ImagePreset>, ApiError> {
+    let Json(write) = payload.map_err(|_| {
+        ApiError::bad_request(
+            "request body must be valid ImagePresetWrite JSON",
+            request_id.clone(),
+        )
+    })?;
+    preset_store(&state, &request_id)?
+        .replace(&name, write, unix_timestamp())
+        .await
+        .map(Json)
+        .map_err(|error| preset_api_error(error, request_id))
+}
+
+async fn delete_preset(
+    State(state): State<ServerState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    preset_store(&state, &request_id)?
+        .delete(&name)
+        .await
+        .map_err(|error| preset_api_error(error, request_id))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn preset_store<'a>(
+    state: &'a ServerState,
+    request_id: &RequestId,
+) -> Result<&'a SqlitePresetStore, ApiError> {
+    state.presets.as_deref().ok_or_else(|| {
+        ApiError::from_bridge(
+            BridgeError::new(ErrorCode::Configuration, "preset storage is disabled"),
+            request_id.clone(),
+        )
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -936,6 +1079,27 @@ fn job_api_error(error: BridgeError, request_id: RequestId) -> ApiError {
     } else {
         error
     }
+}
+
+fn preset_api_error(error: BridgeError, request_id: RequestId) -> ApiError {
+    let not_found = error.code == ErrorCode::InvalidRequest
+        && error
+            .details
+            .get("resource")
+            .and_then(serde_json::Value::as_str)
+            == Some("preset");
+    let error = ApiError::from_bridge(error, request_id);
+    if not_found {
+        error.with_status(StatusCode::NOT_FOUND)
+    } else {
+        error
+    }
+}
+
+fn unix_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
 }
 
 fn artifact_api_error(error: BridgeError, request_id: RequestId) -> ApiError {
@@ -1515,6 +1679,92 @@ mod tests {
             value["data"][0]["sha256"],
             "431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460"
         );
+    }
+
+    #[tokio::test]
+    async fn preset_routes_support_complete_crud() {
+        let directory = tempfile::tempdir().unwrap();
+        let (app, jobs) = test_job_router(directory.path()).await;
+        let created = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/presets")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&serde_json::json!({
+                            "name": "portrait-high",
+                            "description": "Editorial portrait",
+                            "template": {"parameters": {"quality": "high"}}
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::CREATED);
+        assert_eq!(
+            created.headers()[header::LOCATION],
+            "/v1/presets/portrait-high"
+        );
+
+        let fetched = app
+            .clone()
+            .oneshot(
+                Request::get("/v1/presets/portrait-high")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(fetched.status(), StatusCode::OK);
+        let body = fetched.into_body().collect().await.unwrap().to_bytes();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["template"]["parameters"]["quality"], "high");
+
+        let listed = app
+            .clone()
+            .oneshot(
+                Request::get("/v1/presets?limit=1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(listed.status(), StatusCode::OK);
+
+        let replaced = app
+            .clone()
+            .oneshot(
+                Request::put("/v1/presets/portrait-high")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"description":"Updated","template":{}}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(replaced.status(), StatusCode::OK);
+
+        let deleted = app
+            .clone()
+            .oneshot(
+                Request::delete("/v1/presets/portrait-high")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+        let missing = app
+            .oneshot(
+                Request::get("/v1/presets/portrait-high")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        jobs.shutdown().await;
     }
 
     #[tokio::test]
