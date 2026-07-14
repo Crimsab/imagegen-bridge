@@ -76,11 +76,24 @@ imagegen-bridge generate --request request.json --json
 imagegen-bridge generate --request - --json < request.json
 imagegen-bridge generate --prompt - --dry-run --json < prompt.txt
 imagegen-bridge generate "a red-haired woman" --dry-run --json
+
+imagegen-bridge generate \
+  "Four distinct editorial variations of a red-haired woman" \
+  --count 4 \
+  --failure-policy best_effort \
+  --output-dir batches/red-haired-woman
 ```
 
 `--request` is lossless and exclusive: it cannot be mixed with prompt, input,
 or parameter flags. `--dry-run` validates and prints the normalized request
 without opening artifact/session storage or starting Codex.
+
+`--count N` requests multiple outputs. A provider may return them natively or
+the bridge may fan out into bounded upstream calls; inspect `providers
+capabilities --json` and its `batching` field for the exact behavior. Isolated
+Codex app-server batches can run concurrently. `--session-key` and
+`--thread-id` batches are intentionally sequential so turns on one conversation
+remain ordered.
 
 `-o, --output FILE` selects an exact filename and is valid only when `n=1`.
 `--output-dir DIR` retains generated UUID filenames inside a per-call directory.

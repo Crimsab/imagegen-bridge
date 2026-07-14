@@ -284,6 +284,16 @@
 		margin-block-end: 1rem;
 	}
 
+	.composer > .section-heading {
+		align-items: flex-start;
+		flex-direction: column;
+		gap: 0.35rem;
+	}
+
+	.composer > .section-heading .quiet {
+		overflow-wrap: anywhere;
+	}
+
 	.section-heading h2,
 	.dialog-heading h2 {
 		font-size: clamp(1.25rem, 2vw, 1.65rem);

@@ -162,6 +162,14 @@
                 </select>
               </label>
               <label class="field">
+                <span>Image action</span>
+                <select id="action" name="action">
+                  <option value="auto">Auto</option>
+                  <option value="generate">Generate</option>
+                  <option value="edit">Edit</option>
+                </select>
+              </label>
+              <label class="field">
                 <span>Failure policy</span>
                 <select id="failure-policy" name="failure-policy">
                   <option value="fail_fast">Fail fast</option>
@@ -365,6 +373,7 @@
                   <th scope="col">Generate</th>
                   <th scope="col">Edit</th>
                   <th scope="col">Count</th>
+                  <th scope="col">Batching</th>
                   <th scope="col">Formats</th>
                   <th scope="col">Sessions</th>
                   <th scope="col">Notes</th>

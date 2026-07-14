@@ -34,6 +34,14 @@ The SSE handler emits `started`, bounded provider `progress`/`partial_image`
 events when available, then `completed` or `error`, with heartbeat comments,
 backpressure, and disconnect cancellation.
 
+Capability responses distinguish the logical bridge contract from one upstream
+call. `count` is the accepted request range. `batching.mode=fan_out` means the
+bridge divides a larger request into calls bounded by `batching.native_count`;
+`batching.max_parallel_outputs` is the provider-wide simultaneous-call cap.
+Output and partial-image indices are remapped into the original request order.
+Persistent and explicit-thread app-server batches run sequentially, while
+isolated batches may use the advertised parallelism.
+
 `GET /v1/diagnostics` returns only aggregate operational facts: bridge version,
 listener scope, whether bridge authentication is required, configuration field
 origins without values, bounded runtime queue depths, provider readiness, job

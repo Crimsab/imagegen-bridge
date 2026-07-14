@@ -151,12 +151,20 @@ request without starting Codex or opening output storage. The current Codex
 transports reject `--user` explicitly because upstream attribution support has
 not been proven; they never silently discard it.
 
-For the Responses adapter, `n > 1` uses at most
-`providers.codex_responses.max_parallel_outputs` simultaneous upstream calls
-(default `2`, maximum `4`). `failure_policy=fail_fast` cancels outstanding work
-on the first failure. `best_effort` returns successful images in requested-index
-order plus structured `failures`; every success and failure includes its output
-index and per-item generation time.
+Multi-image requests are available even when an upstream provider returns only
+one image per call. Provider discovery reports the effective `count` plus a
+`batching` object containing the native count, execution mode, and global
+parallel limit. Codex app-server defaults to four logical outputs with two
+isolated turns in flight (`providers.codex_app_server.max_outputs` and
+`max_parallel_outputs`). Persistent-key and explicit-thread batches are
+serialized to preserve conversation order. The Responses adapter supports the
+same four-output contract and uses its own `max_parallel_outputs` setting.
+
+`failure_policy=fail_fast` cancels outstanding work on the first failure.
+`best_effort` returns successful images in requested-index order plus structured
+`failures`; every success and failure includes its output index and per-item
+generation time. Both direct API calls and durable dashboard jobs use this same
+pipeline.
 
 The Responses adapter forwards `action=auto|generate|edit`. The app-server path
 accepts only `auto`. An explicit `input_fidelity=high` is accepted for

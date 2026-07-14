@@ -18,6 +18,7 @@ const state = {
 	loadSequence: 0,
 	authenticationPrompted: false,
 	providers: [],
+	defaultProvider: "",
 };
 
 const PARAMETER_LABELS = {
@@ -131,7 +132,10 @@ function handleError(error, target = elements.libraryMessage) {
 
 async function loadProviders() {
 	const current = elements.provider.value;
-	const page = await api.providers();
+	const [page, diagnostics] = await Promise.all([
+		api.providers(),
+		api.diagnostics(),
+	]);
 	const options = [new Option("Default", "")];
 	for (const provider of page.items || []) {
 		const suffix = provider.experimental ? " (experimental)" : "";
@@ -140,6 +144,8 @@ async function loadProviders() {
 		);
 	}
 	state.providers = page.items || [];
+	state.defaultProvider =
+		diagnostics.configuration?.default_provider || state.providers[0]?.name || "";
 	elements.provider.replaceChildren(...options);
 	elements.operatorSessionProvider.replaceChildren(
 		...options.map((option) => option.cloneNode(true)),
@@ -151,11 +157,12 @@ async function loadProviders() {
 }
 
 async function loadCapabilities() {
-	const provider = elements.provider.value;
+	const selectedProvider = elements.provider.value;
+	const provider = selectedProvider || state.defaultProvider;
 	updateKnownModels(provider);
 	if (!provider) {
 		applyCapabilities(elements.form, null);
-		elements.providerNote.textContent = "Provider default";
+		elements.providerNote.textContent = "No provider available";
 		return;
 	}
 	try {
@@ -165,7 +172,9 @@ async function loadCapabilities() {
 		);
 		applyCapabilities(elements.form, capabilities);
 		const model = capabilities.model ? ` · ${capabilities.model}` : "";
-		elements.providerNote.textContent = `${capabilities.provider}${model}`;
+		const batching = formatBatching(capabilities);
+		const defaultLabel = selectedProvider ? "" : " (default)";
+		elements.providerNote.textContent = `${capabilities.provider}${defaultLabel}${model} · ${batching}`;
 	} catch (error) {
 		handleError(error, elements.formMessage);
 	}
@@ -282,6 +291,7 @@ function renderCapabilityMatrix(rows, readiness) {
 					provider.name,
 					status,
 					model || "provider default",
+					"Unavailable",
 					"—",
 					"—",
 					"—",
@@ -296,6 +306,7 @@ function renderCapabilityMatrix(rows, readiness) {
 					capabilities.generation ? "Yes" : "No",
 					capabilities.edits ? "Yes" : "No",
 					`${capabilities.count?.min ?? "?"}–${capabilities.count?.max ?? "?"}`,
+					formatBatching(capabilities),
 					joinValues(capabilities.output_formats),
 					capabilities.persistent_sessions
 						? capabilities.explicit_threads
@@ -314,11 +325,20 @@ function renderCapabilityMatrix(rows, readiness) {
 	if (rendered.length === 0) {
 		const row = document.createElement("tr");
 		const cell = create("td", "", "No providers are registered.");
-		cell.colSpan = 9;
+		cell.colSpan = 10;
 		row.append(cell);
 		rendered.push(row);
 	}
 	elements.capabilityTableBody.replaceChildren(...rendered);
+}
+
+function formatBatching(capabilities) {
+	const batching = capabilities?.batching;
+	if (!batching) return "Batching unknown";
+	if (batching.mode !== "fan_out") return "Native";
+	const native = batching.native_count?.max ?? 1;
+	const parallel = batching.max_parallel_outputs ?? 1;
+	return `Fan-out, native ${native}, parallel ${parallel}`;
 }
 
 function renderOperatorEvents(history) {

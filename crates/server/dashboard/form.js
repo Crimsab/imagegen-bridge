@@ -68,7 +68,7 @@ export async function buildRequest(form) {
 		partial_images: integer(form, "partial-images", 0),
 		failure_policy: value(form, "failure-policy") || "fail_fast",
 		input_fidelity: value(form, "input-fidelity") || undefined,
-		action: operation === "edit" ? "edit" : "generate",
+		action: value(form, "action") || "auto",
 	};
 
 	const filename = value(form, "filename");
@@ -157,6 +157,11 @@ export function applyCapabilities(form, capabilities) {
 	count.min = String(capabilities?.count?.min ?? 1);
 	count.max = String(capabilities?.count?.max ?? 16);
 	if (Number(count.value) > Number(count.max)) count.value = count.max;
+	const batching = capabilities?.batching;
+	count.title =
+		batching?.mode === "fan_out"
+			? `The bridge runs bounded upstream requests, up to ${batching.max_parallel_outputs} at once.`
+			: "The provider returns the requested outputs natively.";
 
 	const partial = form.elements.namedItem("partial-images");
 	partial.min = String(capabilities?.partial_images?.min ?? 0);
@@ -180,6 +185,7 @@ export function applyCapabilities(form, capabilities) {
 		form.elements.namedItem("input-fidelity"),
 		capabilities?.input_fidelities,
 	);
+	constrainOptions(form.elements.namedItem("action"), capabilities?.actions);
 	form.elements.namedItem("aspect-ratio").disabled =
 		capabilities?.aspect_ratio === "unsupported";
 	form.elements.namedItem("resolution").disabled =
