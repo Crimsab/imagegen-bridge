@@ -1,9 +1,9 @@
 name: CI
 
+# Automatic CI is intentionally paused while the repository is private.
+# Restore push/pull_request triggers before the public release gate.
 on:
-  pull_request:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
