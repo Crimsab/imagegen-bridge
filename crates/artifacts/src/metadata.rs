@@ -13,8 +13,7 @@ const PNG_XMP_KEYWORD: &[u8] = b"XML:com.adobe.xmp";
 const JPEG_XMP_HEADER: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
 const XMP_OPEN: &[u8] = b"<igb:Metadata>";
 const XMP_CLOSE: &[u8] = b"</igb:Metadata>";
-
-type WebpChunk<'a> = (&'a [u8], &'a [u8]);
+const MAX_WEBP_CHUNKS: usize = 4_096;
 
 /// Embeds one bounded JSON generation record without decoding or re-encoding pixels.
 ///
@@ -264,31 +263,32 @@ fn extract_jpeg_xmp(bytes: &[u8]) -> Result<Option<Vec<u8>>, BridgeError> {
 }
 
 fn embed_webp(bytes: &[u8], xmp: &[u8], width: u32, height: u32) -> Result<Vec<u8>, BridgeError> {
-    let chunks = webp_chunks(bytes)?;
-    let has_vp8x = chunks.iter().any(|(kind, _)| *kind == b"VP8X");
+    let mut has_vp8x = false;
+    let mut flags = 0x04;
+    visit_webp_chunks(bytes, |kind, data| {
+        has_vp8x |= kind == b"VP8X";
+        flags |= match kind {
+            b"ICCP" => 0x20,
+            b"ALPH" => 0x10,
+            b"EXIF" => 0x08,
+            b"ANIM" | b"ANMF" => 0x02,
+            b"VP8L" if vp8l_has_alpha(data) => 0x10,
+            _ => 0,
+        };
+        Ok(true)
+    })?;
     let mut output = Vec::with_capacity(bytes.len().saturating_add(xmp.len() + 32));
     output.extend_from_slice(b"RIFF\0\0\0\0WEBP");
     if !has_vp8x {
-        let mut flags = 0x04;
-        for (kind, data) in &chunks {
-            flags |= match *kind {
-                b"ICCP" => 0x20,
-                b"ALPH" => 0x10,
-                b"EXIF" => 0x08,
-                b"ANIM" | b"ANMF" => 0x02,
-                b"VP8L" if vp8l_has_alpha(data) => 0x10,
-                _ => 0,
-            };
-        }
         let mut vp8x = [0_u8; 10];
         vp8x[0] = flags;
         write_u24(&mut vp8x[4..7], width.saturating_sub(1))?;
         write_u24(&mut vp8x[7..10], height.saturating_sub(1))?;
         append_webp_chunk(&mut output, b"VP8X", &vp8x)?;
     }
-    for (kind, data) in chunks {
+    visit_webp_chunks(bytes, |kind, data| {
         if kind == b"XMP " {
-            continue;
+            return Ok(true);
         }
         if kind == b"VP8X" {
             if data.len() != 10 {
@@ -300,7 +300,8 @@ fn embed_webp(bytes: &[u8], xmp: &[u8], width: u32, height: u32) -> Result<Vec<u
         } else {
             append_webp_chunk(&mut output, kind, data)?;
         }
-    }
+        Ok(true)
+    })?;
     append_webp_chunk(&mut output, b"XMP ", xmp)?;
     let riff_size = u32::try_from(output.len().saturating_sub(8))
         .map_err(|_| metadata_error("WebP container is too large"))?;
@@ -309,15 +310,21 @@ fn embed_webp(bytes: &[u8], xmp: &[u8], width: u32, height: u32) -> Result<Vec<u
 }
 
 fn extract_webp_xmp(bytes: &[u8]) -> Result<Option<Vec<u8>>, BridgeError> {
-    for (kind, data) in webp_chunks(bytes)? {
+    let mut found = None;
+    visit_webp_chunks(bytes, |kind, data| {
         if kind == b"XMP " {
-            return bounded_xmp(data).map(Some);
+            found = Some(bounded_xmp(data)?);
+            return Ok(false);
         }
-    }
-    Ok(None)
+        Ok(true)
+    })?;
+    Ok(found)
 }
 
-fn webp_chunks(bytes: &[u8]) -> Result<Vec<WebpChunk<'_>>, BridgeError> {
+fn visit_webp_chunks<'a>(
+    bytes: &'a [u8],
+    mut visit: impl FnMut(&'a [u8], &'a [u8]) -> Result<bool, BridgeError>,
+) -> Result<(), BridgeError> {
     if bytes.len() < 12 || &bytes[..4] != b"RIFF" || &bytes[8..12] != b"WEBP" {
         return Err(metadata_error("WebP container is malformed"));
     }
@@ -330,9 +337,15 @@ fn webp_chunks(bytes: &[u8]) -> Result<Vec<WebpChunk<'_>>, BridgeError> {
     if advertised.checked_add(8) != Some(bytes.len()) {
         return Err(metadata_error("WebP RIFF size does not match the payload"));
     }
-    let mut chunks = Vec::new();
     let mut position = 12;
+    let mut count = 0_usize;
     while position < bytes.len() {
+        count = count
+            .checked_add(1)
+            .ok_or_else(|| metadata_error("WebP chunk count is too large"))?;
+        if count > MAX_WEBP_CHUNKS {
+            return Err(metadata_error("WebP chunk count exceeds the limit"));
+        }
         let header = bytes
             .get(position..position.saturating_add(8))
             .ok_or_else(|| metadata_error("WebP chunk header is truncated"))?;
@@ -355,10 +368,12 @@ fn webp_chunks(bytes: &[u8]) -> Result<Vec<WebpChunk<'_>>, BridgeError> {
         bytes
             .get(data_end..padded_end)
             .ok_or_else(|| metadata_error("WebP chunk padding is truncated"))?;
-        chunks.push((&header[..4], data));
+        if !visit(&header[..4], data)? {
+            return Ok(());
+        }
         position = padded_end;
     }
-    Ok(chunks)
+    Ok(())
 }
 
 fn append_webp_chunk(output: &mut Vec<u8>, kind: &[u8], data: &[u8]) -> Result<(), BridgeError> {
@@ -543,5 +558,45 @@ mod tests {
             extract_embedded_metadata(&embedded, ImageLimits::default()).unwrap(),
             Some(record)
         );
+    }
+
+    #[test]
+    fn webp_chunk_cursor_enforces_a_work_limit_without_descriptor_storage() {
+        fn container(chunks: usize) -> Vec<u8> {
+            let mut bytes = b"RIFF\0\0\0\0WEBP".to_vec();
+            for _ in 0..chunks {
+                bytes.extend_from_slice(b"JUNK\0\0\0\0");
+            }
+            let size = u32::try_from(bytes.len() - 8).unwrap();
+            bytes[4..8].copy_from_slice(&size.to_le_bytes());
+            bytes
+        }
+
+        let at_limit = container(MAX_WEBP_CHUNKS);
+        let mut visited = 0_usize;
+        visit_webp_chunks(&at_limit, |_, _| {
+            visited += 1;
+            Ok(true)
+        })
+        .unwrap();
+        assert_eq!(visited, MAX_WEBP_CHUNKS);
+
+        let over_limit = container(MAX_WEBP_CHUNKS + 1);
+        let error = visit_webp_chunks(&over_limit, |_, _| Ok(true)).unwrap_err();
+        assert!(error.message.contains("chunk count exceeds"));
+    }
+
+    #[test]
+    fn webp_chunk_cursor_can_stop_before_unrelated_trailing_bytes() {
+        let mut bytes = b"RIFF\0\0\0\0WEBPXMP \0\0\0\0x".to_vec();
+        let size = u32::try_from(bytes.len() - 8).unwrap();
+        bytes[4..8].copy_from_slice(&size.to_le_bytes());
+        let mut visited = 0;
+        visit_webp_chunks(&bytes, |kind, _| {
+            visited += 1;
+            Ok(kind != b"XMP ")
+        })
+        .unwrap();
+        assert_eq!(visited, 1);
     }
 }
