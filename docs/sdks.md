@@ -64,6 +64,10 @@ never duplicate inline request image bodies.
 `diagnostics()` returns typed aggregate health, safe configuration provenance,
 queue/storage limits, provider readiness, and bounded redacted API events
 without user content, identifiers, headers, queries, payloads, or host paths.
+Omitting a per-call Python timeout inherits the client timeout; explicit `None`
+disables it. Remote plaintext HTTP is rejected unless the constructor receives
+the conspicuous unsafe override. JSON, error, partial-preview, SSE-line, and
+SSE-event bytes are limited before decoding or coalescing.
 
 ## TypeScript
 
@@ -95,6 +99,9 @@ const diagnostics = await client.diagnostics();
 
 Pass `{ signal }` or `{ timeoutMs }` per request. Streaming is an
 `AsyncIterable<StreamEvent>` and cancels the HTTP body when iteration ends.
+Remote plaintext HTTP requires `allowInsecureRemoteHttp: true`; redirects are
+rejected. JSON/error body limits and byte-framed SSE limits are independently
+configurable, while partial previews retain a fixed streamed 16 MiB ceiling.
 Both SDKs expose durable jobs, requested output indices, optional per-item generation time,
 and structured failures from best-effort multi-image requests.
 The request and capability types also expose input fidelity, image action, and
@@ -111,4 +118,6 @@ fixtures with the Rust domain types. This catches drift in either direction.
 
 CI validates Rust docs/types, Python Ruff+mypy+pytest+wheel/sdist, TypeScript
 Biome+strict TypeScript+Bun tests+Node smoke test+package contents. Packages are
-built and inspected in CI, but none are published yet.
+built and inspected in CI, but none are published yet. Python build isolation
+uses an exact backend and a committed hash-checked closure; external GitHub
+Actions are pinned to reviewed full commit SHAs.
