@@ -285,12 +285,24 @@ separate from the upstream Codex OAuth credential. See
 | Python SDK | `sdks/python` | Sync/async HTTPX client, typed models, SSE |
 | TypeScript SDK | `sdks/typescript` | Dependency-free Fetch client for Bun/Node |
 | OpenAPI/JSON Schema | `schemas/` | Generated wire contracts |
+| Agent skill | `integrations/generate-images-with-bridge` | Capability discovery, CLI invocation, verified absolute local artifact paths |
 | Container | `Dockerfile`, `compose.yaml` | Bridge and pinned Codex CLI |
 
 Examples and package build commands are in [docs/sdks.md](docs/sdks.md). The
 OpenAI-familiar routes make migration from a subset of Images API calls small,
 while the native route preserves sessions, normalizations, timings, warnings,
 and verified artifact metadata.
+
+The bundled agent skill is opt-in and does not modify the repository workspace:
+
+```sh
+mkdir -p ~/.agents/skills
+cp -R integrations/generate-images-with-bridge ~/.agents/skills/
+```
+
+It discovers live capabilities, calls the local CLI, and returns verified
+absolute artifact paths without reading OAuth credentials or depending on
+OpenClaw.
 
 ## Configuration
 

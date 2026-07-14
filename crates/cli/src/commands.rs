@@ -32,6 +32,16 @@ use crate::{
 };
 
 pub(crate) async fn run(cli: Cli, output: &Output) -> Result<(), BridgeError> {
+    let local_paths_command = match &cli.command {
+        Command::Generate(args) => !args.dry_run,
+        Command::Edit(args) => !args.dry_run,
+        _ => false,
+    };
+    if cli.local_artifact_paths && !local_paths_command {
+        return Err(invalid(
+            "--local-artifact-paths requires a non-dry-run generate or edit command",
+        ));
+    }
     match &cli.command {
         Command::Completions(args) => {
             completions(args.shell);
@@ -200,7 +210,11 @@ async fn execute_or_preview(
     let shutdown = application.shutdown().await;
     match (result, shutdown) {
         (Ok(response), Ok(())) => {
-            output.response(&response)?;
+            output.response(
+                &response,
+                &resolved.config.artifacts.root,
+                resolved.config.artifacts.image.max_encoded_bytes,
+            )?;
             presentation::present(
                 &response,
                 presentation_options,

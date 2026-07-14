@@ -9,6 +9,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use imagegen_bridge::core::{
     BridgeError, ErrorCode, ImagePayload, ImageRequest, ImageResponse, ResponseFormat,
 };
+use sha2::{Digest as _, Sha256};
 
 use crate::{args::PresentationArgs, output::Output};
 
@@ -57,7 +58,12 @@ pub(crate) fn present(
         match &image.payload {
             ImagePayload::Artifact {
                 name: Some(name), ..
-            } => artifacts.push(resolve_artifact(artifact_root, name, max_encoded_bytes)?),
+            } => artifacts.push(resolve_local_file(
+                artifact_root,
+                name,
+                max_encoded_bytes,
+                Some(&image.sha256),
+            )?),
             ImagePayload::Url { url } => urls.push(url.clone()),
             ImagePayload::Artifact { name: None, .. }
             | ImagePayload::Metadata
@@ -82,7 +88,12 @@ pub(crate) fn present(
     Ok(())
 }
 
-fn resolve_artifact(root: &Path, name: &str, max_bytes: u64) -> Result<PathBuf, BridgeError> {
+pub(crate) fn resolve_local_file(
+    root: &Path,
+    name: &str,
+    max_bytes: u64,
+    expected_sha256: Option<&str>,
+) -> Result<PathBuf, BridgeError> {
     let root = fs::canonicalize(root)
         .map_err(|_| artifact_error("could not open the configured artifact root"))?;
     let candidate = fs::canonicalize(root.join(name))
@@ -94,6 +105,17 @@ fn resolve_artifact(root: &Path, name: &str, max_bytes: u64) -> Result<PathBuf, 
         || metadata.len() > max_bytes
     {
         return Err(artifact_error("generated artifact path is not trusted"));
+    }
+    if let Some(expected) = expected_sha256 {
+        let bytes = fs::read(&candidate)
+            .map_err(|_| artifact_error("could not re-read generated artifact"))?;
+        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_bytes
+            || format!("{:x}", Sha256::digest(&bytes)) != expected
+        {
+            return Err(artifact_error(
+                "generated artifact no longer matches its verified checksum",
+            ));
+        }
     }
     Ok(candidate)
 }

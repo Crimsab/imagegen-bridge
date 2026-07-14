@@ -51,6 +51,10 @@ pub(crate) struct Cli {
     #[arg(long, global = true)]
     pub allow_inline: bool,
 
+    /// Wrap JSON image results with verified absolute local artifact paths.
+    #[arg(long, global = true, requires = "json")]
+    pub local_artifact_paths: bool,
+
     #[command(subcommand)]
     pub command: Command,
 }

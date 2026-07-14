@@ -237,6 +237,22 @@ Primary results go to stdout. Diagnostics and server status go to stderr.
 human output never prints base64 bodies. JSON base64 output is refused when
 stdout is an interactive terminal unless `--allow-inline` is explicit.
 
+Local agents can request a separate, explicit path-bearing envelope:
+
+```sh
+imagegen-bridge --json --local-artifact-paths generate \
+  --prompt "a paper fox" --output-dir agent --metadata sidecar
+```
+
+This flag is accepted only for non-dry-run `generate` and `edit` commands and
+requires JSON output. The envelope contains the ordinary response under
+`response` plus `artifacts[]` entries with verified canonical `path` and
+optional `metadata_path`. It rejects non-artifact output, missing names,
+oversized files, non-files, changed artifact checksums, and any canonical path
+outside `artifacts.root`.
+These host paths are intentionally CLI-only and must not be relayed through a
+remote API or public log.
+
 | Exit | Meaning |
 | ---: | --- |
 | `0` | Success |

@@ -12,7 +12,8 @@ fn help_and_version_are_available_without_configuration() {
         .success()
         .stdout(predicate::str::contains(
             "A bounded, provider-neutral image generation bridge",
-        ));
+        ))
+        .stdout(predicate::str::contains("--local-artifact-paths"));
     cargo_bin_cmd!("imagegen-bridge")
         .arg("--version")
         .assert()
@@ -62,6 +63,52 @@ fn invalid_arguments_use_clap_exit_code_two() {
         .assert()
         .code(2)
         .stderr(predicate::str::contains("unsupported value `impossible`"));
+}
+
+#[test]
+fn local_artifact_paths_are_explicit_json_only_generation_output() {
+    cargo_bin_cmd!("imagegen-bridge")
+        .args(["--local-artifact-paths", "generate", "test", "--dry-run"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("--json"));
+    cargo_bin_cmd!("imagegen-bridge")
+        .args([
+            "--local-artifact-paths",
+            "--json",
+            "generate",
+            "test",
+            "--dry-run",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "requires a non-dry-run generate or edit command",
+        ));
+    cargo_bin_cmd!("imagegen-bridge")
+        .args(["--local-artifact-paths", "--json", "config", "show"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "requires a non-dry-run generate or edit command",
+        ));
+}
+
+#[test]
+fn shipped_agent_skill_is_well_formed_and_uses_the_local_path_contract() {
+    let skill = include_str!("../../../integrations/generate-images-with-bridge/SKILL.md");
+    assert!(skill.starts_with("---\nname: generate-images-with-bridge\n"));
+    assert!(skill.contains("<objective>"));
+    assert!(skill.contains("<quick_start>"));
+    assert!(skill.contains("<success_criteria>"));
+    assert!(skill.contains("providers capabilities --json"));
+    assert!(skill.contains("--local-artifact-paths"));
+    assert!(skill.contains("artifacts[].path"));
+    let body = skill.splitn(3, "---").nth(2).expect("skill body");
+    assert!(
+        body.lines().all(|line| !line.trim_start().starts_with('#')),
+        "skill body must use XML tags instead of Markdown headings"
+    );
 }
 
 #[test]

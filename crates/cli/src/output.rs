@@ -1,22 +1,32 @@
-use std::io::{self, IsTerminal as _, Write as _};
+use std::{
+    io::{self, IsTerminal as _, Write as _},
+    path::{Path, PathBuf},
+};
 
 use imagegen_bridge::core::{BridgeError, ErrorCode, ImagePayload, ImageResponse};
 use serde::Serialize;
 
-use crate::args::OutputMode;
+use crate::{args::OutputMode, presentation::resolve_local_file};
 
 pub(crate) struct Output {
     mode: OutputMode,
     quiet: bool,
     allow_inline: bool,
+    local_artifact_paths: bool,
 }
 
 impl Output {
-    pub(crate) const fn new(mode: OutputMode, quiet: bool, allow_inline: bool) -> Self {
+    pub(crate) const fn new(
+        mode: OutputMode,
+        quiet: bool,
+        allow_inline: bool,
+        local_artifact_paths: bool,
+    ) -> Self {
         Self {
             mode,
             quiet,
             allow_inline,
+            local_artifact_paths,
         }
     }
 
@@ -46,8 +56,20 @@ impl Output {
         writeln!(stdout).map_err(|_| output_error("could not write command output"))
     }
 
-    pub(crate) fn response(&self, response: &ImageResponse) -> Result<(), BridgeError> {
+    pub(crate) fn response(
+        &self,
+        response: &ImageResponse,
+        artifact_root: &Path,
+        max_artifact_bytes: u64,
+    ) -> Result<(), BridgeError> {
         if self.mode == OutputMode::Json {
+            if self.local_artifact_paths {
+                return self.value(&local_artifact_result(
+                    response,
+                    artifact_root,
+                    max_artifact_bytes,
+                )?);
+            }
             if should_refuse_inline(
                 io::stdout().is_terminal(),
                 self.allow_inline,
@@ -153,6 +175,58 @@ impl Output {
     }
 }
 
+#[derive(Debug, Serialize)]
+struct LocalArtifactResult<'a> {
+    response: &'a ImageResponse,
+    artifacts: Vec<LocalArtifact>,
+}
+
+#[derive(Debug, Serialize)]
+struct LocalArtifact {
+    index: u8,
+    path: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metadata_path: Option<PathBuf>,
+}
+
+fn local_artifact_result<'a>(
+    response: &'a ImageResponse,
+    artifact_root: &Path,
+    max_artifact_bytes: u64,
+) -> Result<LocalArtifactResult<'a>, BridgeError> {
+    let artifacts = response
+        .data
+        .iter()
+        .map(|image| {
+            let ImagePayload::Artifact {
+                name: Some(name), ..
+            } = &image.payload
+            else {
+                return Err(BridgeError::new(
+                    ErrorCode::InvalidRequest,
+                    "--local-artifact-paths requires named artifact output",
+                ));
+            };
+            let path =
+                resolve_local_file(artifact_root, name, max_artifact_bytes, Some(&image.sha256))?;
+            let metadata_path = image
+                .metadata_name
+                .as_deref()
+                .map(|name| resolve_local_file(artifact_root, name, max_artifact_bytes, None))
+                .transpose()?;
+            Ok(LocalArtifact {
+                index: image.index,
+                path,
+                metadata_path,
+            })
+        })
+        .collect::<Result<Vec<_>, BridgeError>>()?;
+    Ok(LocalArtifactResult {
+        response,
+        artifacts,
+    })
+}
+
 pub(crate) const fn exit_code(code: ErrorCode) -> u8 {
     match code {
         ErrorCode::InvalidRequest | ErrorCode::Configuration | ErrorCode::IdempotencyConflict => 2,
@@ -180,7 +254,68 @@ const fn should_refuse_inline(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
+
+    use sha2::Digest as _;
+
     use super::*;
+
+    #[test]
+    fn local_artifact_result_contains_only_verified_absolute_paths() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let root = directory.path().join("artifacts");
+        std::fs::create_dir_all(root.join("agent")).expect("artifact directory");
+        std::fs::write(root.join("agent/result.png"), b"verified image fixture")
+            .expect("artifact fixture");
+        std::fs::write(root.join("agent/result.png.json"), b"{}").expect("metadata fixture");
+        let mut response: ImageResponse =
+            serde_json::from_str(include_str!("../../../fixtures/sdk/image-response.json"))
+                .expect("response fixture");
+        response.data[0].payload = ImagePayload::Artifact {
+            id: "artifact-1".to_owned(),
+            name: Some("agent/result.png".to_owned()),
+        };
+        response.data[0].sha256 = format!("{:x}", sha2::Sha256::digest(b"verified image fixture"));
+        response.data[0].metadata_name = Some("agent/result.png.json".to_owned());
+
+        let result = local_artifact_result(&response, &root, 1024).expect("local result");
+        let value = serde_json::to_value(result).expect("serialize local result");
+        assert_eq!(value["response"]["id"], response.id);
+        assert_eq!(value["artifacts"][0]["index"], 0);
+        assert_eq!(
+            value["artifacts"][0]["path"],
+            std::fs::canonicalize(root.join("agent/result.png"))
+                .expect("canonical artifact")
+                .to_string_lossy()
+                .as_ref()
+        );
+        assert_eq!(
+            value["artifacts"][0]["metadata_path"],
+            std::fs::canonicalize(root.join("agent/result.png.json"))
+                .expect("canonical metadata")
+                .to_string_lossy()
+                .as_ref()
+        );
+
+        std::fs::write(root.join("agent/result.png"), b"replaced")
+            .expect("replace artifact fixture");
+        let error =
+            local_artifact_result(&response, &root, 1024).expect_err("changed artifact must fail");
+        assert_eq!(error.code, ErrorCode::Artifact);
+        assert!(error.message.contains("verified checksum"));
+    }
+
+    #[test]
+    fn local_artifact_result_rejects_non_artifact_payloads() {
+        let response: ImageResponse =
+            serde_json::from_str(include_str!("../../../fixtures/sdk/image-response.json"))
+                .expect("response fixture");
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let error = local_artifact_result(&response, directory.path(), 1024)
+            .expect_err("base64 output must fail");
+        assert_eq!(error.code, ErrorCode::InvalidRequest);
+        assert!(error.message.contains("named artifact output"));
+    }
 
     #[test]
     fn exit_codes_are_stable_and_nonzero() {

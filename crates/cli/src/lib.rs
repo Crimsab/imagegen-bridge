@@ -14,7 +14,12 @@ use clap::Parser as _;
 #[must_use]
 pub fn main_entry() -> std::process::ExitCode {
     let cli = args::Cli::parse();
-    let output = output::Output::new(cli.output_mode(), cli.quiet, cli.allow_inline);
+    let output = output::Output::new(
+        cli.output_mode(),
+        cli.quiet,
+        cli.allow_inline,
+        cli.local_artifact_paths,
+    );
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
