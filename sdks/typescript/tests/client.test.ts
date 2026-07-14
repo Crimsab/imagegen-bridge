@@ -68,6 +68,16 @@ describe("ImagegenBridgeClient", () => {
     expect(capabilities.actions).toEqual(["auto"]);
     expect((await client.session("sdk-fixture")).thread_id).toBe("thread_fixture_01");
     await client.deleteSession("sdk-fixture");
+    const queued = await client.jobs.create(generateFixture);
+    expect(queued.status).toBe("queued");
+    expect(queued.request.output?.response_format).toBe("artifact");
+    const completed = await client.jobs.get(queued.id);
+    expect(completed.status).toBe("succeeded");
+    expect(completed.result?.data[0]?.type).toBe("artifact");
+    const jobs = await client.jobs.list({ status: "succeeded" });
+    expect(jobs.items[0]?.id).toBe(queued.id);
+    expect(jobs.next_cursor).toBe("sdk-next");
+    expect((await client.jobs.cancel(queued.id)).status).toBe("cancelled");
     expect((await client.health()).status).toBe("live");
     expect((await client.health({ ready: true })).status).toBe("ready");
   });

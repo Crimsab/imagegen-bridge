@@ -3,8 +3,11 @@ import { SseDecoder } from "./sse.js";
 import type {
   EditImageRequest,
   GenerateImageRequest,
+  ImageJob,
+  ImageJobPage,
   ImageRequest,
   ImageResponse,
+  JobListOptions,
   JsonValue,
   ProviderCapabilities,
   ProviderPage,
@@ -47,8 +50,33 @@ export class ImagesResource {
   }
 }
 
+export class JobsResource {
+  readonly #client: ImagegenBridgeClient;
+
+  constructor(client: ImagegenBridgeClient) {
+    this.#client = client;
+  }
+
+  create(request: ImageRequest, options: RequestOptions = {}): Promise<ImageJob> {
+    return this.#client.createJob(request, options);
+  }
+
+  get(id: string, options: RequestOptions = {}): Promise<ImageJob> {
+    return this.#client.getJob(id, options);
+  }
+
+  list(options: JobListOptions = {}): Promise<ImageJobPage> {
+    return this.#client.listJobs(options);
+  }
+
+  cancel(id: string, options: RequestOptions = {}): Promise<ImageJob> {
+    return this.#client.cancelJob(id, options);
+  }
+}
+
 export class ImagegenBridgeClient {
   readonly images: ImagesResource;
+  readonly jobs: JobsResource;
   readonly #baseUrl: URL;
   readonly #fetch: typeof globalThis.fetch;
   readonly #headers: Record<string, string>;
@@ -73,6 +101,7 @@ export class ImagegenBridgeClient {
       ...(options.bearerToken ? { authorization: `Bearer ${options.bearerToken}` } : {}),
     };
     this.images = new ImagesResource(this);
+    this.jobs = new JobsResource(this);
   }
 
   async executeImage(request: ImageRequest, options: RequestOptions): Promise<ImageResponse> {
@@ -114,6 +143,34 @@ export class ImagegenBridgeClient {
     } finally {
       opened.cleanup();
     }
+  }
+
+  async createJob(request: ImageRequest, options: RequestOptions): Promise<ImageJob> {
+    return imageJob(await this.#json("POST", "v1/jobs", { body: request, options }));
+  }
+
+  async getJob(id: string, options: RequestOptions): Promise<ImageJob> {
+    return imageJob(await this.#json("GET", `v1/jobs/${encodeURIComponent(id)}`, { options }));
+  }
+
+  async listJobs(options: JobListOptions): Promise<ImageJobPage> {
+    const value = await this.#json("GET", "v1/jobs", {
+      query: {
+        limit: options.limit ?? 20,
+        cursor: options.cursor,
+        status: options.status,
+        include_deleted: String(options.includeDeleted ?? false),
+      },
+      options,
+    });
+    const page = record(value);
+    if (!page || !Array.isArray(page.items))
+      throw new BridgeProtocolError("bridge returned an invalid durable job page");
+    return value as ImageJobPage;
+  }
+
+  async cancelJob(id: string, options: RequestOptions): Promise<ImageJob> {
+    return imageJob(await this.#json("DELETE", `v1/jobs/${encodeURIComponent(id)}`, { options }));
   }
 
   async providers(
@@ -267,6 +324,22 @@ function imageResponse(value: unknown): ImageResponse {
   )
     throw new BridgeProtocolError("bridge returned an invalid image response");
   return value as ImageResponse;
+}
+
+function imageJob(value: unknown): ImageJob {
+  const job = record(value);
+  if (
+    !job ||
+    typeof job.id !== "string" ||
+    typeof job.status !== "string" ||
+    typeof job.created !== "number" ||
+    typeof job.updated !== "number" ||
+    typeof job.favorite !== "boolean" ||
+    typeof job.cancel_requested !== "boolean" ||
+    !record(job.request)
+  )
+    throw new BridgeProtocolError("bridge returned an invalid durable job");
+  return value as ImageJob;
 }
 
 function positiveInteger(value: number, name: string): number {

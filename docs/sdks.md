@@ -46,12 +46,16 @@ async with AsyncImagegenBridgeClient(
     bearer_token="bridge-token",
 ) as client:
     response = await client.images.generate(request)
+    job = await client.jobs.create(request)
+    completed = await client.jobs.get(job.id)
 ```
 
 Use `client.images.stream(request)` for typed lifecycle, progress, partial-image,
 completion, and error events. `BridgeAPIError` exposes HTTP status, standard
 error fields, stable bridge code, retryability, safe provider/upstream IDs,
 details, and request ID.
+`client.jobs` provides typed create/get/list/cancel operations for durable
+artifact-backed work; job pages never duplicate inline request image bodies.
 
 ## TypeScript
 
@@ -71,11 +75,13 @@ const response = await client.images.generate({
   prompt: "a paper fox",
   routing: { provider: "codex-app-server" },
 });
+const job = await client.jobs.create({ operation: "generate", prompt: "a paper fox" });
+const completed = await client.jobs.get(job.id);
 ```
 
 Pass `{ signal }` or `{ timeoutMs }` per request. Streaming is an
 `AsyncIterable<StreamEvent>` and cancels the HTTP body when iteration ends.
-Both SDKs expose requested output indices, optional per-item generation time,
+Both SDKs expose durable jobs, requested output indices, optional per-item generation time,
 and structured failures from best-effort multi-image requests.
 The request and capability types also expose input fidelity, image action, and
 the provider-specific accepted value sets instead of assuming every model can

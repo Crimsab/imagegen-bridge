@@ -13,6 +13,9 @@ import httpx
 from ._errors import BridgeAPIError, BridgeProtocolError, BridgeTransportError
 from ._sse import aiter_sse, iter_sse
 from ._types import (
+    ImageJob,
+    ImageJobPage,
+    ImageJobStatus,
     ImageRequest,
     ImageResponse,
     JSONValue,
@@ -43,6 +46,20 @@ def _raise_api_error(response: httpx.Response) -> None:
     except (json.JSONDecodeError, UnicodeError):
         payload = None
     raise BridgeAPIError.from_payload(response.status_code, payload)
+
+
+def _decode_job(response: httpx.Response) -> ImageJob:
+    try:
+        return ImageJob.from_dict(_decode_json(response))
+    except (KeyError, TypeError, ValueError) as error:
+        raise BridgeProtocolError("bridge returned an invalid durable job") from error
+
+
+def _decode_job_page(response: httpx.Response) -> ImageJobPage:
+    try:
+        return ImageJobPage.from_dict(_decode_json(response))
+    except (KeyError, TypeError, ValueError) as error:
+        raise BridgeProtocolError("bridge returned an invalid durable job page") from error
 
 
 def _headers(bearer_token: str | None, default_headers: Mapping[str, str] | None) -> dict[str, str]:
@@ -128,6 +145,56 @@ class ImagesResource:
         yield from self._client._stream(request, idempotency_key, timeout)
 
 
+class AsyncJobsResource:
+    def __init__(self, client: AsyncImagegenBridgeClient) -> None:
+        self._client = client
+
+    async def create(self, request: ImageRequest, *, timeout: Timeout = None) -> ImageJob:
+        return await self._client._create_job(request, timeout)
+
+    async def get(self, job_id: str, *, timeout: Timeout = None) -> ImageJob:
+        return await self._client._get_job(job_id, timeout)
+
+    async def list(
+        self,
+        *,
+        limit: int = 20,
+        cursor: str | None = None,
+        status: ImageJobStatus | None = None,
+        include_deleted: bool = False,
+        timeout: Timeout = None,
+    ) -> ImageJobPage:
+        return await self._client._list_jobs(limit, cursor, status, include_deleted, timeout)
+
+    async def cancel(self, job_id: str, *, timeout: Timeout = None) -> ImageJob:
+        return await self._client._cancel_job(job_id, timeout)
+
+
+class JobsResource:
+    def __init__(self, client: ImagegenBridgeClient) -> None:
+        self._client = client
+
+    def create(self, request: ImageRequest, *, timeout: Timeout = None) -> ImageJob:
+        return self._client._create_job(request, timeout)
+
+    def get(self, job_id: str, *, timeout: Timeout = None) -> ImageJob:
+        return self._client._get_job(job_id, timeout)
+
+    def list(
+        self,
+        *,
+        limit: int = 20,
+        cursor: str | None = None,
+        status: ImageJobStatus | None = None,
+        include_deleted: bool = False,
+        timeout: Timeout = None,
+    ) -> ImageJobPage:
+        return self._client._list_jobs(limit, cursor, status, include_deleted, timeout)
+
+    def cancel(self, job_id: str, *, timeout: Timeout = None) -> ImageJob:
+        return self._client._cancel_job(job_id, timeout)
+
+
 class AsyncImagegenBridgeClient:
     """Reusable async client. Close it or use it as an async context manager."""
 
@@ -151,6 +218,7 @@ class AsyncImagegenBridgeClient:
         )
         self._max_sse_event_bytes = max_sse_event_bytes
         self.images = AsyncImagesResource(self)
+        self.jobs = AsyncJobsResource(self)
 
     async def __aenter__(self) -> AsyncImagegenBridgeClient:
         return self
@@ -202,6 +270,39 @@ class AsyncImagegenBridgeClient:
                     yield event
         except httpx.HTTPError as error:
             raise BridgeTransportError("bridge streaming request failed") from error
+
+    async def _create_job(self, request: ImageRequest, timeout: Timeout) -> ImageJob:
+        response = await self._send("POST", "/v1/jobs", json=request.to_dict(), timeout=timeout)
+        return _decode_job(response)
+
+    async def _get_job(self, job_id: str, timeout: Timeout) -> ImageJob:
+        response = await self._send("GET", f"/v1/jobs/{quote(job_id, safe='')}", timeout=timeout)
+        return _decode_job(response)
+
+    async def _list_jobs(
+        self,
+        limit: int,
+        cursor: str | None,
+        status: ImageJobStatus | None,
+        include_deleted: bool,
+        timeout: Timeout,
+    ) -> ImageJobPage:
+        response = await self._send(
+            "GET",
+            "/v1/jobs",
+            params={
+                "limit": limit,
+                "cursor": cursor,
+                "status": status,
+                "include_deleted": str(include_deleted).lower(),
+            },
+            timeout=timeout,
+        )
+        return _decode_job_page(response)
+
+    async def _cancel_job(self, job_id: str, timeout: Timeout) -> ImageJob:
+        response = await self._send("DELETE", f"/v1/jobs/{quote(job_id, safe='')}", timeout=timeout)
+        return _decode_job(response)
 
     async def providers(self, *, limit: int = 20, cursor: str | None = None) -> ProviderPage:
         response = await self._send(
@@ -273,6 +374,7 @@ class ImagegenBridgeClient:
         )
         self._max_sse_event_bytes = max_sse_event_bytes
         self.images = ImagesResource(self)
+        self.jobs = JobsResource(self)
 
     def __enter__(self) -> ImagegenBridgeClient:
         return self
@@ -323,6 +425,39 @@ class ImagegenBridgeClient:
                 yield from iter_sse(response.iter_lines(), self._max_sse_event_bytes)
         except httpx.HTTPError as error:
             raise BridgeTransportError("bridge streaming request failed") from error
+
+    def _create_job(self, request: ImageRequest, timeout: Timeout) -> ImageJob:
+        response = self._send("POST", "/v1/jobs", json=request.to_dict(), timeout=timeout)
+        return _decode_job(response)
+
+    def _get_job(self, job_id: str, timeout: Timeout) -> ImageJob:
+        response = self._send("GET", f"/v1/jobs/{quote(job_id, safe='')}", timeout=timeout)
+        return _decode_job(response)
+
+    def _list_jobs(
+        self,
+        limit: int,
+        cursor: str | None,
+        status: ImageJobStatus | None,
+        include_deleted: bool,
+        timeout: Timeout,
+    ) -> ImageJobPage:
+        response = self._send(
+            "GET",
+            "/v1/jobs",
+            params={
+                "limit": limit,
+                "cursor": cursor,
+                "status": status,
+                "include_deleted": str(include_deleted).lower(),
+            },
+            timeout=timeout,
+        )
+        return _decode_job_page(response)
+
+    def _cancel_job(self, job_id: str, timeout: Timeout) -> ImageJob:
+        response = self._send("DELETE", f"/v1/jobs/{quote(job_id, safe='')}", timeout=timeout)
+        return _decode_job(response)
 
     def providers(self, *, limit: int = 20, cursor: str | None = None) -> ProviderPage:
         response = self._send("GET", "/v1/providers", params={"limit": limit, "cursor": cursor})

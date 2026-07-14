@@ -34,6 +34,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/health/ready", get(readiness))
         .route("/v1/images", post(images))
         .route("/v1/images/stream", post(image_stream))
+        .route("/v1/jobs", post(create_job).get(list_jobs))
+        .route("/v1/jobs/{id}", get(get_job).delete(cancel_job))
         .route("/v1/providers", get(providers))
         .route("/v1/providers/{provider}/capabilities", get(capabilities))
         .route("/v1/sessions/{key}", get(session).delete(delete_session));
@@ -130,6 +132,99 @@ async fn image_stream(headers: HeaderMap, Json(request): Json<Value>) -> Respons
         Body::from_stream(tokio_stream::iter(chunks)),
         "text/event-stream",
     )
+}
+
+async fn create_job(headers: HeaderMap, Json(request): Json<Value>) -> Response {
+    if let Some(response) = authenticate(&headers) {
+        return response;
+    }
+    let Ok(expected) = serde_json::from_str::<Value>(GENERATE_REQUEST) else {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "shared request fixture is invalid",
+        );
+    };
+    if request != expected {
+        return error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "job request did not match fixture",
+        );
+    }
+    job_response(StatusCode::ACCEPTED, "queued", false)
+}
+
+async fn list_jobs(headers: HeaderMap, Query(_query): Query<Value>) -> Response {
+    if let Some(response) = authenticate(&headers) {
+        return response;
+    }
+    let Some(job) = job_value("succeeded", false) else {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, "job fixture is invalid");
+    };
+    fixture_response(
+        StatusCode::OK,
+        &json!({"items": [job], "next_cursor": "sdk-next"}).to_string(),
+        "application/json",
+    )
+}
+
+async fn get_job(headers: HeaderMap, Path(id): Path<String>) -> Response {
+    if let Some(response) = authenticate(&headers) {
+        return response;
+    }
+    if id != "019f0000-0000-7000-8000-000000000001" {
+        return error(StatusCode::NOT_FOUND, "job was not found");
+    }
+    job_response(StatusCode::OK, "succeeded", true)
+}
+
+async fn cancel_job(headers: HeaderMap, Path(id): Path<String>) -> Response {
+    if let Some(response) = authenticate(&headers) {
+        return response;
+    }
+    if id != "019f0000-0000-7000-8000-000000000001" {
+        return error(StatusCode::NOT_FOUND, "job was not found");
+    }
+    job_response(StatusCode::OK, "cancelled", false)
+}
+
+fn job_response(status: StatusCode, job_status: &str, result: bool) -> Response {
+    let Some(job) = job_value(job_status, result) else {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, "job fixture is invalid");
+    };
+    fixture_response(status, &job.to_string(), "application/json")
+}
+
+fn job_value(status: &str, include_detail: bool) -> Option<Value> {
+    let mut request = serde_json::from_str::<Value>(GENERATE_REQUEST).ok()?;
+    request["output"]["response_format"] = Value::String("artifact".to_owned());
+    let mut value = json!({
+        "id": "019f0000-0000-7000-8000-000000000001",
+        "status": status,
+        "created": 1_783_960_000,
+        "updated": 1_783_960_001,
+        "favorite": false
+    });
+    if include_detail || matches!(status, "queued" | "cancelled") {
+        value["request"] = request;
+        value["cancel_requested"] = Value::Bool(status == "cancelled");
+    }
+    if include_detail {
+        let mut result = serde_json::from_str::<Value>(IMAGE_RESPONSE).ok()?;
+        result["id"] = value["id"].clone();
+        result["data"][0] = json!({
+            "type":"artifact",
+            "id":"019f0000-0000-7000-8000-000000000002",
+            "name":"fixture.png",
+            "index":0,
+            "format":"png",
+            "width":1,
+            "height":1,
+            "bytes":70,
+            "sha256":"0000000000000000000000000000000000000000000000000000000000000000"
+        });
+        value["result"] = result;
+    }
+    Some(value)
 }
 
 async fn providers(headers: HeaderMap, Query(_query): Query<Value>) -> Response {

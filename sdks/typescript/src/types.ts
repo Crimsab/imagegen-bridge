@@ -208,6 +208,43 @@ export interface ImageFailure {
   generation_ms: number;
 }
 
+export type ImageJobStatus =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "interrupted";
+
+export interface ImageJobProgress {
+  stage: string;
+  partial_images: number;
+}
+
+export interface ImageJobSummary {
+  id: string;
+  status: ImageJobStatus;
+  created: number;
+  updated: number;
+  started?: number | null;
+  completed?: number | null;
+  progress?: ImageJobProgress | null;
+  favorite: boolean;
+  deleted?: number | null;
+}
+
+export interface ImageJob extends ImageJobSummary {
+  request: ImageRequest;
+  result?: ImageResponse | null;
+  error?: BridgeErrorData | null;
+  cancel_requested: boolean;
+}
+
+export interface ImageJobPage {
+  items: ImageJobSummary[];
+  next_cursor?: string | null;
+}
+
 export interface ProviderDescriptor {
   name: string;
   display_name: string;
@@ -279,4 +316,11 @@ export interface RequestOptions {
   idempotencyKey?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
+}
+
+export interface JobListOptions extends RequestOptions {
+  limit?: number;
+  cursor?: string;
+  status?: ImageJobStatus;
+  includeDeleted?: boolean;
 }

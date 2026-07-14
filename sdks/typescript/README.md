@@ -20,7 +20,12 @@ const result = await bridge.images.generate({
     metadata: "sidecar",
   },
 });
+const queued = await bridge.jobs.create({ operation: "generate", prompt: "a second paper fox" });
+const completed = await bridge.jobs.get(queued.id);
+const page = await bridge.jobs.list({ status: "succeeded" });
 ```
 
 Changing `routing.provider` is the only SDK change needed to select another
 configured provider.
+`bridge.jobs` exposes typed `create`, `get`, `list`, and `cancel` operations for
+durable artifact-backed work.

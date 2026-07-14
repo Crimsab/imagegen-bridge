@@ -22,6 +22,9 @@ NegativePromptMode: TypeAlias = Literal["auto", "native", "merge", "reject"]
 RevisedPromptPolicy: TypeAlias = Literal["include", "omit", "require"]
 SessionMode: TypeAlias = Literal["isolated", "persistent", "thread"]
 SupportLevel: TypeAlias = Literal["unsupported", "emulated", "native"]
+ImageJobStatus: TypeAlias = Literal[
+    "queued", "running", "succeeded", "failed", "cancelled", "interrupted"
+]
 
 
 def _wire(value: Any) -> JSONValue:
@@ -333,6 +336,92 @@ class ImageResponse:
             if value.get("session") is not None
             else None,
             warnings=tuple(value.get("warnings", [])),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ImageJobProgress:
+    stage: str
+    partial_images: int
+
+
+@dataclass(frozen=True, slots=True)
+class ImageJobSummary:
+    id: str
+    status: ImageJobStatus
+    created: int
+    updated: int
+    favorite: bool
+    started: int | None = None
+    completed: int | None = None
+    progress: ImageJobProgress | None = None
+    deleted: int | None = None
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> ImageJobSummary:
+        return cls(
+            id=value["id"],
+            status=value["status"],
+            created=value["created"],
+            updated=value["updated"],
+            favorite=value["favorite"],
+            started=value.get("started"),
+            completed=value.get("completed"),
+            progress=ImageJobProgress(**value["progress"])
+            if value.get("progress") is not None
+            else None,
+            deleted=value.get("deleted"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ImageJob:
+    id: str
+    status: ImageJobStatus
+    created: int
+    updated: int
+    favorite: bool
+    request: ImageRequest
+    cancel_requested: bool
+    started: int | None = None
+    completed: int | None = None
+    progress: ImageJobProgress | None = None
+    deleted: int | None = None
+    result: ImageResponse | None = None
+    error: BridgeErrorData | None = None
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> ImageJob:
+        summary = ImageJobSummary.from_dict(value)
+        return cls(
+            id=summary.id,
+            status=summary.status,
+            created=summary.created,
+            updated=summary.updated,
+            favorite=summary.favorite,
+            request=ImageRequest.from_dict(value["request"]),
+            cancel_requested=value["cancel_requested"],
+            started=summary.started,
+            completed=summary.completed,
+            progress=summary.progress,
+            deleted=summary.deleted,
+            result=ImageResponse.from_dict(value["result"])
+            if value.get("result") is not None
+            else None,
+            error=BridgeErrorData(**value["error"]) if value.get("error") is not None else None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ImageJobPage:
+    items: tuple[ImageJobSummary, ...]
+    next_cursor: str | None = None
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> ImageJobPage:
+        return cls(
+            items=tuple(ImageJobSummary.from_dict(item) for item in value["items"]),
+            next_cursor=value.get("next_cursor"),
         )
 
 

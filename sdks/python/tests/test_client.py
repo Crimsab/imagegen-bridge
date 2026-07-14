@@ -54,6 +54,16 @@ def test_sync_client_matches_shared_http_contract(
         assert capabilities.actions == ("auto",)
         assert client.session("sdk-fixture").thread_id == "thread_fixture_01"
         client.delete_session("sdk-fixture")
+        queued = client.jobs.create(request)
+        assert queued.status == "queued"
+        assert queued.request.output.response_format == "artifact"
+        completed = client.jobs.get(queued.id)
+        assert completed.status == "succeeded"
+        assert completed.result is not None and completed.result.data[0].type == "artifact"
+        page = client.jobs.list(status="succeeded")
+        assert page.items[0].id == queued.id
+        assert page.next_cursor == "sdk-next"
+        assert client.jobs.cancel(queued.id).status == "cancelled"
         assert client.health()["status"] == "live"
 
 
@@ -91,6 +101,10 @@ def test_async_client_matches_shared_http_contract(
             assert (await client.capabilities("codex-app-server")).generation
             assert (await client.session("sdk-fixture")).reused
             await client.delete_session("sdk-fixture")
+            queued = await client.jobs.create(request)
+            assert (await client.jobs.get(queued.id)).result is not None
+            assert (await client.jobs.list()).items[0].status == "succeeded"
+            assert (await client.jobs.cancel(queued.id)).cancel_requested
             assert (await client.health(ready=True))["status"] == "ready"
 
     asyncio.run(scenario())
