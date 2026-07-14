@@ -192,6 +192,18 @@ impl BridgeConfig {
                     "Codex executable must not be empty",
                 );
             }
+            if app.max_outputs == 0
+                || app.max_outputs > self.runtime.request.max_outputs
+                || app.max_parallel_outputs == 0
+                || app.max_parallel_outputs > app.max_outputs
+                || app.max_parallel_outputs > 4
+            {
+                issue(
+                    "providers.codex_app_server.max_outputs",
+                    "out_of_range",
+                    "app-server fan-out limits must fit the request limit and parallelism must be between 1 and 4",
+                );
+            }
             if app.rpc_max_message_bytes == 0
                 || app.rpc_max_message_bytes > 64 * 1024 * 1024
                 || app.rpc_max_notification_bytes == 0
@@ -491,6 +503,24 @@ mod tests {
                 .iter()
                 .any(|issue| { issue.field == "providers.codex_responses.max_parallel_outputs" })
         );
+    }
+
+    #[test]
+    fn validates_app_server_fanout_against_request_limits() {
+        let mut config = BridgeConfig::default();
+        config.providers.codex_app_server.max_outputs = 5;
+        config.runtime.request.max_outputs = 4;
+        config.providers.codex_app_server.max_parallel_outputs = 5;
+        assert!(
+            config
+                .check()
+                .iter()
+                .any(|issue| { issue.field == "providers.codex_app_server.max_outputs" })
+        );
+
+        config.providers.codex_app_server.max_outputs = 4;
+        config.providers.codex_app_server.max_parallel_outputs = 2;
+        assert!(config.check().is_empty());
     }
 
     #[test]

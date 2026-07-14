@@ -64,7 +64,9 @@ impl BridgeApplication {
                     AppServerImageProvider, AppServerProviderConfig, AppServerReferenceInputs,
                     CodexProcess, CodexProcessConfig, RpcConfig, SessionBindingStore,
                 };
-                use imagegen_bridge_runtime::SqliteSessionBindingStore;
+                use imagegen_bridge_runtime::{
+                    OutputFanoutConfig, OutputFanoutProvider, SqliteSessionBindingStore,
+                };
 
                 let settings = &config.providers.codex_app_server;
                 create_parent_directory(&settings.session_database).await?;
@@ -99,16 +101,24 @@ impl BridgeApplication {
                     Arc::clone(&artifact_store),
                     64 * 1024 * 1024,
                 )?;
-                providers.push(Arc::new(AppServerImageProvider::with_process_and_inputs(
-                    process,
-                    sessions,
-                    AppServerProviderConfig {
-                        codex_model: settings.codex_model.clone(),
-                        cwd,
-                        image_limits,
+                let provider: Arc<dyn ImageProvider> =
+                    Arc::new(AppServerImageProvider::with_process_and_inputs(
+                        process,
+                        sessions,
+                        AppServerProviderConfig {
+                            codex_model: settings.codex_model.clone(),
+                            cwd,
+                            image_limits,
+                        },
+                        reference_inputs,
+                    ));
+                providers.push(Arc::new(OutputFanoutProvider::new(
+                    provider,
+                    OutputFanoutConfig {
+                        max_outputs: settings.max_outputs,
+                        max_parallel_outputs: settings.max_parallel_outputs,
                     },
-                    reference_inputs,
-                )));
+                )?));
             }
             #[cfg(not(feature = "codex-app-server"))]
             return Err(feature_error("codex-app-server"));
@@ -332,6 +342,17 @@ mod tests {
             item.status,
             imagegen_bridge_runtime::ProviderReadinessStatus::Ready
         )));
+        let capabilities = application
+            .runtime()
+            .registry()
+            .capabilities(Some("codex-app-server"), None)
+            .await
+            .unwrap();
+        assert_eq!(capabilities.count.max, 4);
+        assert_eq!(
+            capabilities.batching.mode,
+            imagegen_bridge_core::BatchMode::FanOut
+        );
         application.shutdown().await.unwrap();
     }
 }

@@ -11,6 +11,7 @@ repository.workspace = true
 [dependencies]
 async-trait = "0.1"
 base64 = "0.22"
+futures-util = "0.3"
 imagegen-bridge-artifacts = { path = "../artifacts", version = "0.1.0" }
 imagegen-bridge-codex-app-server = { path = "../codex-app-server", version = "0.1.0" }
 imagegen-bridge-core = { path = "../core", version = "0.1.0" }

@@ -337,6 +337,10 @@ pub struct CodexAppServerSettings {
     pub cwd: Option<PathBuf>,
     /// Optional Codex orchestration model.
     pub codex_model: Option<String>,
+    /// Effective maximum outputs per logical request after bridge fan-out.
+    pub max_outputs: u8,
+    /// Provider-wide maximum simultaneous app-server image turns.
+    pub max_parallel_outputs: u8,
     /// `SQLite` session binding database.
     pub session_database: PathBuf,
     /// Maximum JSONL message bytes.
@@ -361,6 +365,8 @@ impl Default for CodexAppServerSettings {
             args: Vec::new(),
             cwd: None,
             codex_model: None,
+            max_outputs: 4,
+            max_parallel_outputs: 2,
             session_database: PathBuf::from("./data/state.sqlite3"),
             rpc_max_message_bytes: 64 * 1024 * 1024,
             rpc_max_notification_bytes: 48 * 1024 * 1024,

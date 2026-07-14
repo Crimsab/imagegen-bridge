@@ -155,8 +155,10 @@ describe("ImagegenBridgeClient", () => {
     ]);
     const capabilities = await client.capabilities("codex-app-server");
     expect(capabilities.persistent_sessions).toBeTrue();
-    expect(capabilities.batching.mode).toBe("native");
+    expect(capabilities.count.max).toBe(4);
+    expect(capabilities.batching.mode).toBe("fan_out");
     expect(capabilities.batching.native_count.max).toBe(1);
+    expect(capabilities.batching.max_parallel_outputs).toBe(2);
     expect(capabilities.input_fidelities).toEqual(["high"]);
     expect(capabilities.actions).toEqual(["auto"]);
     expect((await client.capabilities("codex-responses", { model: "gpt-image-1" })).model).toBe(
