@@ -188,6 +188,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "base16ct"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd307490d624467aa6f74b0eabb77633d1f758a7b25f12bceb0b22e08d9726f6"
+
+[[package]]
 name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1006,6 +1012,7 @@ dependencies = [
 name = "imagegen-bridge-artifacts"
 version = "0.1.0"
 dependencies = [
+ "base16ct",
  "base64",
  "cap-std",
  "futures-util",
@@ -1026,6 +1033,7 @@ name = "imagegen-bridge-cli"
 version = "0.1.0"
 dependencies = [
  "assert_cmd",
+ "base16ct",
  "base64",
  "clap",
  "clap_complete",
@@ -1115,6 +1123,7 @@ name = "imagegen-bridge-runtime"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base16ct",
  "base64",
  "futures-util",
  "image",
@@ -1161,6 +1170,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
+ "base16ct",
  "base64",
  "bytes",
  "http-body-util",

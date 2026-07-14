@@ -1019,7 +1019,7 @@ async fn get_artifact_thumbnail(
         )
     })?
     .map_err(|error| artifact_api_error(error, request_id.clone()))?;
-    let digest = format!("{:x}", Sha256::digest(&bytes));
+    let digest = base16ct::lower::encode_string(&Sha256::digest(&bytes));
     let filename = format!("thumbnail-{id}.png");
     artifact_response(bytes, "image/png", &digest, Some(&filename), request_id)
 }
@@ -2185,7 +2185,7 @@ mod tests {
             ("/dashboard/app.js", "text/javascript; charset=utf-8"),
             ("/dashboard/api.js", "text/javascript; charset=utf-8"),
             ("/dashboard/form.js", "text/javascript; charset=utf-8"),
-            ("/dashboard/icon.svg", "image/svg+xml"),
+            ("/dashboard/icon.png", "image/png"),
         ] {
             let response = app
                 .clone()

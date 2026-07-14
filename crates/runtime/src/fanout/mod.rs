@@ -555,7 +555,7 @@ fn subrequest_id(request_id: &str, offset: u8) -> String {
     if request_id.len().saturating_add(suffix.len()) <= 128 {
         return format!("{request_id}{suffix}");
     }
-    let digest = format!("{:x}", Sha256::digest(request_id.as_bytes()));
+    let digest = base16ct::lower::encode_string(&Sha256::digest(request_id.as_bytes()));
     format!("fanout:{}:{offset}", &digest[..32])
 }
 

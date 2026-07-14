@@ -13,6 +13,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+base16ct = { version = "1", features = ["alloc"] }
 base64 = "0.22"
 cap-std = "4.0.2"
 futures-util = "0.3"

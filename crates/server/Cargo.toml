@@ -13,6 +13,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+base16ct = { version = "1", features = ["alloc"] }
 axum = { version = "0.8.8", features = ["json", "multipart", "tokio"] }
 base64 = "0.22"
 bytes = "1"

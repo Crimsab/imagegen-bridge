@@ -33,7 +33,10 @@ impl AuthPolicy {
         if token.is_empty() {
             return None;
         }
-        let scope = format!("bearer:{:x}", Sha256::digest(token.as_bytes()));
+        let scope = format!(
+            "bearer:{}",
+            base16ct::lower::encode_string(&Sha256::digest(token.as_bytes()))
+        );
         Some(Self {
             token: SecretString::from(token),
             scope,

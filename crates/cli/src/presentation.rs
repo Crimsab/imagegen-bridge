@@ -110,7 +110,7 @@ pub(crate) fn resolve_local_file(
         let bytes = fs::read(&candidate)
             .map_err(|_| artifact_error("could not re-read generated artifact"))?;
         if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_bytes
-            || format!("{:x}", Sha256::digest(&bytes)) != expected
+            || base16ct::lower::encode_string(&Sha256::digest(&bytes)) != expected
         {
             return Err(artifact_error(
                 "generated artifact no longer matches its verified checksum",
