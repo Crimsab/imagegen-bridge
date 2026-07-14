@@ -46,3 +46,14 @@ List filters include stable cursor pagination, status, active/hidden/all
 visibility, favorite state, and literal prompt search.
 `diagnostics()` exposes the typed, redaction-safe operator snapshot used by the
 embedded dashboard without credential values, prompts, or host paths.
+
+Plain HTTP is accepted only for literal loopback addresses and `localhost`.
+Remote bridge URLs must use HTTPS unless `allowInsecureRemoteHttp: true` is set
+explicitly; that opt-in removes transport confidentiality and server
+authentication. Redirects are rejected so authorization is never forwarded to
+an unvalidated destination.
+
+`timeoutMs`, `maxJsonBodyBytes`, `maxErrorBodyBytes`, `maxSseLineBytes`, and
+`maxSseEventBytes` provide independent transport bounds. Partial previews have
+a fixed 16 MiB streamed ceiling. Image and durable-job creation both accept
+`RequestOptions.idempotencyKey` and fall back to the key in the request body.

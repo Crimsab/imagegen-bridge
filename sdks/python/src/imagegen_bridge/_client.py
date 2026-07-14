@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Iterator, Mapping
+from ipaddress import ip_address
 from types import TracebackType
 from typing import Any, cast
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import httpx
 
@@ -28,7 +29,17 @@ from ._types import (
 )
 
 Timeout = float | httpx.Timeout | None
+
+
+class _UseClientTimeout:
+    __slots__ = ()
+
+
+_USE_CLIENT_TIMEOUT = _UseClientTimeout()
+TimeoutArg = Timeout | _UseClientTimeout
 _MAX_PARTIAL_PREVIEW_BYTES = 16 * 1024 * 1024
+_DEFAULT_MAX_RESPONSE_BODY_BYTES = 256 * 1024 * 1024
+_DEFAULT_MAX_ERROR_BODY_BYTES = 1024 * 1024
 _IMAGE_CONTENT_TYPES = {"image/png", "image/jpeg", "image/webp"}
 
 
@@ -76,6 +87,94 @@ def _decode_partial_preview(response: httpx.Response) -> bytes:
     return content
 
 
+def _validated_base_url(base_url: str, *, allow_insecure_remote_http: bool) -> str:
+    parsed = urlsplit(base_url)
+    host = parsed.hostname
+    if (
+        host is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.scheme not in {"http", "https"}
+    ):
+        raise ValueError("base_url must use HTTP(S), contain a host, and contain no user info")
+    normalized_host = host.rstrip(".").lower()
+    loopback = normalized_host == "localhost"
+    if not loopback:
+        try:
+            address = ip_address(normalized_host)
+            mapped = getattr(address, "ipv4_mapped", None)
+            loopback = address.is_loopback or (mapped is not None and mapped.is_loopback)
+        except ValueError:
+            pass
+    if parsed.scheme == "http" and not loopback and not allow_insecure_remote_http:
+        raise ValueError("remote base_url must use HTTPS")
+    return base_url.rstrip("/")
+
+
+def _timeout_kwargs(timeout: TimeoutArg) -> dict[str, Any]:
+    if timeout is _USE_CLIENT_TIMEOUT:
+        return {}
+    return {"timeout": cast(Timeout, timeout)}
+
+
+def _response_with_content(response: httpx.Response, content: bytes) -> httpx.Response:
+    return httpx.Response(
+        response.status_code,
+        headers=response.headers,
+        content=content,
+        request=response.request,
+        extensions=response.extensions,
+        history=response.history,
+        default_encoding=response.default_encoding,
+    )
+
+
+def _validate_identity_encoding(response: httpx.Response) -> None:
+    content_encoding = response.headers.get("content-encoding", "").strip().lower()
+    if content_encoding not in {"", "identity"}:
+        raise BridgeProtocolError("bridge response body uses unsupported content encoding")
+
+
+def _validate_response_headers(response: httpx.Response, maximum_bytes: int) -> None:
+    _validate_identity_encoding(response)
+    content_length = response.headers.get("content-length")
+    if content_length is None:
+        return
+    if not content_length.isascii() or not content_length.isdigit():
+        raise BridgeProtocolError("bridge returned an invalid content length")
+    declared_length = int(content_length)
+    if declared_length > maximum_bytes:
+        raise BridgeProtocolError("bridge response body exceeds the SDK limit")
+
+
+def _read_limited_response(response: httpx.Response, maximum_bytes: int) -> httpx.Response:
+    _validate_response_headers(response, maximum_bytes)
+    if response.is_stream_consumed:
+        if len(response.content) > maximum_bytes:
+            raise BridgeProtocolError("bridge response body exceeds the SDK limit")
+        return _response_with_content(response, response.content)
+    content = bytearray()
+    for chunk in response.iter_raw():
+        if len(chunk) > maximum_bytes - len(content):
+            raise BridgeProtocolError("bridge response body exceeds the SDK limit")
+        content.extend(chunk)
+    return _response_with_content(response, bytes(content))
+
+
+async def _aread_limited_response(response: httpx.Response, maximum_bytes: int) -> httpx.Response:
+    _validate_response_headers(response, maximum_bytes)
+    if response.is_stream_consumed:
+        if len(response.content) > maximum_bytes:
+            raise BridgeProtocolError("bridge response body exceeds the SDK limit")
+        return _response_with_content(response, response.content)
+    content = bytearray()
+    async for chunk in response.aiter_raw():
+        if len(chunk) > maximum_bytes - len(content):
+            raise BridgeProtocolError("bridge response body exceeds the SDK limit")
+        content.extend(chunk)
+    return _response_with_content(response, bytes(content))
+
+
 def _job_update(favorite: bool | None, deleted: bool | None) -> dict[str, bool]:
     update = {}
     if favorite is not None:
@@ -93,6 +192,7 @@ def _headers(bearer_token: str | None, default_headers: Mapping[str, str] | None
         headers.update(default_headers)
     if bearer_token is not None:
         headers["authorization"] = f"Bearer {bearer_token}"
+    headers["accept-encoding"] = "identity"
     return headers
 
 
@@ -110,7 +210,7 @@ class AsyncImagesResource:
         request: ImageRequest,
         *,
         idempotency_key: str | None = None,
-        timeout: Timeout = None,
+        timeout: TimeoutArg = _USE_CLIENT_TIMEOUT,
     ) -> ImageResponse:
         return await self._client._image(request, idempotency_key, timeout)
 
@@ -119,7 +219,7 @@ class AsyncImagesResource:
         request: ImageRequest,
         *,
         idempotency_key: str | None = None,
-        timeout: Timeout = None,
+        timeout: TimeoutArg = _USE_CLIENT_TIMEOUT,
     ) -> ImageResponse:
         if request.operation != "edit":
             raise ValueError("images.edit requires an edit ImageRequest")
@@ -130,7 +230,7 @@ class AsyncImagesResource:
         request: ImageRequest,
         *,
         idempotency_key: str | None = None,
-        timeout: Timeout = None,
+        timeout: TimeoutArg = _USE_CLIENT_TIMEOUT,
     ) -> AsyncIterator[StreamEvent]:
         async for event in self._client._stream(request, idempotency_key, timeout):
             yield event
@@ -145,7 +245,7 @@ class ImagesResource:
         request: ImageRequest,
         *,
         idempotency_key: str | None = None,
-        timeout: Timeout = None,
+        timeout: TimeoutArg = _USE_CLIENT_TIMEOUT,
     ) -> ImageResponse:
         return self._client._image(request, idempotency_key, timeout)
 
@@ -154,7 +254,7 @@ class ImagesResource:
         request: ImageRequest,
         *,
         idempotency_key: str | None = None,
-        timeout: Timeout = None,
+        timeout: TimeoutArg = _USE_CLIENT_TIMEOUT,
     ) -> ImageResponse:
         if request.operation != "edit":
             raise ValueError("images.edit requires an edit ImageRequest")
@@ -165,7 +265,7 @@ class ImagesResource:
         request: ImageRequest,
         *,
         idempotency_key: str | None = None,
-        timeout: Timeout = None,
+        timeout: TimeoutArg = _USE_CLIENT_TIMEOUT,
     ) -> Iterator[StreamEvent]:
         yield from self._client._stream(request, idempotency_key, timeout)
 
@@ -174,10 +274,16 @@ class AsyncJobsResource:
     def __init__(self, client: AsyncImagegenBridgeClient) -> None:
         self._client = client
 
-    async def create(self, request: ImageRequest, *, timeout: Timeout = None) -> ImageJob:
-        return await self._client._create_job(request, timeout)
+    async def create(
+        self,
+        request: ImageRequest,
+        *,
+        idempotency_key: str | None = None,
+        timeout: TimeoutArg = _USE_CLIENT_TIMEOUT,
+    ) -> ImageJob:
+        return await self._client._create_job(request, idempotency_key, timeout)
 
-    async def get(self, job_id: str, *, timeout: Timeout = None) -> ImageJob:
+    async def get(self, job_id: str, *, timeout: TimeoutArg = _USE_CLIENT_TIMEOUT) -> ImageJob:
         return await self._client._get_job(job_id, timeout)
 
     async def list(
@@ -190,16 +296,16 @@ class AsyncJobsResource:
         visibility: ImageJobVisibility | None = None,
         favorite: bool | None = None,
         search: str | None = None,
-        timeout: Timeout = None,
+        timeout: TimeoutArg = _USE_CLIENT_TIMEOUT,
     ) -> ImageJobPage:
         return await self._client._list_jobs(
             limit, cursor, status, include_deleted, visibility, favorite, search, timeout
         )
 
-    async def cancel(self, job_id: str, *, timeout: Timeout = None) -> ImageJob:
+    async def cancel(self, job_id: str, *, timeout: TimeoutArg = _USE_CLIENT_TIMEOUT) -> ImageJob:
         return await self._client._cancel_job(job_id, timeout)
 
-    async def partial(self, job_id: str, *, timeout: Timeout = None) -> bytes:
+    async def partial(self, job_id: str, *, timeout: TimeoutArg = _USE_CLIENT_TIMEOUT) -> bytes:
         """Return the latest transient verified preview for a running job."""
         return await self._client._job_partial(job_id, timeout)
 
@@ -209,7 +315,7 @@ class AsyncJobsResource:
         *,
         favorite: bool | None = None,
         deleted: bool | None = None,
-        timeout: Timeout = None,
+        timeout: TimeoutArg = _USE_CLIENT_TIMEOUT,
     ) -> ImageJob:
         return await self._client._update_job(job_id, favorite, deleted, timeout)
 
@@ -218,10 +324,16 @@ class JobsResource:
     def __init__(self, client: ImagegenBridgeClient) -> None:
         self._client = client
 
-    def create(self, request: ImageRequest, *, timeout: Timeout = None) -> ImageJob:
-        return self._client._create_job(request, timeout)
+    def create(
+        self,
+        request: ImageRequest,
+        *,
+        idempotency_key: str | None = None,
+        timeout: TimeoutArg = _USE_CLIENT_TIMEOUT,
+    ) -> ImageJob:
+        return self._client._create_job(request, idempotency_key, timeout)
 
-    def get(self, job_id: str, *, timeout: Timeout = None) -> ImageJob:
+    def get(self, job_id: str, *, timeout: TimeoutArg = _USE_CLIENT_TIMEOUT) -> ImageJob:
         return self._client._get_job(job_id, timeout)
 
     def list(
@@ -234,16 +346,16 @@ class JobsResource:
         visibility: ImageJobVisibility | None = None,
         favorite: bool | None = None,
         search: str | None = None,
-        timeout: Timeout = None,
+        timeout: TimeoutArg = _USE_CLIENT_TIMEOUT,
     ) -> ImageJobPage:
         return self._client._list_jobs(
             limit, cursor, status, include_deleted, visibility, favorite, search, timeout
         )
 
-    def cancel(self, job_id: str, *, timeout: Timeout = None) -> ImageJob:
+    def cancel(self, job_id: str, *, timeout: TimeoutArg = _USE_CLIENT_TIMEOUT) -> ImageJob:
         return self._client._cancel_job(job_id, timeout)
 
-    def partial(self, job_id: str, *, timeout: Timeout = None) -> bytes:
+    def partial(self, job_id: str, *, timeout: TimeoutArg = _USE_CLIENT_TIMEOUT) -> bytes:
         """Return the latest transient verified preview for a running job."""
         return self._client._job_partial(job_id, timeout)
 
@@ -253,7 +365,7 @@ class JobsResource:
         *,
         favorite: bool | None = None,
         deleted: bool | None = None,
-        timeout: Timeout = None,
+        timeout: TimeoutArg = _USE_CLIENT_TIMEOUT,
     ) -> ImageJob:
         return self._client._update_job(job_id, favorite, deleted, timeout)
 
@@ -268,18 +380,34 @@ class AsyncImagegenBridgeClient:
         bearer_token: str | None = None,
         timeout: Timeout = 60.0,
         max_sse_event_bytes: int = 4 * 1024 * 1024,
+        max_sse_line_bytes: int = 4 * 1024 * 1024,
+        max_response_body_bytes: int = _DEFAULT_MAX_RESPONSE_BODY_BYTES,
+        max_error_body_bytes: int = _DEFAULT_MAX_ERROR_BODY_BYTES,
+        allow_insecure_remote_http: bool = False,
         default_headers: Mapping[str, str] | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        if max_sse_event_bytes <= 0:
-            raise ValueError("max_sse_event_bytes must be positive")
+        for value, name in [
+            (max_sse_event_bytes, "max_sse_event_bytes"),
+            (max_sse_line_bytes, "max_sse_line_bytes"),
+            (max_response_body_bytes, "max_response_body_bytes"),
+            (max_error_body_bytes, "max_error_body_bytes"),
+        ]:
+            if value <= 0:
+                raise ValueError(f"{name} must be positive")
+        base_url = _validated_base_url(
+            base_url, allow_insecure_remote_http=allow_insecure_remote_http
+        )
         self._client = httpx.AsyncClient(
-            base_url=base_url.rstrip("/"),
+            base_url=base_url,
             headers=_headers(bearer_token, default_headers),
             timeout=timeout,
             transport=transport,
         )
         self._max_sse_event_bytes = max_sse_event_bytes
+        self._max_sse_line_bytes = max_sse_line_bytes
+        self._max_response_body_bytes = max_response_body_bytes
+        self._max_error_body_bytes = max_error_body_bytes
         self.images = AsyncImagesResource(self)
         self.jobs = AsyncJobsResource(self)
 
@@ -298,14 +426,14 @@ class AsyncImagegenBridgeClient:
         await self._client.aclose()
 
     async def _image(
-        self, request: ImageRequest, idempotency_key: str | None, timeout: Timeout
+        self, request: ImageRequest, idempotency_key: str | None, timeout: TimeoutArg
     ) -> ImageResponse:
         response = await self._send(
             "POST",
             "/v1/images",
             json=request.to_dict(),
             headers=_request_headers(request, idempotency_key),
-            timeout=timeout,
+            **_timeout_kwargs(timeout),
         )
         try:
             return ImageResponse.from_dict(_decode_json(response))
@@ -313,7 +441,7 @@ class AsyncImagegenBridgeClient:
             raise BridgeProtocolError("bridge returned an invalid image response") from error
 
     async def _stream(
-        self, request: ImageRequest, idempotency_key: str | None, timeout: Timeout
+        self, request: ImageRequest, idempotency_key: str | None, timeout: TimeoutArg
     ) -> AsyncIterator[StreamEvent]:
         try:
             async with self._client.stream(
@@ -324,22 +452,37 @@ class AsyncImagegenBridgeClient:
                     "accept": "text/event-stream",
                     **_request_headers(request, idempotency_key),
                 },
-                timeout=timeout,
+                **_timeout_kwargs(timeout),
             ) as response:
                 if not response.is_success:
-                    await response.aread()
-                    _raise_api_error(response)
-                async for event in aiter_sse(response.aiter_lines(), self._max_sse_event_bytes):
+                    limited = await _aread_limited_response(response, self._max_error_body_bytes)
+                    _raise_api_error(limited)
+                _validate_identity_encoding(response)
+                async for event in aiter_sse(
+                    response.aiter_bytes(),
+                    self._max_sse_line_bytes,
+                    self._max_sse_event_bytes,
+                ):
                     yield event
         except httpx.HTTPError as error:
             raise BridgeTransportError("bridge streaming request failed") from error
 
-    async def _create_job(self, request: ImageRequest, timeout: Timeout) -> ImageJob:
-        response = await self._send("POST", "/v1/jobs", json=request.to_dict(), timeout=timeout)
+    async def _create_job(
+        self, request: ImageRequest, idempotency_key: str | None, timeout: TimeoutArg
+    ) -> ImageJob:
+        response = await self._send(
+            "POST",
+            "/v1/jobs",
+            json=request.to_dict(),
+            headers=_request_headers(request, idempotency_key),
+            **_timeout_kwargs(timeout),
+        )
         return _decode_job(response)
 
-    async def _get_job(self, job_id: str, timeout: Timeout) -> ImageJob:
-        response = await self._send("GET", f"/v1/jobs/{quote(job_id, safe='')}", timeout=timeout)
+    async def _get_job(self, job_id: str, timeout: TimeoutArg) -> ImageJob:
+        response = await self._send(
+            "GET", f"/v1/jobs/{quote(job_id, safe='')}", **_timeout_kwargs(timeout)
+        )
         return _decode_job(response)
 
     async def _list_jobs(
@@ -351,7 +494,7 @@ class AsyncImagegenBridgeClient:
         visibility: ImageJobVisibility | None,
         favorite: bool | None,
         search: str | None,
-        timeout: Timeout,
+        timeout: TimeoutArg,
     ) -> ImageJobPage:
         if include_deleted and visibility is not None:
             raise ValueError("include_deleted cannot be combined with visibility")
@@ -367,17 +510,22 @@ class AsyncImagegenBridgeClient:
                 "search": search,
                 "include_deleted": "true" if include_deleted else None,
             },
-            timeout=timeout,
+            **_timeout_kwargs(timeout),
         )
         return _decode_job_page(response)
 
-    async def _cancel_job(self, job_id: str, timeout: Timeout) -> ImageJob:
-        response = await self._send("DELETE", f"/v1/jobs/{quote(job_id, safe='')}", timeout=timeout)
+    async def _cancel_job(self, job_id: str, timeout: TimeoutArg) -> ImageJob:
+        response = await self._send(
+            "DELETE", f"/v1/jobs/{quote(job_id, safe='')}", **_timeout_kwargs(timeout)
+        )
         return _decode_job(response)
 
-    async def _job_partial(self, job_id: str, timeout: Timeout) -> bytes:
+    async def _job_partial(self, job_id: str, timeout: TimeoutArg) -> bytes:
         response = await self._send(
-            "GET", f"/v1/jobs/{quote(job_id, safe='')}/partial", timeout=timeout
+            "GET",
+            f"/v1/jobs/{quote(job_id, safe='')}/partial",
+            max_response_body_bytes=_MAX_PARTIAL_PREVIEW_BYTES,
+            **_timeout_kwargs(timeout),
         )
         return _decode_partial_preview(response)
 
@@ -386,11 +534,14 @@ class AsyncImagegenBridgeClient:
         job_id: str,
         favorite: bool | None,
         deleted: bool | None,
-        timeout: Timeout,
+        timeout: TimeoutArg,
     ) -> ImageJob:
         body = _job_update(favorite, deleted)
         response = await self._send(
-            "PATCH", f"/v1/jobs/{quote(job_id, safe='')}", json=body, timeout=timeout
+            "PATCH",
+            f"/v1/jobs/{quote(job_id, safe='')}",
+            json=body,
+            **_timeout_kwargs(timeout),
         )
         return _decode_job(response)
 
@@ -439,13 +590,30 @@ class AsyncImagegenBridgeClient:
         response = await self._send("GET", "/health/ready" if ready else "/health/live")
         return cast(dict[str, JSONValue], _decode_json(response))
 
-    async def _send(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+    async def _send(
+        self,
+        method: str,
+        path: str,
+        *,
+        max_response_body_bytes: int | None = None,
+        **kwargs: Any,
+    ) -> httpx.Response:
         try:
-            response = await self._client.request(method, path, **kwargs)
+            request = self._client.build_request(method, path, **kwargs)
+            response = await self._client.send(request, stream=True)
+            try:
+                maximum = (
+                    self._max_error_body_bytes
+                    if not response.is_success
+                    else max_response_body_bytes or self._max_response_body_bytes
+                )
+                limited = await _aread_limited_response(response, maximum)
+            finally:
+                await response.aclose()
         except httpx.HTTPError as error:
             raise BridgeTransportError("bridge request failed") from error
-        _raise_api_error(response)
-        return response
+        _raise_api_error(limited)
+        return limited
 
 
 class ImagegenBridgeClient:
@@ -458,18 +626,34 @@ class ImagegenBridgeClient:
         bearer_token: str | None = None,
         timeout: Timeout = 60.0,
         max_sse_event_bytes: int = 4 * 1024 * 1024,
+        max_sse_line_bytes: int = 4 * 1024 * 1024,
+        max_response_body_bytes: int = _DEFAULT_MAX_RESPONSE_BODY_BYTES,
+        max_error_body_bytes: int = _DEFAULT_MAX_ERROR_BODY_BYTES,
+        allow_insecure_remote_http: bool = False,
         default_headers: Mapping[str, str] | None = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
-        if max_sse_event_bytes <= 0:
-            raise ValueError("max_sse_event_bytes must be positive")
+        for value, name in [
+            (max_sse_event_bytes, "max_sse_event_bytes"),
+            (max_sse_line_bytes, "max_sse_line_bytes"),
+            (max_response_body_bytes, "max_response_body_bytes"),
+            (max_error_body_bytes, "max_error_body_bytes"),
+        ]:
+            if value <= 0:
+                raise ValueError(f"{name} must be positive")
+        base_url = _validated_base_url(
+            base_url, allow_insecure_remote_http=allow_insecure_remote_http
+        )
         self._client = httpx.Client(
-            base_url=base_url.rstrip("/"),
+            base_url=base_url,
             headers=_headers(bearer_token, default_headers),
             timeout=timeout,
             transport=transport,
         )
         self._max_sse_event_bytes = max_sse_event_bytes
+        self._max_sse_line_bytes = max_sse_line_bytes
+        self._max_response_body_bytes = max_response_body_bytes
+        self._max_error_body_bytes = max_error_body_bytes
         self.images = ImagesResource(self)
         self.jobs = JobsResource(self)
 
@@ -488,14 +672,14 @@ class ImagegenBridgeClient:
         self._client.close()
 
     def _image(
-        self, request: ImageRequest, idempotency_key: str | None, timeout: Timeout
+        self, request: ImageRequest, idempotency_key: str | None, timeout: TimeoutArg
     ) -> ImageResponse:
         response = self._send(
             "POST",
             "/v1/images",
             json=request.to_dict(),
             headers=_request_headers(request, idempotency_key),
-            timeout=timeout,
+            **_timeout_kwargs(timeout),
         )
         try:
             return ImageResponse.from_dict(_decode_json(response))
@@ -503,7 +687,7 @@ class ImagegenBridgeClient:
             raise BridgeProtocolError("bridge returned an invalid image response") from error
 
     def _stream(
-        self, request: ImageRequest, idempotency_key: str | None, timeout: Timeout
+        self, request: ImageRequest, idempotency_key: str | None, timeout: TimeoutArg
     ) -> Iterator[StreamEvent]:
         try:
             with self._client.stream(
@@ -514,21 +698,36 @@ class ImagegenBridgeClient:
                     "accept": "text/event-stream",
                     **_request_headers(request, idempotency_key),
                 },
-                timeout=timeout,
+                **_timeout_kwargs(timeout),
             ) as response:
                 if not response.is_success:
-                    response.read()
-                    _raise_api_error(response)
-                yield from iter_sse(response.iter_lines(), self._max_sse_event_bytes)
+                    limited = _read_limited_response(response, self._max_error_body_bytes)
+                    _raise_api_error(limited)
+                _validate_identity_encoding(response)
+                yield from iter_sse(
+                    response.iter_bytes(),
+                    self._max_sse_line_bytes,
+                    self._max_sse_event_bytes,
+                )
         except httpx.HTTPError as error:
             raise BridgeTransportError("bridge streaming request failed") from error
 
-    def _create_job(self, request: ImageRequest, timeout: Timeout) -> ImageJob:
-        response = self._send("POST", "/v1/jobs", json=request.to_dict(), timeout=timeout)
+    def _create_job(
+        self, request: ImageRequest, idempotency_key: str | None, timeout: TimeoutArg
+    ) -> ImageJob:
+        response = self._send(
+            "POST",
+            "/v1/jobs",
+            json=request.to_dict(),
+            headers=_request_headers(request, idempotency_key),
+            **_timeout_kwargs(timeout),
+        )
         return _decode_job(response)
 
-    def _get_job(self, job_id: str, timeout: Timeout) -> ImageJob:
-        response = self._send("GET", f"/v1/jobs/{quote(job_id, safe='')}", timeout=timeout)
+    def _get_job(self, job_id: str, timeout: TimeoutArg) -> ImageJob:
+        response = self._send(
+            "GET", f"/v1/jobs/{quote(job_id, safe='')}", **_timeout_kwargs(timeout)
+        )
         return _decode_job(response)
 
     def _list_jobs(
@@ -540,7 +739,7 @@ class ImagegenBridgeClient:
         visibility: ImageJobVisibility | None,
         favorite: bool | None,
         search: str | None,
-        timeout: Timeout,
+        timeout: TimeoutArg,
     ) -> ImageJobPage:
         if include_deleted and visibility is not None:
             raise ValueError("include_deleted cannot be combined with visibility")
@@ -556,16 +755,23 @@ class ImagegenBridgeClient:
                 "search": search,
                 "include_deleted": "true" if include_deleted else None,
             },
-            timeout=timeout,
+            **_timeout_kwargs(timeout),
         )
         return _decode_job_page(response)
 
-    def _cancel_job(self, job_id: str, timeout: Timeout) -> ImageJob:
-        response = self._send("DELETE", f"/v1/jobs/{quote(job_id, safe='')}", timeout=timeout)
+    def _cancel_job(self, job_id: str, timeout: TimeoutArg) -> ImageJob:
+        response = self._send(
+            "DELETE", f"/v1/jobs/{quote(job_id, safe='')}", **_timeout_kwargs(timeout)
+        )
         return _decode_job(response)
 
-    def _job_partial(self, job_id: str, timeout: Timeout) -> bytes:
-        response = self._send("GET", f"/v1/jobs/{quote(job_id, safe='')}/partial", timeout=timeout)
+    def _job_partial(self, job_id: str, timeout: TimeoutArg) -> bytes:
+        response = self._send(
+            "GET",
+            f"/v1/jobs/{quote(job_id, safe='')}/partial",
+            max_response_body_bytes=_MAX_PARTIAL_PREVIEW_BYTES,
+            **_timeout_kwargs(timeout),
+        )
         return _decode_partial_preview(response)
 
     def _update_job(
@@ -573,11 +779,14 @@ class ImagegenBridgeClient:
         job_id: str,
         favorite: bool | None,
         deleted: bool | None,
-        timeout: Timeout,
+        timeout: TimeoutArg,
     ) -> ImageJob:
         body = _job_update(favorite, deleted)
         response = self._send(
-            "PATCH", f"/v1/jobs/{quote(job_id, safe='')}", json=body, timeout=timeout
+            "PATCH",
+            f"/v1/jobs/{quote(job_id, safe='')}",
+            json=body,
+            **_timeout_kwargs(timeout),
         )
         return _decode_job(response)
 
@@ -620,10 +829,27 @@ class ImagegenBridgeClient:
         response = self._send("GET", "/health/ready" if ready else "/health/live")
         return cast(dict[str, JSONValue], _decode_json(response))
 
-    def _send(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+    def _send(
+        self,
+        method: str,
+        path: str,
+        *,
+        max_response_body_bytes: int | None = None,
+        **kwargs: Any,
+    ) -> httpx.Response:
         try:
-            response = self._client.request(method, path, **kwargs)
+            request = self._client.build_request(method, path, **kwargs)
+            response = self._client.send(request, stream=True)
+            try:
+                maximum = (
+                    self._max_error_body_bytes
+                    if not response.is_success
+                    else max_response_body_bytes or self._max_response_body_bytes
+                )
+                limited = _read_limited_response(response, maximum)
+            finally:
+                response.close()
         except httpx.HTTPError as error:
             raise BridgeTransportError("bridge request failed") from error
-        _raise_api_error(response)
-        return response
+        _raise_api_error(limited)
+        return limited

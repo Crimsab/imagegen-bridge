@@ -103,11 +103,14 @@ async fn diagnostics(headers: HeaderMap) -> Response {
             "interrupted": 0,
             "hidden": 0,
             "database_bytes": 40960,
+            "logical_bytes": 8192,
             "active_workers": 0,
             "max_pending": 1000,
             "max_running": 4,
             "retention_secs": 604_800,
-            "max_retained": 10000
+            "max_retained": 10000,
+            "max_retained_bytes": 268_435_456,
+            "max_database_bytes": 1_073_741_824
         },
         "providers": [
             {"provider":"codex-app-server","status":"ready"},

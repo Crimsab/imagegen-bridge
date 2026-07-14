@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 
+import httpx
 import pytest
 
 from imagegen_bridge import (
     AsyncImagegenBridgeClient,
     BridgeAPIError,
+    BridgeProtocolError,
     CompletedEvent,
     ImagegenBridgeClient,
     ImageRequest,
@@ -14,8 +16,99 @@ from imagegen_bridge import (
     ProgressEvent,
     StartedEvent,
 )
+from imagegen_bridge._sse import iter_sse
 
 TOKEN = "sdk-test-token"
+
+
+def test_rejects_plaintext_remote_urls_before_transport_use() -> None:
+    called = False
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal called
+        called = True
+        return httpx.Response(
+            200,
+            request=request,
+            headers={"content-type": "application/json"},
+            stream=httpx.ByteStream(b'{"status":"live"}'),
+        )
+
+    transport = httpx.MockTransport(handler)
+    with pytest.raises(ValueError, match="must use HTTPS"):
+        ImagegenBridgeClient("http://10.0.0.2:8787", transport=transport)
+    with pytest.raises(ValueError, match="must use HTTPS"):
+        AsyncImagegenBridgeClient("http://bridge.example", transport=transport)
+    assert not called
+
+    with ImagegenBridgeClient(
+        "http://10.0.0.2:8787",
+        transport=transport,
+        allow_insecure_remote_http=True,
+    ) as client:
+        assert client.health()["status"] == "live"
+    assert called
+
+
+def test_response_body_and_sse_line_limits_precede_decoding() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, request=request, content=b'{"status":"live"}')
+
+    transport = httpx.MockTransport(handler)
+    with (
+        ImagegenBridgeClient(
+            "https://bridge.example", transport=transport, max_response_body_bytes=8
+        ) as client,
+        pytest.raises(BridgeProtocolError, match="response body exceeds"),
+    ):
+        client.health()
+
+    async def scenario() -> None:
+        async with AsyncImagegenBridgeClient(
+            "https://bridge.example", transport=transport, max_response_body_bytes=8
+        ) as client:
+            with pytest.raises(BridgeProtocolError, match="response body exceeds"):
+                await client.health()
+
+    asyncio.run(scenario())
+    with pytest.raises(BridgeProtocolError, match="SSE line exceeded"):
+        list(iter_sse([b":" + b"x" * 9], 8, 32))
+
+
+def test_omitted_timeout_inherits_client_and_explicit_none_disables_it() -> None:
+    observed: list[dict[str, float | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request.extensions["timeout"])
+        return httpx.Response(
+            429,
+            request=request,
+            headers={"content-type": "application/json"},
+            content=b'{"error":{"message":"limited","imagegen_bridge":{"code":"rate_limited"}}}',
+        )
+
+    with ImagegenBridgeClient(
+        "https://bridge.example", transport=httpx.MockTransport(handler), timeout=7.0
+    ) as client:
+        with pytest.raises(BridgeAPIError):
+            client.images.generate(ImageRequest.generate("inherit"))
+        with pytest.raises(BridgeAPIError):
+            client.images.generate(ImageRequest.generate("disable"), timeout=None)
+    assert observed[0]["read"] == 7.0
+    assert observed[1]["read"] is None
+
+    async def scenario() -> None:
+        async with AsyncImagegenBridgeClient(
+            "https://bridge.example", transport=httpx.MockTransport(handler), timeout=9.0
+        ) as client:
+            with pytest.raises(BridgeAPIError):
+                await client.jobs.create(ImageRequest.generate("async inherit"))
+            with pytest.raises(BridgeAPIError):
+                await client.jobs.create(ImageRequest.generate("async disable"), timeout=None)
+
+    asyncio.run(scenario())
+    assert observed[2]["read"] == 9.0
+    assert observed[3]["read"] is None
 
 
 def test_sync_client_matches_shared_http_contract(

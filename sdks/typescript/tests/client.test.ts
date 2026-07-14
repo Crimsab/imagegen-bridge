@@ -1,10 +1,12 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
   BridgeAPIError,
+  BridgeProtocolError,
   type EditImageRequest,
   type GenerateImageRequest,
   ImagegenBridgeClient,
 } from "../src/index.js";
+import { SseDecoder } from "../src/sse.js";
 
 const repositoryRoot = new URL("../../../", import.meta.url).pathname;
 const mockBinary =
@@ -45,6 +47,89 @@ afterAll(async () => {
 });
 
 describe("ImagegenBridgeClient", () => {
+  test("rejects plaintext remote URLs before fetch sees credentials", async () => {
+    let calls = 0;
+    const fetch = (async () => {
+      calls += 1;
+      return new Response('{"status":"live"}', {
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof globalThis.fetch;
+    expect(
+      () =>
+        new ImagegenBridgeClient({
+          baseUrl: "http://10.0.0.2:8787",
+          bearerToken: "secret",
+          fetch,
+        }),
+    ).toThrow("must use HTTPS");
+    expect(calls).toBe(0);
+
+    const allowed = new ImagegenBridgeClient({
+      baseUrl: "http://10.0.0.2:8787",
+      allowInsecureRemoteHttp: true,
+      fetch,
+    });
+    expect((await allowed.health()).status).toBe("live");
+    expect(calls).toBe(1);
+  });
+
+  test("bounds JSON, partial previews, and SSE lines before unbounded buffering", async () => {
+    const oversizedJson = (async () =>
+      new Response('{"status":"live"}', {
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof globalThis.fetch;
+    const client = new ImagegenBridgeClient({
+      baseUrl: "https://bridge.example",
+      fetch: oversizedJson,
+      maxJsonBodyBytes: 8,
+    });
+    await expect(client.health()).rejects.toThrow("JSON body exceeds");
+
+    let partialReads = 0;
+    const partial = (async () =>
+      new Response(
+        new ReadableStream({
+          pull(controller) {
+            partialReads += 1;
+            controller.enqueue(new Uint8Array([1]));
+          },
+        }),
+        {
+          headers: {
+            "content-type": "image/png",
+            "content-length": String(16 * 1024 * 1024 + 1),
+          },
+        },
+      )) as unknown as typeof globalThis.fetch;
+    const partialClient = new ImagegenBridgeClient({
+      baseUrl: "https://bridge.example",
+      fetch: partial,
+    });
+    await expect(partialClient.jobs.partial("job-1")).rejects.toThrow("response body exceeds");
+    expect(partialReads).toBeLessThanOrEqual(1);
+
+    const decoder = new SseDecoder(8, 32);
+    expect(() => decoder.push(new TextEncoder().encode(`:${"x".repeat(9)}`))).toThrow(
+      BridgeProtocolError,
+    );
+  });
+
+  test("rejects redirects instead of forwarding authorization", async () => {
+    let redirectMode: RequestRedirect | undefined;
+    const fetch = (async (_input: URL | RequestInfo, init?: RequestInit) => {
+      redirectMode = init?.redirect;
+      return new Response(null, { status: 302, headers: { location: "http://bridge.example" } });
+    }) as unknown as typeof globalThis.fetch;
+    const client = new ImagegenBridgeClient({
+      baseUrl: "https://bridge.example",
+      bearerToken: "secret",
+      fetch,
+    });
+    await expect(client.health()).rejects.toThrow("redirects are not allowed");
+    expect(redirectMode).toBe("manual");
+  });
+
   test("matches the shared generation, edit, discovery, session, and health contract", async () => {
     const client = new ImagegenBridgeClient({ baseUrl: bridgeUrl, bearerToken: "sdk-test-token" });
     const generated = await client.images.generate(generateFixture);

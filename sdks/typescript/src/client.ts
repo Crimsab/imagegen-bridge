@@ -23,6 +23,10 @@ export interface ImagegenBridgeClientOptions {
   bearerToken?: string;
   timeoutMs?: number;
   maxSseEventBytes?: number;
+  maxSseLineBytes?: number;
+  maxJsonBodyBytes?: number;
+  maxErrorBodyBytes?: number;
+  allowInsecureRemoteHttp?: boolean;
   headers?: Readonly<Record<string, string>>;
   fetch?: typeof globalThis.fetch;
 }
@@ -33,6 +37,8 @@ interface OpenRequest {
 }
 
 const MAX_PARTIAL_PREVIEW_BYTES = 16 * 1024 * 1024;
+const DEFAULT_MAX_JSON_BODY_BYTES = 256 * 1024 * 1024;
+const DEFAULT_MAX_ERROR_BODY_BYTES = 1024 * 1024;
 const IMAGE_CONTENT_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 
 export class ImagesResource {
@@ -94,12 +100,13 @@ export class ImagegenBridgeClient {
   readonly #fetch: typeof globalThis.fetch;
   readonly #headers: Record<string, string>;
   readonly #timeoutMs: number;
+  readonly #maxSseLineBytes: number;
   readonly #maxSseEventBytes: number;
+  readonly #maxJsonBodyBytes: number;
+  readonly #maxErrorBodyBytes: number;
 
   constructor(options: ImagegenBridgeClientOptions) {
-    this.#baseUrl = new URL(
-      options.baseUrl.endsWith("/") ? options.baseUrl : `${options.baseUrl}/`,
-    );
+    this.#baseUrl = validatedBaseUrl(options.baseUrl, options.allowInsecureRemoteHttp ?? false);
     this.#fetch = options.fetch ?? globalThis.fetch;
     if (!this.#fetch) throw new TypeError("a Fetch API implementation is required");
     this.#timeoutMs = positiveInteger(options.timeoutMs ?? 60_000, "timeoutMs");
@@ -107,11 +114,24 @@ export class ImagegenBridgeClient {
       options.maxSseEventBytes ?? 4 * 1024 * 1024,
       "maxSseEventBytes",
     );
+    this.#maxSseLineBytes = positiveInteger(
+      options.maxSseLineBytes ?? 4 * 1024 * 1024,
+      "maxSseLineBytes",
+    );
+    this.#maxJsonBodyBytes = positiveInteger(
+      options.maxJsonBodyBytes ?? DEFAULT_MAX_JSON_BODY_BYTES,
+      "maxJsonBodyBytes",
+    );
+    this.#maxErrorBodyBytes = positiveInteger(
+      options.maxErrorBodyBytes ?? DEFAULT_MAX_ERROR_BODY_BYTES,
+      "maxErrorBodyBytes",
+    );
     this.#headers = {
       accept: "application/json",
       "user-agent": "imagegen-bridge-typescript/0.1.0",
       ...options.headers,
       ...(options.bearerToken ? { authorization: `Bearer ${options.bearerToken}` } : {}),
+      "accept-encoding": "identity",
     };
     this.images = new ImagesResource(this);
     this.jobs = new JobsResource(this);
@@ -136,10 +156,11 @@ export class ImagegenBridgeClient {
       accept: "text/event-stream",
     });
     try {
-      await throwForStatus(opened.response);
+      await throwForStatus(opened.response, this.#maxErrorBodyBytes);
       if (!opened.response.body) throw new BridgeProtocolError("bridge returned an empty SSE body");
+      validateIdentityEncoding(opened.response);
       const reader = opened.response.body.getReader();
-      const decoder = new SseDecoder(this.#maxSseEventBytes);
+      const decoder = new SseDecoder(this.#maxSseLineBytes, this.#maxSseEventBytes);
       try {
         while (true) {
           const item = await reader.read();
@@ -147,6 +168,9 @@ export class ImagegenBridgeClient {
           for (const event of decoder.push(item.value)) yield event;
         }
         for (const event of decoder.finish()) yield event;
+      } catch (error) {
+        await reader.cancel("SSE decoding failed").catch(() => undefined);
+        throw error;
       } finally {
         reader.releaseLock();
       }
@@ -159,7 +183,14 @@ export class ImagegenBridgeClient {
   }
 
   async createJob(request: ImageRequest, options: RequestOptions): Promise<ImageJob> {
-    return imageJob(await this.#json("POST", "v1/jobs", { body: request, options }));
+    const idempotencyKey = options.idempotencyKey ?? request.idempotency_key ?? undefined;
+    return imageJob(
+      await this.#json("POST", "v1/jobs", {
+        body: request,
+        options,
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+      }),
+    );
   }
 
   async getJob(id: string, options: RequestOptions): Promise<ImageJob> {
@@ -197,18 +228,20 @@ export class ImagegenBridgeClient {
       accept: "image/png, image/jpeg, image/webp",
     });
     try {
-      await throwForStatus(opened.response);
+      await throwForStatus(opened.response, this.#maxErrorBodyBytes);
       const contentType = (opened.response.headers.get("content-type") ?? "")
         .split(";", 1)[0]
         ?.trim()
         .toLowerCase();
       if (!contentType || !IMAGE_CONTENT_TYPES.has(contentType))
         throw new BridgeProtocolError("bridge returned an invalid partial image preview");
-      const bytes = new Uint8Array(await opened.response.arrayBuffer());
+      const bytes = await readBoundedBody(
+        opened.response,
+        MAX_PARTIAL_PREVIEW_BYTES,
+        "partial image preview",
+      );
       if (bytes.byteLength === 0)
         throw new BridgeProtocolError("bridge returned an empty partial image preview");
-      if (bytes.byteLength > MAX_PARTIAL_PREVIEW_BYTES)
-        throw new BridgeProtocolError("bridge partial image preview exceeds the SDK limit");
       return bytes;
     } catch (error) {
       if (error instanceof BridgeAPIError || error instanceof BridgeProtocolError) throw error;
@@ -323,9 +356,9 @@ export class ImagegenBridgeClient {
   ): Promise<unknown> {
     const opened = await this.#open(method, path, settings);
     try {
-      await throwForStatus(opened.response);
+      await throwForStatus(opened.response, this.#maxErrorBodyBytes);
       if (settings.allowEmpty && opened.response.status === 204) return null;
-      const value: unknown = await opened.response.json();
+      const value = await readBoundedJson(opened.response, this.#maxJsonBodyBytes);
       if (!record(value))
         throw new BridgeProtocolError("bridge returned a non-object JSON response");
       return value;
@@ -365,24 +398,130 @@ export class ImagegenBridgeClient {
         },
         ...(settings.body ? { body: JSON.stringify(settings.body) } : {}),
         signal: combined.signal,
+        redirect: "manual",
       });
+      if (response.status >= 300 && response.status < 400) {
+        await response.body?.cancel("redirects are not allowed").catch(() => undefined);
+        throw new BridgeProtocolError("bridge redirects are not allowed");
+      }
       return { response, cleanup: combined.cleanup };
     } catch (error) {
       combined.cleanup();
+      if (error instanceof BridgeProtocolError) throw error;
       throw new BridgeTransportError("bridge request failed", { cause: error });
     }
   }
 }
 
-async function throwForStatus(response: Response): Promise<void> {
+async function throwForStatus(response: Response, maximumBytes: number): Promise<void> {
   if (response.ok) return;
   let payload: unknown = null;
   try {
-    payload = await response.json();
-  } catch {
+    payload = await readBoundedJson(response, maximumBytes);
+  } catch (error) {
+    if (error instanceof BridgeProtocolError && error.message !== "bridge returned invalid JSON") {
+      throw error;
+    }
     /* invalid envelopes are normalized below */
   }
   throw BridgeAPIError.fromPayload(response.status, payload);
+}
+
+function validatedBaseUrl(raw: string, allowInsecureRemoteHttp: boolean): URL {
+  const url = new URL(raw.endsWith("/") ? raw : `${raw}/`);
+  if (url.username || url.password) throw new TypeError("baseUrl must not contain user info");
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new TypeError("baseUrl must use HTTP or HTTPS");
+  }
+  const host = url.hostname
+    .replace(/^\[|\]$/g, "")
+    .replace(/\.$/, "")
+    .toLowerCase();
+  const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  const ipv4Loopback =
+    ipv4?.slice(1).every((part) => Number(part) <= 255) === true && Number(ipv4[1]) === 127;
+  const mappedLoopback = /^::ffff:127\.(?:\d{1,3}\.){2}\d{1,3}$/.test(host);
+  const loopback = host === "localhost" || host === "::1" || ipv4Loopback || mappedLoopback;
+  if (url.protocol === "http:" && !loopback && !allowInsecureRemoteHttp) {
+    throw new TypeError("remote baseUrl must use HTTPS");
+  }
+  return url;
+}
+
+function validateIdentityEncoding(response: Response): void {
+  const encoding = (response.headers.get("content-encoding") ?? "").trim().toLowerCase();
+  if (encoding !== "" && encoding !== "identity") {
+    throw new BridgeProtocolError("bridge response body uses unsupported content encoding");
+  }
+}
+
+function validateBodyHeaders(response: Response, maximumBytes: number): void {
+  validateIdentityEncoding(response);
+  const declared = response.headers.get("content-length");
+  if (declared === null) return;
+  if (!/^\d+$/.test(declared)) {
+    throw new BridgeProtocolError("bridge returned an invalid Content-Length");
+  }
+  const length = Number(declared);
+  if (!Number.isSafeInteger(length)) {
+    throw new BridgeProtocolError("bridge returned an invalid Content-Length");
+  }
+  if (length > maximumBytes) {
+    throw new BridgeProtocolError("bridge response body exceeds the SDK limit");
+  }
+}
+
+async function readBoundedBody(
+  response: Response,
+  maximumBytes: number,
+  label = "response body",
+): Promise<Uint8Array> {
+  try {
+    validateBodyHeaders(response, maximumBytes);
+  } catch (error) {
+    await response.body?.cancel(`${label} rejected`).catch(() => undefined);
+    throw error;
+  }
+  if (!response.body) throw new BridgeProtocolError(`bridge returned an empty ${label}`);
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const item = await reader.read();
+      if (item.done) break;
+      if (item.value.byteLength > maximumBytes - total) {
+        await reader.cancel(`${label} exceeds SDK limit`).catch(() => undefined);
+        throw new BridgeProtocolError(`bridge ${label} exceeds the SDK limit`);
+      }
+      chunks.push(item.value.slice());
+      total += item.value.byteLength;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const result = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return result;
+}
+
+async function readBoundedJson(response: Response, maximumBytes: number): Promise<unknown> {
+  const bytes = await readBoundedBody(response, maximumBytes, "JSON body");
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch (error) {
+    throw new BridgeProtocolError("bridge returned invalid UTF-8 JSON", { cause: error });
+  }
+  try {
+    return JSON.parse(text) as unknown;
+  } catch (error) {
+    throw new BridgeProtocolError("bridge returned invalid JSON", { cause: error });
+  }
 }
 
 function imageResponse(value: unknown): ImageResponse {

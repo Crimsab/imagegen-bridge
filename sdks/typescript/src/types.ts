@@ -299,11 +299,14 @@ export interface JobManagerDiagnostics {
   interrupted: number;
   hidden: number;
   database_bytes: number;
+  logical_bytes: number;
   active_workers: number;
   max_pending: number;
   max_running: number;
   retention_secs: number;
   max_retained: number;
+  max_retained_bytes: number;
+  max_database_bytes: number;
 }
 
 export interface ProviderReadiness {

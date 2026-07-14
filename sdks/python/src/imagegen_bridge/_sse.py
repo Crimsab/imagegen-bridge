@@ -48,11 +48,76 @@ def _decode(event_name: str, data: str) -> StreamEvent:
     raise BridgeProtocolError(f"bridge returned unsupported SSE event type {event_type!r}")
 
 
-def iter_sse(lines: Iterable[str], maximum_event_bytes: int) -> Iterator[StreamEvent]:
+def _line_text(line: bytearray) -> str:
+    try:
+        return line.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise BridgeProtocolError("bridge returned invalid UTF-8 in the SSE stream") from error
+
+
+def _iter_sse_lines(chunks: Iterable[bytes], maximum_line_bytes: int) -> Iterator[str]:
+    line = bytearray()
+    pending_cr = False
+    for chunk in chunks:
+        for byte in chunk:
+            if pending_cr:
+                yield _line_text(line)
+                line.clear()
+                pending_cr = False
+                if byte == 0x0A:
+                    continue
+            if byte == 0x0D:
+                pending_cr = True
+            elif byte == 0x0A:
+                yield _line_text(line)
+                line.clear()
+            else:
+                if len(line) >= maximum_line_bytes:
+                    raise BridgeProtocolError("bridge SSE line exceeded the configured byte limit")
+                line.append(byte)
+    if pending_cr:
+        yield _line_text(line)
+        line.clear()
+    if line:
+        yield _line_text(line)
+
+
+async def _aiter_sse_lines(
+    chunks: AsyncIterable[bytes], maximum_line_bytes: int
+) -> AsyncIterator[str]:
+    line = bytearray()
+    pending_cr = False
+    async for chunk in chunks:
+        for byte in chunk:
+            if pending_cr:
+                yield _line_text(line)
+                line.clear()
+                pending_cr = False
+                if byte == 0x0A:
+                    continue
+            if byte == 0x0D:
+                pending_cr = True
+            elif byte == 0x0A:
+                yield _line_text(line)
+                line.clear()
+            else:
+                if len(line) >= maximum_line_bytes:
+                    raise BridgeProtocolError("bridge SSE line exceeded the configured byte limit")
+                line.append(byte)
+    if pending_cr:
+        yield _line_text(line)
+        line.clear()
+    if line:
+        yield _line_text(line)
+
+
+def iter_sse(
+    chunks: Iterable[bytes], maximum_line_bytes: int, maximum_event_bytes: int
+) -> Iterator[StreamEvent]:
     event_name = "message"
     data: list[str] = []
     size = 0
-    for line in lines:
+    for line in _iter_sse_lines(chunks, maximum_line_bytes):
         if line == "":
             if data:
                 yield _decode(event_name, "\n".join(data))
@@ -75,12 +140,12 @@ def iter_sse(lines: Iterable[str], maximum_event_bytes: int) -> Iterator[StreamE
 
 
 async def aiter_sse(
-    lines: AsyncIterable[str], maximum_event_bytes: int
+    chunks: AsyncIterable[bytes], maximum_line_bytes: int, maximum_event_bytes: int
 ) -> AsyncIterator[StreamEvent]:
     event_name = "message"
     data: list[str] = []
     size = 0
-    async for line in lines:
+    async for line in _aiter_sse_lines(chunks, maximum_line_bytes):
         if line == "":
             if data:
                 yield _decode(event_name, "\n".join(data))

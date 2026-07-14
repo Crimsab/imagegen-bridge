@@ -43,3 +43,16 @@ visibility, favorite state, and literal prompt search.
 `diagnostics()` returns the same typed, redaction-safe operator snapshot used by
 the embedded dashboard; it never includes credential values, prompts, or host
 paths.
+
+Plain HTTP is accepted only for literal loopback addresses and `localhost`.
+Remote bridge URLs must use HTTPS unless the caller explicitly sets
+`allow_insecure_remote_http=True`, which disables transport confidentiality and
+server authentication. Redirects remain governed by HTTPX and should not be
+enabled for credential-bearing clients.
+
+Per-call `timeout` omission inherits the timeout configured on the client;
+passing `None` explicitly disables HTTPX timeouts for that call, while a number
+or `httpx.Timeout` overrides them. Ordinary JSON bodies, error bodies, partial
+previews, SSE lines, and aggregate SSE events have independent configurable
+limits and are counted while streaming. `Idempotency-Key` can be supplied with
+`idempotency_key=` to both image and durable-job creation methods.

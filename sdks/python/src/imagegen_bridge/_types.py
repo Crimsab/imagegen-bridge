@@ -504,11 +504,14 @@ class JobManagerDiagnostics:
     interrupted: int
     hidden: int
     database_bytes: int
+    logical_bytes: int
     active_workers: int
     max_pending: int
     max_running: int
     retention_secs: int
     max_retained: int
+    max_retained_bytes: int
+    max_database_bytes: int
 
 
 @dataclass(frozen=True, slots=True)
