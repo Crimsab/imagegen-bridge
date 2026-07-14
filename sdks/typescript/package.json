@@ -1,8 +1,23 @@
 {
-  "name": "@imagegen-bridge/typescript",
+  "name": "imagegen-bridge",
   "version": "0.1.0",
   "description": "Typed Bun and Node SDK for Imagegen Bridge",
-  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Crimsab/imagegen-bridge.git",
+    "directory": "sdks/typescript"
+  },
+  "homepage": "https://github.com/Crimsab/imagegen-bridge#readme",
+  "bugs": {
+    "url": "https://github.com/Crimsab/imagegen-bridge/issues"
+  },
+  "keywords": [
+    "image-generation",
+    "codex",
+    "openai",
+    "sdk"
+  ],
   "type": "module",
   "sideEffects": false,
   "files": [
@@ -20,6 +35,10 @@
   "engines": {
     "node": ">=20",
     "bun": ">=1.2"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

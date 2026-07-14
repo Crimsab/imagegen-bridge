@@ -5,7 +5,11 @@
 
 **Use an existing Codex OAuth login for image generation through a CLI, local API, dashboard, or typed SDK.**
 
-[Quick start](#quick-start) · [CLI](docs/cli.md) · [HTTP API](docs/api.md) · [SDKs](docs/sdks.md) · [Deployment](docs/deployment.md)
+[![CI](https://github.com/Crimsab/imagegen-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/Crimsab/imagegen-bridge/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-2f855a.svg)](LICENSE)
+[![MSRV: 1.94](https://img.shields.io/badge/MSRV-1.94-93450a.svg)](rust-toolchain.toml)
+
+[Install](#install) · [Quick start](#quick-start) · [CLI](docs/cli.md) · [HTTP API](docs/api.md) · [SDKs](docs/sdks.md) · [Deployment](docs/deployment.md)
 
 </div>
 
@@ -15,15 +19,12 @@ Imagegen Bridge turns an existing Codex OAuth login into a command-line tool,
 local HTTP service, embedded dashboard, and typed Rust, Python, and TypeScript
 clients. Codex-backed usage does not require an `OPENAI_API_KEY`.
 
-> **Pre-release:** build from source. Crates, Python wheels, npm packages,
-> binaries, and container images are not published yet.
-
 ### Choose a Codex transport
 
 | Transport | Status | Best for | Main constraint |
 | --- | --- | --- | --- |
 | `codex-app-server` | Default | Supported Codex lifecycle, reference images, edits, and reusable threads | The current image tool exposes a small automatic parameter set |
-| `codex-responses` | Opt-in, experimental | Model selection and more image controls | Uses a private upstream protocol that may change without notice |
+| `codex-responses` | Opt-in, live-tested experimental | Model selection and more image controls | Uses a private upstream protocol that may change without notice |
 
 ## Capabilities
 
@@ -60,6 +61,25 @@ clients. Codex-backed usage does not require an `OPENAI_API_KEY`.
 The configuration reserves an official OpenAI provider section, but an
 API-key-backed OpenAI provider is not implemented or registered.
 
+## Install
+
+Version tags create platform CLI archives with checksums and publish the Rust,
+Python, TypeScript, and container packages. The package names are consistent
+across registries:
+
+| Surface | Install command |
+| --- | --- |
+| CLI | `cargo install imagegen-bridge-cli` |
+| Rust SDK | `cargo add imagegen-bridge` |
+| Python SDK | `uv add imagegen-bridge` |
+| TypeScript SDK | `bun add imagegen-bridge` |
+| Container | `docker pull ghcr.io/crimsab/imagegen-bridge:latest` |
+| Agent skill | `npx skills add Crimsab/imagegen-bridge --skill generate-images-with-bridge` |
+
+Binary archives are attached to [GitHub Releases](https://github.com/Crimsab/imagegen-bridge/releases).
+Registry setup and the tag-driven publication process are documented in
+[docs/releasing.md](docs/releasing.md).
+
 ## Quick start
 
 Requirements:
@@ -69,12 +89,10 @@ Requirements:
 - An existing Codex OAuth login (`codex login`) for live generation.
 
 ```sh
-git clone git@github.com:Crimsab/imagegen-bridge.git
-cd imagegen-bridge
-cargo build --locked --release -p imagegen-bridge-cli
-./target/release/imagegen-bridge setup
-./target/release/imagegen-bridge doctor
-./target/release/imagegen-bridge generate \
+cargo install imagegen-bridge-cli
+imagegen-bridge setup
+imagegen-bridge doctor
+imagegen-bridge generate \
   "A red paper fox on a charcoal background" \
   --output first-image.png \
   --preview
@@ -97,6 +115,22 @@ confirmed. Use
 for automation. `doctor` checks the executable/version, configuration, OAuth,
 permissions, database schema, listener availability, provider readiness, and
 dynamic capabilities. `doctor --live-probe` adds one confirmed paid generation.
+
+### Docker Compose
+
+The repository also includes a hardened non-root Compose deployment:
+
+```sh
+git clone https://github.com/Crimsab/imagegen-bridge.git
+cd imagegen-bridge
+export IMAGEGEN_BRIDGE_BEARER_TOKEN="$(openssl rand -hex 32)"
+export IMAGEGEN_BRIDGE_CODEX_HOME="$HOME/.codex"
+docker compose up --build -d
+curl --fail http://127.0.0.1:8787/health/live
+```
+
+Read [docs/deployment.md](docs/deployment.md) before exposing the listener or
+mounting Codex credentials into a shared environment.
 
 ## CLI usage
 
@@ -411,7 +445,7 @@ separate from the upstream Codex OAuth credential. See
 | Python SDK | `sdks/python` | Sync/async HTTPX client, typed models, SSE |
 | TypeScript SDK | `sdks/typescript` | Dependency-free Fetch client for Bun/Node |
 | OpenAPI/JSON Schema | `schemas/` | Generated wire contracts |
-| Agent skill | `integrations/generate-images-with-bridge` | Capability discovery, CLI invocation, verified absolute local artifact paths |
+| Agent skill | `skills/generate-images-with-bridge` | Capability discovery, CLI invocation, verified absolute local artifact paths |
 | Container | `Dockerfile`, `compose.yaml` | Bridge and pinned Codex CLI |
 
 Examples and package build commands are in [docs/sdks.md](docs/sdks.md). The
@@ -419,11 +453,11 @@ OpenAI-familiar routes make migration from a subset of Images API calls small,
 while the native route preserves sessions, normalizations, timings, warnings,
 and verified artifact metadata.
 
-The bundled agent skill is opt-in and does not modify the repository workspace:
+The bundled agent skill is discoverable by the open Skills CLI and can be
+installed for Codex or another supported agent:
 
 ```sh
-mkdir -p ~/.agents/skills
-cp -R integrations/generate-images-with-bridge ~/.agents/skills/
+npx skills add Crimsab/imagegen-bridge --skill generate-images-with-bridge
 ```
 
 It discovers live capabilities, calls the local CLI, and returns verified
@@ -462,6 +496,9 @@ export IMAGEGEN_BRIDGE_CODEX_HOME="$PWD/deploy/codex-home"
 docker compose up --build -d
 ```
 
+Tagged releases also publish a multi-architecture image for Linux AMD64 and
+ARM64 at `ghcr.io/crimsab/imagegen-bridge`.
+
 Read [docs/deployment.md](docs/deployment.md) before mounting Codex credentials
 or exposing the API on a network.
 
@@ -481,12 +518,15 @@ Live Codex tests are ignored unless their explicit environment gates are set:
 `IMAGEGEN_BRIDGE_LIVE_CODEX=1`, `IMAGEGEN_BRIDGE_LIVE_CODEX_RESPONSES=1`, or
 `IMAGEGEN_BRIDGE_LIVE_BOOTSTRAP=1`. The exact offline, SDK, container, browser,
 and live-OAuth matrix is documented in [docs/testing.md](docs/testing.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 
 ## Security and upstream status
 
-The direct Responses adapter uses a private ChatGPT/Codex endpoint. It may stop
-working when the upstream protocol changes and is deliberately marked
-experimental in discovery responses. The app-server adapter is the default.
+The direct Responses adapter uses a private ChatGPT/Codex endpoint. Its gated
+live test performs a real advanced image request and verifies the returned
+bytes; “experimental” describes upstream protocol stability, not missing test
+coverage. The adapter may still stop working when that private protocol
+changes. The app-server adapter remains the default.
 
 Do not commit `auth.json`, mount an entire home directory into the container, or
 bind an unauthenticated bridge to a public interface. Imagegen Bridge does not
@@ -496,5 +536,4 @@ the prompt or input images; the unchanged request is not retried automatically.
 
 ## License
 
-Licensed under either the Apache License 2.0 or the MIT License, at your option.
-See [LICENSE-APACHE](LICENSE-APACHE) and [LICENSE-MIT](LICENSE-MIT).
+Licensed under the [MIT License](LICENSE).

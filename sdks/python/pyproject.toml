@@ -8,17 +8,22 @@ version = "0.1.0"
 description = "Typed sync and async Python SDK for Imagegen Bridge"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT OR Apache-2.0" }
+license = "MIT"
 authors = [{ name = "Imagegen Bridge contributors" }]
 dependencies = ["httpx>=0.27,<1"]
 classifiers = [
   "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3 :: Only",
   "Typing :: Typed",
 ]
+keywords = ["image-generation", "codex", "openai", "sdk"]
 
 [project.urls]
+Homepage = "https://github.com/Crimsab/imagegen-bridge"
 Repository = "https://github.com/Crimsab/imagegen-bridge"
+Issues = "https://github.com/Crimsab/imagegen-bridge/issues"
+Documentation = "https://github.com/Crimsab/imagegen-bridge/blob/main/docs/sdks.md"
 
 [project.optional-dependencies]
 test = [

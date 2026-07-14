@@ -1,0 +1,166 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify release
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master, resolved 2026-07-14
+        with:
+          toolchain: 1.94.0
+
+      - name: Match package versions to tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          cargo metadata --no-deps --format-version 1 |
+            jq -e --arg version "$version" 'all(.packages[]; .version == $version)'
+          python3 - "$version" <<'PY'
+          import pathlib
+          import sys
+          import tomllib
+
+          version = sys.argv[1]
+          data = tomllib.loads(pathlib.Path("sdks/python/pyproject.toml").read_text())
+          assert data["project"]["version"] == version
+          PY
+          node -e 'const p=require("./sdks/typescript/package.json"); if(p.version!==process.argv[1]) process.exit(1)' "$version"
+
+      - name: Test Rust workspace
+        run: cargo test --locked --workspace --all-targets
+
+      - name: Validate publishable crates
+        run: >-
+          cargo publish --locked --workspace --dry-run
+          --exclude imagegen-bridge-schema-gen
+          --exclude imagegen-bridge-sdk-mock-server
+
+  binaries:
+    name: Binary · ${{ matrix.name }}
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            windows: false
+          - name: linux-aarch64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            windows: false
+          - name: macos-aarch64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            windows: false
+          - name: macos-x86_64
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            windows: false
+          - name: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            windows: true
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master, resolved 2026-07-14
+        with:
+          toolchain: 1.94.0
+          targets: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --locked --release --target ${{ matrix.target }} -p imagegen-bridge-cli --bin imagegen-bridge
+
+      - name: Package Unix binary
+        if: ${{ !matrix.windows }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset="imagegen-bridge-${GITHUB_REF_NAME}-${{ matrix.name }}"
+          mkdir -p "dist/$asset"
+          install -m 0755 "target/${{ matrix.target }}/release/imagegen-bridge" "dist/$asset/imagegen-bridge"
+          cp LICENSE README.md "dist/$asset/"
+          tar -C dist -czf "dist/$asset.tar.gz" "$asset"
+          rm -rf "dist/$asset"
+
+      - name: Package Windows binary
+        if: ${{ matrix.windows }}
+        shell: pwsh
+        run: |
+          $asset = "imagegen-bridge-$env:GITHUB_REF_NAME-${{ matrix.name }}"
+          New-Item -ItemType Directory -Force -Path "dist/$asset" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/imagegen-bridge.exe" "dist/$asset/imagegen-bridge.exe"
+          Copy-Item LICENSE, README.md "dist/$asset/"
+          Compress-Archive -Path "dist/$asset" -DestinationPath "dist/$asset.zip"
+          Remove-Item -Recurse -Force "dist/$asset"
+
+      - name: Upload release archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  github-release:
+    name: GitHub Release
+    needs: binaries
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: write
+    steps:
+      - name: Download release archives
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        working-directory: dist
+        run: sha256sum imagegen-bridge-* > SHA256SUMS
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME" dist/*
+          --repo "$GITHUB_REPOSITORY"
+          --verify-tag
+          --generate-notes
+          --title "Imagegen Bridge $GITHUB_REF_NAME"
+
+      - name: Start package publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh workflow run publish.yml
+          --repo "$GITHUB_REPOSITORY"
+          --ref main
+          --field tag="$GITHUB_REF_NAME"

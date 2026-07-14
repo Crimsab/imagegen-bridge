@@ -19,9 +19,10 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Imagegen Bridge contributors"]
-license = "MIT OR Apache-2.0"
+license = "MIT"
 repository = "https://github.com/Crimsab/imagegen-bridge"
 homepage = "https://github.com/Crimsab/imagegen-bridge"
+readme = "README.md"
 keywords = ["image-generation", "codex", "openai", "bridge"]
 categories = ["api-bindings", "command-line-utilities", "multimedia::images"]
 

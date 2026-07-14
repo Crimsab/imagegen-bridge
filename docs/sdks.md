@@ -13,6 +13,10 @@ runtime, and artifact crates. `BridgeApplication::from_config` assembles enabled
 first-party providers; `BridgeApplication::builder` accepts third-party
 `ImageProvider` implementations while retaining the common runtime.
 
+```sh
+cargo add imagegen-bridge
+```
+
 ```rust,no_run
 use imagegen_bridge::{BridgeApplication, config::BridgeConfig};
 
@@ -33,6 +37,10 @@ The package in `sdks/python` supports Python 3.10+, sync and async HTTPX
 clients, bounded SSE streaming, deadlines, structured errors, and every native
 discovery/session endpoint. It ships `py.typed`, frozen dataclass models, and
 wheel/sdist metadata.
+
+```sh
+uv add imagegen-bridge
+```
 
 ```python
 from imagegen_bridge import (
@@ -92,8 +100,12 @@ The dependency-free ESM package in `sdks/typescript` targets Bun 1.2+ and Node
 20+. It uses the runtime Fetch API, supports `AbortSignal`, request deadlines,
 bounded fragmented SSE, strict declarations, and structured errors.
 
+```sh
+bun add imagegen-bridge
+```
+
 ```ts
-import { ImagegenBridgeClient } from "@imagegen-bridge/typescript";
+import { ImagegenBridgeClient } from "imagegen-bridge";
 
 const client = new ImagegenBridgeClient({
   baseUrl: "http://127.0.0.1:8787",
@@ -145,8 +157,9 @@ Python and TypeScript tests launch the same Rust black-box server in
 fixture server itself deserializes request, response, capability, and session
 fixtures with the Rust domain types. This catches drift in either direction.
 
-CI validates Rust docs/types, Python Ruff+mypy+pytest+wheel/sdist, TypeScript
-Biome+strict TypeScript+Bun tests+Node smoke test+package contents. Packages are
-built and inspected in CI, but none are published yet. Python build isolation
-uses an exact backend and a committed hash-checked closure; external GitHub
-Actions are pinned to reviewed full commit SHAs.
+CI validates Rust docs/types and publishable crates, Python
+Ruff+mypy+pytest+wheel/sdist, and TypeScript Biome+strict TypeScript+Bun
+tests+Node smoke test+package contents. A tagged GitHub Release publishes each
+registry package from the same versioned source. Python build isolation uses an
+exact backend and a committed hash-checked closure; external GitHub Actions are
+pinned to reviewed full commit SHAs.

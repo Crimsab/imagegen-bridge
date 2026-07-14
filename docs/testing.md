@@ -58,7 +58,7 @@ Run only the gate being evaluated.
 
 ```sh
 IMAGEGEN_BRIDGE_LIVE_BOOTSTRAP=1 \
-  cargo test --locked -p imagegen-bridge \
+  cargo test --locked -p imagegen-bridge --features codex-responses \
   live_config_bootstrap_reports_both_codex_providers_ready -- --ignored
 
 IMAGEGEN_BRIDGE_LIVE_CODEX=1 \

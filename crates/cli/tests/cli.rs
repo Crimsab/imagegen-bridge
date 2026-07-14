@@ -96,7 +96,7 @@ fn local_artifact_paths_are_explicit_json_only_generation_output() {
 
 #[test]
 fn shipped_agent_skill_is_well_formed_and_uses_the_local_path_contract() {
-    let skill = include_str!("../../../integrations/generate-images-with-bridge/SKILL.md");
+    let skill = include_str!("../../../skills/generate-images-with-bridge/SKILL.md");
     assert!(skill.starts_with("---\nname: generate-images-with-bridge\n"));
     assert!(skill.contains("<objective>"));
     assert!(skill.contains("<quick_start>"));

@@ -39,7 +39,7 @@ LABEL org.opencontainers.image.title="Imagegen Bridge" \
       org.opencontainers.image.description="Provider-neutral Codex OAuth image-generation bridge" \
       org.opencontainers.image.source="https://github.com/Crimsab/imagegen-bridge" \
       org.opencontainers.image.version="${IMAGE_VERSION}" \
-      org.opencontainers.image.licenses="MIT OR Apache-2.0"
+      org.opencontainers.image.licenses="MIT"
 
 RUN apt-get update && \
     apt-get install --yes --no-install-recommends ca-certificates curl tini tzdata && \

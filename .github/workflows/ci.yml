@@ -1,8 +1,10 @@
 name: CI
 
-# Automatic CI is intentionally paused while the repository is private.
-# Restore push/pull_request triggers before the public release gate.
 on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -15,7 +17,7 @@ concurrency:
 jobs:
   rust:
     name: Rust contract
-    runs-on: [self-hosted, Linux, X64, homelab-main, imagegen-bridge]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
       RUSTFLAGS: -D warnings
@@ -48,9 +50,15 @@ jobs:
       - name: Build documentation
         run: cargo doc --locked --workspace --no-deps
 
+      - name: Validate publishable crates
+        run: >-
+          cargo publish --locked --workspace --dry-run
+          --exclude imagegen-bridge-schema-gen
+          --exclude imagegen-bridge-sdk-mock-server
+
   python-sdk:
     name: Python SDK
-    runs-on: [self-hosted, Linux, X64, homelab-main, imagegen-bridge]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Check out repository
@@ -99,7 +107,7 @@ jobs:
 
   typescript-sdk:
     name: TypeScript SDK
-    runs-on: [self-hosted, Linux, X64, homelab-main, imagegen-bridge]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Check out repository
@@ -146,9 +154,12 @@ jobs:
         working-directory: sdks/typescript
         run: bun pm pack --dry-run --quiet
 
+      - name: Validate agent skill discovery
+        run: bunx skills@1.5.17 add . --list | grep -q generate-images-with-bridge
+
   container:
     name: Hardened container
-    runs-on: [self-hosted, Linux, X64, homelab-main, imagegen-bridge]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - name: Check out repository

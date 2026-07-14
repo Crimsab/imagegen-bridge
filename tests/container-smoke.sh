@@ -197,7 +197,7 @@ wait_until_ready() {
   attempt=0
   until curl --fail --silent "$BASE_URL/health/ready" | grep -q '"status":"ready"'; do
     attempt=$((attempt + 1))
-    if [ "$attempt" -ge 100 ]; then
+    if [ "$attempt" -ge 300 ]; then
       docker logs --tail 100 "$NAME" >&2
       return 1
     fi
@@ -208,7 +208,7 @@ wait_until_ready() {
 attempt=0
 until curl --fail --silent "$BASE_URL/health/live" >/dev/null; do
   attempt=$((attempt + 1))
-  if [ "$attempt" -ge 100 ]; then
+  if [ "$attempt" -ge 300 ]; then
     docker logs --tail 100 "$NAME" >&2
     exit 1
   fi
@@ -250,7 +250,7 @@ refresh_base_url
 attempt=0
 until curl --fail --silent "$BASE_URL/health/live" >/dev/null; do
   attempt=$((attempt + 1))
-  if [ "$attempt" -ge 100 ]; then
+  if [ "$attempt" -ge 300 ]; then
     docker logs --tail 100 "$NAME" >&2
     exit 1
   fi

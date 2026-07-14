@@ -2,10 +2,14 @@
 
 Dependency-free ESM client for Bun and Node 20+, with strict request/response
 types, `AbortSignal`, request deadlines, bounded SSE parsing, and structured
-errors. The package is not published yet; build it from this repository.
+errors.
+
+```sh
+bun add imagegen-bridge
+```
 
 ```ts
-import { ImagegenBridgeClient } from "@imagegen-bridge/typescript";
+import { ImagegenBridgeClient } from "imagegen-bridge";
 
 const bridge = new ImagegenBridgeClient({ baseUrl: "http://127.0.0.1:8787" });
 const result = await bridge.images.generate({

@@ -1,7 +1,11 @@
 # Imagegen Bridge Python SDK
 
 Typed sync and async clients for the normalized Imagegen Bridge HTTP API. The
-package is not published yet; build it from this repository.
+package targets Python 3.10 and newer.
+
+```sh
+uv add imagegen-bridge
+```
 
 ```python
 from imagegen_bridge import (
