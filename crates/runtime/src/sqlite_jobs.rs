@@ -309,7 +309,7 @@ impl SqliteImageJobStore {
         let submission_key_hash = request
             .idempotency_key
             .as_deref()
-            .map(|key| format!("{:x}", Sha256::digest(key.as_bytes())));
+            .map(|key| base16ct::lower::encode_string(&Sha256::digest(key.as_bytes())));
         let request_fingerprint = submission_key_hash
             .as_ref()
             .map(|_| durable_request_fingerprint(request))
@@ -1108,7 +1108,7 @@ fn durable_request_fingerprint(request: &ImageRequest) -> Result<String, BridgeE
     canonical.timeout_ms = None;
     let encoded = serde_json::to_vec(&canonical)
         .map_err(|_| job_error("could not fingerprint durable job request"))?;
-    Ok(format!("{:x}", Sha256::digest(encoded)))
+    Ok(base16ct::lower::encode_string(&Sha256::digest(encoded)))
 }
 
 fn validate_auth_scope(scope: &str) -> Result<(), BridgeError> {

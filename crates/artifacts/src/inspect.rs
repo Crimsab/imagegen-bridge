@@ -95,7 +95,7 @@ pub fn inspect_image(bytes: &[u8], limits: ImageLimits) -> Result<ImageMetadata,
         return Err(image_error("image headers and decoded dimensions disagree"));
     }
 
-    let sha256 = format!("{:x}", Sha256::digest(bytes));
+    let sha256 = base16ct::lower::encode_string(&Sha256::digest(bytes));
     Ok(ImageMetadata {
         format,
         width,

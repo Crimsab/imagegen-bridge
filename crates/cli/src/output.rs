@@ -315,7 +315,8 @@ mod tests {
             id: "artifact-1".to_owned(),
             name: Some("agent/result.png".to_owned()),
         };
-        response.data[0].sha256 = format!("{:x}", sha2::Sha256::digest(b"verified image fixture"));
+        response.data[0].sha256 =
+            base16ct::lower::encode_string(&sha2::Sha256::digest(b"verified image fixture"));
         response.data[0].metadata_name = Some("agent/result.png.json".to_owned());
 
         let result = local_artifact_result(&response, &root, 1024).expect("local result");

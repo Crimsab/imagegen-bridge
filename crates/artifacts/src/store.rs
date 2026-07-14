@@ -363,7 +363,8 @@ impl ArtifactStore {
             .and_then(Path::to_str)
             .map_or_else(|| filename.clone(), |parent| format!("{parent}/{filename}"));
         candidate.record.sidecar_name = Some(portable_name.clone());
-        candidate.record.sidecar_sha256 = Some(format!("{:x}", Sha256::digest(encoded)));
+        candidate.record.sidecar_sha256 =
+            Some(base16ct::lower::encode_string(&Sha256::digest(encoded)));
         if let Err(error) = self.replace_ownership(&candidate.record) {
             let _ = fs::remove_file(&destination);
             let _ = sync_directory(directory);
@@ -722,7 +723,7 @@ impl ArtifactStore {
             return Err(());
         }
         let bytes = fs::read(&candidate.artifact).map_err(|_| ())?;
-        let digest = format!("{:x}", Sha256::digest(&bytes));
+        let digest = base16ct::lower::encode_string(&Sha256::digest(&bytes));
         if digest != candidate.record.sha256 || inspect_image(&bytes, self.limits).is_err() {
             return Err(());
         }
@@ -745,7 +746,7 @@ impl ArtifactStore {
                 let Ok(encoded) = fs::read(sidecar) else {
                     return SidecarState::Invalid;
                 };
-                if format!("{:x}", Sha256::digest(&encoded)) != *expected
+                if base16ct::lower::encode_string(&Sha256::digest(&encoded)) != *expected
                     || !matches!(
                         serde_json::from_slice::<serde_json::Value>(&encoded),
                         Ok(serde_json::Value::Object(_))
