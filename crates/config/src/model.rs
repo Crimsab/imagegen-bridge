@@ -439,6 +439,8 @@ pub struct ServerSettings {
     pub metrics: MetricsSettings,
     /// Structured content-safe tracing for the standalone server.
     pub tracing: TracingSettings,
+    /// Durable asynchronous generation job settings.
+    pub jobs: JobSettings,
 }
 
 impl Default for ServerSettings {
@@ -452,6 +454,38 @@ impl Default for ServerSettings {
             read_timeout_ms: 30_000,
             metrics: MetricsSettings::default(),
             tracing: TracingSettings::default(),
+            jobs: JobSettings::default(),
+        }
+    }
+}
+
+/// Durable asynchronous generation job storage and execution bounds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct JobSettings {
+    /// Enable durable job and history routes.
+    pub enabled: bool,
+    /// `SQLite` database for job state and the rebuildable history index.
+    pub database: PathBuf,
+    /// Maximum queued jobs retained before admission rejects submissions.
+    pub max_pending: usize,
+    /// Maximum jobs dispatched concurrently by the background worker.
+    pub max_running: usize,
+    /// Completed job retention in seconds.
+    pub retention_secs: u64,
+    /// Maximum terminal jobs retained after cleanup.
+    pub max_retained: usize,
+}
+
+impl Default for JobSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            database: PathBuf::from("./data/jobs.sqlite3"),
+            max_pending: 1_000,
+            max_running: 4,
+            retention_secs: 7 * 24 * 60 * 60,
+            max_retained: 10_000,
         }
     }
 }

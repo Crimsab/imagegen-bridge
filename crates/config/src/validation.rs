@@ -271,6 +271,19 @@ impl BridgeConfig {
                 "server request and connection limits must be greater than zero",
             );
         }
+        if self.server.jobs.enabled
+            && (self.server.jobs.database.as_os_str().is_empty()
+                || self.server.jobs.max_pending == 0
+                || self.server.jobs.max_running == 0
+                || self.server.jobs.retention_secs == 0
+                || self.server.jobs.max_retained == 0)
+        {
+            issue(
+                "server.jobs",
+                "out_of_range",
+                "enabled job storage paths and limits must be non-empty and greater than zero",
+            );
+        }
 
         let enabled: BTreeSet<_> = [
             app.enabled.then_some("codex-app-server"),
