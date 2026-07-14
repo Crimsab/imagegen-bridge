@@ -101,7 +101,10 @@ credential, or artifact data. Every data API and artifact request remains under
 the normal bridge bearer policy. A token entered in the Connection dialog is
 stored only in the tab's `sessionStorage`. Responses use a self-only content
 security policy, deny framing, disable referrers, and do not permit inline script
-or style execution. Disabling `server.jobs.enabled` removes all dashboard routes.
+or style execution. Protected routes reject `Sec-Fetch-Site` cross-site and
+same-site requests. When a browser sends `Origin`, its authority must match
+`Host` exactly. Requests from CLI and SDK clients remain valid without either
+browser header. Disabling `server.jobs.enabled` removes all dashboard routes.
 
 Native multi-image requests accept `parameters.failure_policy` as `fail_fast`
 or `best_effort`. Results retain the requested `index` and optional

@@ -207,7 +207,10 @@ bounded redacted operator event history. The copied folder is relative to the
 configured artifact root; the browser never receives a host filesystem path.
 When bridge bearer authentication is enabled, enter the
 token in the Connection dialog; it is kept in `sessionStorage` for that browser
-tab and is never placed in a URL. The HTML shell contains no job or prompt data.
+tab and is never placed in a URL. Protected routes reject cross-site browser
+requests and require an exact `Origin`/`Host` authority match whenever an
+`Origin` header is present; CLI and SDK requests without browser origin headers
+remain supported. The HTML shell contains no job or prompt data.
 
 Minimal native request:
 

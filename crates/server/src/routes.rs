@@ -1289,6 +1289,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn protected_api_rejects_cross_origin_browser_requests() {
+        let app = test_router(Some("bridge-secret"));
+        let rejected = app
+            .clone()
+            .oneshot(
+                Request::get("/v1/providers")
+                    .header(header::HOST, "bridge.local:8787")
+                    .header(header::ORIGIN, "https://attacker.example")
+                    .header("sec-fetch-site", "cross-site")
+                    .header(header::AUTHORIZATION, "Bearer bridge-secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
+        let body = rejected.into_body().collect().await.unwrap().to_bytes();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["error"]["code"], "permission_denied");
+        assert_eq!(
+            value["error"]["message"],
+            "cross-origin browser requests are not allowed"
+        );
+
+        let accepted = app
+            .oneshot(
+                Request::get("/v1/providers")
+                    .header(header::HOST, "bridge.local:8787")
+                    .header(header::ORIGIN, "http://bridge.local:8787")
+                    .header("sec-fetch-site", "same-origin")
+                    .header(header::AUTHORIZATION, "Bearer bridge-secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(accepted.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
     async fn native_execution_returns_verified_response() {
         let app = test_router(None);
         let response = app

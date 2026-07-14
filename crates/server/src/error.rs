@@ -109,6 +109,16 @@ impl ApiError {
         )
     }
 
+    pub(crate) fn browser_origin_forbidden(request_id: RequestId) -> Self {
+        Self::from_bridge(
+            BridgeError::new(
+                ErrorCode::PermissionDenied,
+                "cross-origin browser requests are not allowed",
+            ),
+            request_id,
+        )
+    }
+
     pub(crate) const fn with_status(mut self, status: StatusCode) -> Self {
         self.status = status;
         self

@@ -2,7 +2,7 @@
 
 use axum::{
     extract::{Request, State},
-    http::{StatusCode, header},
+    http::{StatusCode, Uri, header},
     middleware::Next,
     response::{IntoResponse, Response},
 };
@@ -54,6 +54,11 @@ pub(crate) async fn authorize(
         .get::<RequestId>()
         .cloned()
         .unwrap_or_else(RequestId::new);
+    if !browser_origin_allowed(&request) {
+        return ApiError::browser_origin_forbidden(request_id)
+            .with_status(StatusCode::FORBIDDEN)
+            .into_response();
+    }
     let scope = match &state.auth {
         None => "anonymous-local".to_owned(),
         Some(policy) => {
@@ -78,4 +83,110 @@ pub(crate) async fn authorize(
     };
     request.extensions_mut().insert(AuthScope(scope));
     next.run(request).await
+}
+
+fn browser_origin_allowed(request: &Request) -> bool {
+    let fetch_sites = request.headers().get_all("sec-fetch-site");
+    let mut fetch_sites = fetch_sites.iter();
+    if let Some(value) = fetch_sites.next() {
+        if fetch_sites.next().is_some() {
+            return false;
+        }
+        let Ok(value) = value.to_str() else {
+            return false;
+        };
+        if !matches!(value, "same-origin" | "none") {
+            return false;
+        }
+    }
+
+    let origins = request.headers().get_all(header::ORIGIN);
+    let mut origins = origins.iter();
+    let Some(origin) = origins.next() else {
+        // Non-browser CLI and SDK requests do not send Origin.
+        return true;
+    };
+    if origins.next().is_some() {
+        return false;
+    }
+    let (Ok(origin), Some(host)) = (
+        origin.to_str(),
+        request
+            .headers()
+            .get(header::HOST)
+            .and_then(|value| value.to_str().ok()),
+    ) else {
+        return false;
+    };
+    let Ok(origin) = origin.parse::<Uri>() else {
+        return false;
+    };
+    let Some(scheme) = origin.scheme_str() else {
+        return false;
+    };
+    if !matches!(scheme, "http" | "https") || origin.query().is_some() {
+        return false;
+    }
+    if !matches!(origin.path(), "" | "/") {
+        return false;
+    }
+    origin
+        .authority()
+        .is_some_and(|authority| authority.as_str().eq_ignore_ascii_case(host))
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use axum::{body::Body, http::Request};
+
+    use super::browser_origin_allowed;
+
+    #[test]
+    fn allows_non_browser_and_exact_same_origin_requests() {
+        let sdk = Request::get("/v1/providers").body(Body::empty()).unwrap();
+        assert!(browser_origin_allowed(&sdk));
+
+        let dashboard = Request::post("/v1/jobs")
+            .header("host", "bridge.local:8787")
+            .header("origin", "http://bridge.local:8787")
+            .header("sec-fetch-site", "same-origin")
+            .body(Body::empty())
+            .unwrap();
+        assert!(browser_origin_allowed(&dashboard));
+    }
+
+    #[test]
+    fn rejects_cross_origin_and_ambiguous_browser_requests() {
+        for request in [
+            Request::post("/v1/jobs")
+                .header("host", "bridge.local:8787")
+                .header("origin", "https://attacker.example")
+                .body(Body::empty())
+                .unwrap(),
+            Request::post("/v1/jobs")
+                .header("host", "bridge.local:8787")
+                .header("origin", "null")
+                .body(Body::empty())
+                .unwrap(),
+            Request::post("/v1/jobs")
+                .header("host", "bridge.local:8787")
+                .header("origin", "http://bridge.local:8787/path")
+                .body(Body::empty())
+                .unwrap(),
+            Request::post("/v1/jobs")
+                .header("host", "bridge.local:8787")
+                .header("sec-fetch-site", "cross-site")
+                .body(Body::empty())
+                .unwrap(),
+            Request::post("/v1/jobs")
+                .header("host", "bridge.local:8787")
+                .header("sec-fetch-site", "same-site")
+                .body(Body::empty())
+                .unwrap(),
+        ] {
+            assert!(!browser_origin_allowed(&request));
+        }
+    }
 }
