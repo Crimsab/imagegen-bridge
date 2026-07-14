@@ -10,7 +10,8 @@ use imagegen_bridge::{
     config::{BridgeConfig, ResolvedConfig},
     core::{BridgeError, ErrorCode, ImageRequest, OutputFormat, ResponseFormat},
     runtime::{
-        ExecutionContext, ProviderReadiness, ProviderReadinessStatus, inspect_sqlite_session_schema,
+        ExecutionContext, ProviderReadiness, ProviderReadinessStatus, inspect_sqlite_job_schema,
+        inspect_sqlite_session_schema,
     },
 };
 use serde::Serialize;
@@ -154,6 +155,36 @@ pub(crate) async fn run(
         }),
         Err(error) => checks.push(fail("database_migrations", error.message)),
     }
+    if resolved.config.server.jobs.enabled {
+        let job_database = &resolved.config.server.jobs.database;
+        let job_root = job_database.parent().unwrap_or_else(|| Path::new("."));
+        if job_root != state_root {
+            checks.push(directory_check("job_state_storage", job_root));
+        }
+        match inspect_sqlite_job_schema(job_database).await {
+            Ok(schema) if schema.initialized && schema.version == Some(schema.current_version) => {
+                checks.push(DoctorCheck {
+                    name: "job_database_migrations",
+                    status: CheckStatus::Pass,
+                    message: "job database schema is current".to_owned(),
+                    details: Some(json!({"version": schema.version})),
+                });
+            }
+            Ok(schema) => checks.push(DoctorCheck {
+                name: "job_database_migrations",
+                status: CheckStatus::Fail,
+                message: "job database is absent or requires migration; rerun setup".to_owned(),
+                details: Some(json!({
+                    "initialized": schema.initialized,
+                    "version": schema.version,
+                    "required_version": schema.current_version,
+                })),
+            }),
+            Err(error) => checks.push(fail("job_database_migrations", error.message)),
+        }
+    } else {
+        checks.push(skip("job_database_migrations", "durable jobs are disabled"));
+    }
     checks.push(port_check(&resolved.config.server.bind));
 
     let prerequisites_ready = config_path.is_some()
@@ -168,7 +199,8 @@ pub(crate) async fn run(
                         | "artifact_storage"
                         | "state_storage"
                         | "database_migrations"
-                )
+                ) || (resolved.config.server.jobs.enabled
+                    && matches!(check.name, "job_state_storage" | "job_database_migrations"))
             })
             .all(|check| check.status == CheckStatus::Pass);
     if prerequisites_ready {

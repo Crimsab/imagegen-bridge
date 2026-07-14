@@ -919,6 +919,270 @@
         "type": "object",
         "unevaluatedProperties": false
       },
+      "ImageJob": {
+        "additionalProperties": false,
+        "description": "Complete durable job record returned by detail lookup.",
+        "properties": {
+          "cancel_requested": {
+            "description": "Whether cancellation has been durably requested.",
+            "type": "boolean"
+          },
+          "completed": {
+            "description": "Terminal transition timestamp.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "created": {
+            "description": "Unix creation timestamp.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "deleted": {
+            "description": "Soft-delete timestamp; deleted jobs are hidden from ordinary lists.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BridgeError"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Structured terminal error."
+          },
+          "favorite": {
+            "description": "User-selected gallery favorite state.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "Stable `UUIDv7` job identifier.",
+            "type": "string"
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImageJobProgress"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Latest bounded progress snapshot."
+          },
+          "request": {
+            "$ref": "#/components/schemas/ImageRequest",
+            "description": "Original normalized request retained for recovery and inspection."
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImageResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Verified terminal result."
+          },
+          "started": {
+            "description": "Worker claim timestamp.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/ImageJobStatus",
+            "description": "Current durable lifecycle state."
+          },
+          "updated": {
+            "description": "Unix timestamp of the last durable transition.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "created",
+          "updated",
+          "favorite",
+          "request",
+          "cancel_requested"
+        ],
+        "type": "object"
+      },
+      "ImageJobPage": {
+        "additionalProperties": false,
+        "description": "Cursor-paginated job/history result.",
+        "properties": {
+          "items": {
+            "description": "Stable newest-first page.",
+            "items": {
+              "$ref": "#/components/schemas/ImageJobSummary"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Opaque cursor for the next page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "ImageJobProgress": {
+        "additionalProperties": false,
+        "description": "Bounded latest progress snapshot for a durable job.",
+        "properties": {
+          "partial_images": {
+            "description": "Number of bounded partial-image events observed.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stage": {
+            "description": "Stable stage label without prompt or image content.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage",
+          "partial_images"
+        ],
+        "type": "object"
+      },
+      "ImageJobStatus": {
+        "description": "Durable lifecycle state for one asynchronous image operation.",
+        "oneOf": [
+          {
+            "const": "queued",
+            "description": "Accepted and waiting for bounded worker capacity.",
+            "type": "string"
+          },
+          {
+            "const": "running",
+            "description": "Claimed by a worker; provider completion may be ambiguous after a crash.",
+            "type": "string"
+          },
+          {
+            "const": "succeeded",
+            "description": "Completed with a verified response.",
+            "type": "string"
+          },
+          {
+            "const": "failed",
+            "description": "Completed with a structured bridge error.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "Cancelled before or during execution.",
+            "type": "string"
+          },
+          {
+            "const": "interrupted",
+            "description": "Process stopped while a paid provider call may have been in flight.",
+            "type": "string"
+          }
+        ]
+      },
+      "ImageJobSummary": {
+        "additionalProperties": false,
+        "description": "List-safe durable job state without request image bodies.",
+        "properties": {
+          "completed": {
+            "description": "Terminal transition timestamp.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "created": {
+            "description": "Unix creation timestamp.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "deleted": {
+            "description": "Soft-delete timestamp; deleted jobs are hidden from ordinary lists.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "favorite": {
+            "description": "User-selected gallery favorite state.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "Stable `UUIDv7` job identifier.",
+            "type": "string"
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImageJobProgress"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Latest bounded progress snapshot."
+          },
+          "started": {
+            "description": "Worker claim timestamp.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/ImageJobStatus",
+            "description": "Current durable lifecycle state."
+          },
+          "updated": {
+            "description": "Unix timestamp of the last durable transition.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "created",
+          "updated",
+          "favorite"
+        ],
+        "type": "object"
+      },
       "ImageRequest": {
         "description": "A complete provider-neutral image request.",
         "oneOf": [
@@ -2897,6 +3161,403 @@
         ]
       }
     },
+    "/v1/jobs": {
+      "get": {
+        "operationId": "listImageJobs",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "$ref": "#/components/schemas/ImageJobStatus"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_deleted",
+            "schema": {
+              "default": false,
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "items": [
+                    {
+                      "cancel_requested": false,
+                      "created": 1784000000,
+                      "favorite": false,
+                      "id": "019f0000-0000-7000-8000-000000000000",
+                      "request": {
+                        "operation": "generate",
+                        "output": {
+                          "filename_prefix": "fox",
+                          "response_format": "artifact"
+                        },
+                        "parameters": {
+                          "action": "auto",
+                          "background": "auto",
+                          "failure_policy": "fail_fast",
+                          "moderation": "auto",
+                          "n": 1,
+                          "output_format": "png",
+                          "partial_images": 0,
+                          "quality": "auto",
+                          "size": "auto"
+                        },
+                        "policies": {
+                          "compatibility": "strict",
+                          "negative_prompt": "auto",
+                          "revised_prompt": "include"
+                        },
+                        "prompt": "A red origami fox on warm gray",
+                        "routing": {
+                          "provider": "codex-app-server"
+                        },
+                        "session": {
+                          "key": "gallery",
+                          "mode": "persistent"
+                        }
+                      },
+                      "status": "succeeded",
+                      "updated": 1784000001
+                    }
+                  ]
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ImageJobPage"
+                }
+              }
+            },
+            "description": "Job page"
+          },
+          "400": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Invalid job query or cursor"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Bridge authentication required"
+          }
+        },
+        "security": [
+          {
+            "bridgeBearer": []
+          }
+        ],
+        "tags": [
+          "jobs"
+        ]
+      },
+      "post": {
+        "description": "Persists and schedules an image operation. Durable jobs always use artifact delivery.",
+        "operationId": "createImageJob",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "operation": "generate",
+                "output": {
+                  "filename_prefix": "fox",
+                  "response_format": "artifact"
+                },
+                "parameters": {
+                  "action": "auto",
+                  "background": "auto",
+                  "failure_policy": "fail_fast",
+                  "moderation": "auto",
+                  "n": 1,
+                  "output_format": "png",
+                  "partial_images": 0,
+                  "quality": "auto",
+                  "size": "auto"
+                },
+                "policies": {
+                  "compatibility": "strict",
+                  "negative_prompt": "auto",
+                  "revised_prompt": "include"
+                },
+                "prompt": "A red origami fox on warm gray",
+                "routing": {
+                  "provider": "codex-app-server"
+                },
+                "session": {
+                  "key": "gallery",
+                  "mode": "persistent"
+                }
+              },
+              "schema": {
+                "$ref": "#/components/schemas/ImageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "cancel_requested": false,
+                  "created": 1784000000,
+                  "favorite": false,
+                  "id": "019f0000-0000-7000-8000-000000000000",
+                  "request": {
+                    "operation": "generate",
+                    "output": {
+                      "filename_prefix": "fox",
+                      "response_format": "artifact"
+                    },
+                    "parameters": {
+                      "action": "auto",
+                      "background": "auto",
+                      "failure_policy": "fail_fast",
+                      "moderation": "auto",
+                      "n": 1,
+                      "output_format": "png",
+                      "partial_images": 0,
+                      "quality": "auto",
+                      "size": "auto"
+                    },
+                    "policies": {
+                      "compatibility": "strict",
+                      "negative_prompt": "auto",
+                      "revised_prompt": "include"
+                    },
+                    "prompt": "A red origami fox on warm gray",
+                    "routing": {
+                      "provider": "codex-app-server"
+                    },
+                    "session": {
+                      "key": "gallery",
+                      "mode": "persistent"
+                    }
+                  },
+                  "status": "queued",
+                  "updated": 1784000001
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ImageJob"
+                }
+              }
+            },
+            "description": "Job accepted"
+          },
+          "400": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Invalid input or unsupported capability"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Bridge authentication required"
+          },
+          "422": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Request validation failed"
+          },
+          "503": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Durable queue is full"
+          }
+        },
+        "security": [
+          {
+            "bridgeBearer": []
+          }
+        ],
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/v1/jobs/{id}": {
+      "delete": {
+        "operationId": "cancelImageJob",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "example": "019f0000-0000-7000-8000-000000000000",
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "cancel_requested": true,
+                  "created": 1784000000,
+                  "favorite": false,
+                  "id": "019f0000-0000-7000-8000-000000000000",
+                  "request": {
+                    "operation": "generate",
+                    "output": {
+                      "filename_prefix": "fox",
+                      "response_format": "artifact"
+                    },
+                    "parameters": {
+                      "action": "auto",
+                      "background": "auto",
+                      "failure_policy": "fail_fast",
+                      "moderation": "auto",
+                      "n": 1,
+                      "output_format": "png",
+                      "partial_images": 0,
+                      "quality": "auto",
+                      "size": "auto"
+                    },
+                    "policies": {
+                      "compatibility": "strict",
+                      "negative_prompt": "auto",
+                      "revised_prompt": "include"
+                    },
+                    "prompt": "A red origami fox on warm gray",
+                    "routing": {
+                      "provider": "codex-app-server"
+                    },
+                    "session": {
+                      "key": "gallery",
+                      "mode": "persistent"
+                    }
+                  },
+                  "status": "cancelled",
+                  "updated": 1784000001
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ImageJob"
+                }
+              }
+            },
+            "description": "Cancellation state"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Bridge authentication required"
+          },
+          "404": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Job not found"
+          }
+        },
+        "security": [
+          {
+            "bridgeBearer": []
+          }
+        ],
+        "tags": [
+          "jobs"
+        ]
+      },
+      "get": {
+        "operationId": "getImageJob",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "example": "019f0000-0000-7000-8000-000000000000",
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "cancel_requested": false,
+                  "created": 1784000000,
+                  "favorite": false,
+                  "id": "019f0000-0000-7000-8000-000000000000",
+                  "request": {
+                    "operation": "generate",
+                    "output": {
+                      "filename_prefix": "fox",
+                      "response_format": "artifact"
+                    },
+                    "parameters": {
+                      "action": "auto",
+                      "background": "auto",
+                      "failure_policy": "fail_fast",
+                      "moderation": "auto",
+                      "n": 1,
+                      "output_format": "png",
+                      "partial_images": 0,
+                      "quality": "auto",
+                      "size": "auto"
+                    },
+                    "policies": {
+                      "compatibility": "strict",
+                      "negative_prompt": "auto",
+                      "revised_prompt": "include"
+                    },
+                    "prompt": "A red origami fox on warm gray",
+                    "routing": {
+                      "provider": "codex-app-server"
+                    },
+                    "session": {
+                      "key": "gallery",
+                      "mode": "persistent"
+                    }
+                  },
+                  "status": "succeeded",
+                  "updated": 1784000001
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ImageJob"
+                }
+              }
+            },
+            "description": "Job detail"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Bridge authentication required"
+          },
+          "404": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Job not found"
+          }
+        },
+        "security": [
+          {
+            "bridgeBearer": []
+          }
+        ],
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
     "/v1/providers": {
       "get": {
         "operationId": "listProviders",
@@ -3133,6 +3794,10 @@
     {
       "description": "Native lossless image operations",
       "name": "images"
+    },
+    {
+      "description": "Durable asynchronous image operations and history",
+      "name": "jobs"
     },
     {
       "description": "OpenAI-familiar Images API",

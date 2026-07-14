@@ -3,6 +3,7 @@
 mod auth;
 mod compat;
 mod error;
+mod jobs;
 mod metrics;
 mod openapi;
 mod routes;
@@ -10,6 +11,7 @@ mod serve;
 mod streaming;
 
 pub use error::*;
+pub use jobs::*;
 pub use openapi::*;
 pub use routes::*;
 pub use serve::*;

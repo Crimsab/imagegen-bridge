@@ -36,3 +36,11 @@ enabled = true
 
 [server.tracing]
 enabled = true
+
+[server.jobs]
+enabled = true
+database = "/data/state/jobs.sqlite3"
+max_pending = 1000
+max_running = 4
+retention_secs = 604800
+max_retained = 10000

@@ -16,6 +16,10 @@ network clients. Version 1 evolves additively; breaking wire changes use `/v2`.
 | `POST` | `/v1/images/stream` | Bounded native SSE lifecycle | `200` |
 | `POST` | `/v1/images/generations` | OpenAI-familiar generation compatibility | `200` |
 | `POST` | `/v1/images/edits` | Multipart edit compatibility | `200` |
+| `POST` | `/v1/jobs` | Create a durable artifact-backed operation | `202` |
+| `GET` | `/v1/jobs` | Cursor-paginated job history | `200` |
+| `GET` | `/v1/jobs/{id}` | Complete durable job detail | `200` |
+| `DELETE` | `/v1/jobs/{id}` | Request cancellation | `200` |
 | `GET` | `/v1/openapi.json` | Checked OpenAPI 3.1 contract | `200` |
 
 Native generation accepts the versioned `ImageRequest` schema and returns
@@ -25,6 +29,27 @@ returns an `x-request-id` response header for every request.
 The SSE handler emits `started`, bounded provider `progress`/`partial_image`
 events when available, then `completed` or `error`, with heartbeat comments,
 backpressure, and disconnect cancellation.
+
+## Durable jobs and history
+
+`POST /v1/jobs` accepts the native `ImageRequest`, validates it before
+persistence, forces `output.response_format=artifact`, and returns an
+`ImageJob` with status `queued`. `GET /v1/jobs/{id}` returns the retained
+request plus a verified result or structured terminal error. List responses
+contain only `ImageJobSummary` records, so inline request images are not copied
+into history pages.
+
+The queue is bounded by `server.jobs.max_pending`; workers are independently
+bounded by `server.jobs.max_running`. Cancellation is persisted before an
+active provider token is signaled. Queued jobs are immediately terminal;
+running jobs settle after cooperative cancellation. On restart, queued jobs
+resume, while previously running jobs become `interrupted`. They are never
+retried automatically because provider completion and billing may be
+ambiguous. Retention is bounded by both age and terminal-record count.
+
+`GET /v1/jobs?limit=20&cursor=...&status=succeeded` uses an opaque, stable
+newest-first cursor. `limit` is `1..=100`. The current lifecycle values are
+`queued`, `running`, `succeeded`, `failed`, `cancelled`, and `interrupted`.
 
 Native multi-image requests accept `parameters.failure_policy` as `fail_fast`
 or `best_effort`. Results retain the requested `index` and optional
@@ -129,7 +154,7 @@ or readiness failures to `503`, deadlines to `504`, and unexpected bridge or
 upstream failures to `500`/`502`.
 
 The checked-in OpenAPI 3.1 document includes native and compatibility request,
-response, error, extension, multipart, provider, session, readiness, and SSE
+response, error, extension, multipart, provider, session, job, readiness, and SSE
 schemas with examples. It is generated from the Rust contract and verified for
 drift by CI and `imagegen-bridge schema --kind openapi --check FILE`.
 

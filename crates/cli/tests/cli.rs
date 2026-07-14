@@ -350,7 +350,7 @@ fn setup_dry_run_is_machine_readable_and_does_not_mutate() {
         .clone();
     let plan: Value = serde_json::from_slice(&output).expect("setup plan JSON");
     assert_eq!(plan["oauth_ready"], false);
-    assert_eq!(plan["changes"].as_array().expect("changes").len(), 4);
+    assert_eq!(plan["changes"].as_array().expect("changes").len(), 5);
     assert!(!config.exists());
     assert!(!state.exists());
     assert!(!artifacts.exists());
@@ -446,7 +446,7 @@ done
     assert_eq!(first["changed"], true);
     assert_eq!(
         first["applied_changes"].as_array().expect("changes").len(),
-        4
+        5
     );
 
     let second = cargo_bin_cmd!("imagegen-bridge")
@@ -539,6 +539,9 @@ restart_backoff_ms = 0
 
 [server]
 bind = "{address}"
+
+[server.jobs]
+database = "{root}/jobs.sqlite3"
 "#,
             root = directory.path().display(),
             script = script.display(),

@@ -30,6 +30,7 @@ uuid = { version = "1", features = ["v7"] }
 [dev-dependencies]
 async-trait = "0.1"
 http-body-util = "0.1"
+tempfile = "3.27.0"
 
 [lints]
 workspace = true

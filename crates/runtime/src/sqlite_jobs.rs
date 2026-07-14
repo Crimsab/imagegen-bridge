@@ -86,6 +86,12 @@ impl std::fmt::Debug for SqliteImageJobStore {
 impl SqliteImageJobStore {
     /// Opens storage and applies idempotent migrations.
     pub async fn open(path: &Path) -> Result<Self, BridgeError> {
+        match tokio::fs::symlink_metadata(path).await {
+            Ok(metadata) if metadata.file_type().is_file() => {}
+            Ok(_) => return Err(job_error("job database must be a regular file")),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(job_error("could not inspect job database")),
+        }
         let connection = Connection::open(path)
             .await
             .map_err(|_| job_error("could not open job database"))?;
@@ -93,6 +99,8 @@ impl SqliteImageJobStore {
             .call(|connection| {
                 connection.execute_batch(
                     "PRAGMA journal_mode=WAL;
+                     PRAGMA synchronous=FULL;
+                     PRAGMA busy_timeout=5000;
                      PRAGMA foreign_keys=ON;
                      CREATE TABLE IF NOT EXISTS job_schema_migrations (
                        version INTEGER PRIMARY KEY,
@@ -703,5 +711,38 @@ mod tests {
         assert_eq!(job.summary.status, ImageJobStatus::Cancelled);
         assert!(job.cancel_requested);
         assert!(!store.claim("019f-job", 12).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn pending_capacity_rejects_without_persisting_extra_work() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SqliteImageJobStore::open(&directory.path().join("jobs.sqlite3"))
+            .await
+            .unwrap();
+        store
+            .create("019f-job-a", &ImageRequest::generate("first"), 10, 1)
+            .await
+            .unwrap();
+        let error = store
+            .create("019f-job-b", &ImageRequest::generate("second"), 11, 1)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::Overloaded);
+        assert!(error.retryable);
+        assert!(store.get("019f-job-b").await.is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn database_symlinks_are_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target.sqlite3");
+        std::fs::write(&target, []).unwrap();
+        let link = directory.path().join("jobs.sqlite3");
+        symlink(target, &link).unwrap();
+        let error = SqliteImageJobStore::open(&link).await.unwrap_err();
+        assert_eq!(error.code, ErrorCode::Internal);
     }
 }

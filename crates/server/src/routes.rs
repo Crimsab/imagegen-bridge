@@ -16,7 +16,8 @@ use axum::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use imagegen_bridge_config::ServerSettings;
 use imagegen_bridge_core::{
-    BridgeError, ErrorCode, ImageRequest, ProviderDescriptor, ProviderEvent,
+    BridgeError, ErrorCode, ImageJob, ImageJobPage, ImageJobStatus, ImageRequest,
+    ProviderDescriptor, ProviderEvent,
 };
 use imagegen_bridge_runtime::{ExecutionContext, ImagegenRuntime, ProviderReadinessStatus};
 use secrecy::SecretString;
@@ -28,7 +29,7 @@ use tracing::Instrument as _;
 use uuid::Uuid;
 
 use crate::{
-    ApiError,
+    ApiError, JobManager,
     auth::{AuthPolicy, AuthScope, authorize},
     compat::{edit_compatible, generate_compatible},
     metrics::ServerMetrics,
@@ -46,6 +47,8 @@ const MAX_IDEMPOTENCY_KEY_BYTES: usize = 512;
 pub struct ServerState {
     /// Shared provider-neutral execution runtime.
     pub runtime: Arc<ImagegenRuntime>,
+    /// Optional durable asynchronous job manager.
+    pub jobs: Option<Arc<JobManager>>,
     pub(crate) auth: Option<AuthPolicy>,
     pub(crate) metrics: Option<Arc<ServerMetrics>>,
 }
@@ -55,6 +58,7 @@ impl std::fmt::Debug for ServerState {
         formatter
             .debug_struct("ServerState")
             .field("runtime", &self.runtime)
+            .field("jobs", &self.jobs.is_some())
             .field("auth", &self.auth.is_some())
             .field("metrics", &self.metrics.is_some())
             .finish()
@@ -63,7 +67,7 @@ impl std::fmt::Debug for ServerState {
 
 impl ServerState {
     /// Builds state and resolves an optional bridge token from its env reference.
-    pub fn from_settings(
+    pub async fn from_settings(
         runtime: Arc<ImagegenRuntime>,
         settings: &ServerSettings,
     ) -> Result<Self, BridgeError> {
@@ -90,8 +94,14 @@ impl ServerState {
             .metrics
             .enabled
             .then(|| Arc::new(ServerMetrics::default()));
+        let jobs = if settings.jobs.enabled {
+            Some(JobManager::open(Arc::clone(&runtime), settings.jobs.clone()).await?)
+        } else {
+            None
+        };
         Ok(Self {
             runtime,
+            jobs,
             auth,
             metrics,
         })
@@ -117,6 +127,7 @@ impl ServerState {
         let metrics = metrics_enabled.then(|| Arc::new(ServerMetrics::default()));
         Self {
             runtime,
+            jobs: None,
             auth,
             metrics,
         }
@@ -151,6 +162,11 @@ pub fn router(state: ServerState, settings: &ServerSettings) -> Router {
         );
     if state.metrics.is_some() {
         protected = protected.route("/metrics", get(prometheus_metrics));
+    }
+    if state.jobs.is_some() {
+        protected = protected
+            .route("/v1/jobs", post(create_job).get(list_jobs))
+            .route("/v1/jobs/{id}", get(get_job).delete(cancel_job));
     }
     let protected = protected.route_layer(middleware::from_fn_with_state(state.clone(), authorize));
     Router::new()
@@ -429,6 +445,148 @@ async fn execute_image(
         .map(Json)
 }
 
+async fn create_job(
+    State(state): State<ServerState>,
+    Extension(request_id): Extension<RequestId>,
+    payload: Result<Json<ImageRequest>, JsonRejection>,
+) -> Result<(StatusCode, Json<ImageJob>), ApiError> {
+    let Json(request) = payload.map_err(|_| {
+        ApiError::bad_request(
+            "request body must be valid ImageRequest JSON",
+            request_id.clone(),
+        )
+    })?;
+    let manager = state.jobs.as_ref().ok_or_else(|| {
+        ApiError::from_bridge(
+            BridgeError::new(ErrorCode::Configuration, "durable jobs are disabled"),
+            request_id.clone(),
+        )
+    })?;
+    manager
+        .submit(request)
+        .await
+        .map(|job| (StatusCode::ACCEPTED, Json(job)))
+        .map_err(|error| ApiError::from_bridge(error, request_id))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct JobQuery {
+    limit: usize,
+    cursor: Option<String>,
+    status: Option<ImageJobStatus>,
+    include_deleted: bool,
+}
+
+impl Default for JobQuery {
+    fn default() -> Self {
+        Self {
+            limit: default_page_size(),
+            cursor: None,
+            status: None,
+            include_deleted: false,
+        }
+    }
+}
+
+async fn list_jobs(
+    State(state): State<ServerState>,
+    Extension(request_id): Extension<RequestId>,
+    query: Result<Query<JobQuery>, QueryRejection>,
+) -> Result<Json<ImageJobPage>, ApiError> {
+    let Query(query) = query.map_err(|_| {
+        ApiError::bad_request("job query parameters are invalid", request_id.clone())
+    })?;
+    if query.limit == 0 || query.limit > MAX_PAGE_SIZE {
+        return Err(ApiError::bad_request(
+            "job page limit must be between 1 and 100",
+            request_id,
+        ));
+    }
+    let before = query
+        .cursor
+        .as_deref()
+        .map(decode_job_cursor)
+        .transpose()
+        .map_err(|message| ApiError::bad_request(message, request_id.clone()))?;
+    let manager = state.jobs.as_ref().ok_or_else(|| {
+        ApiError::from_bridge(
+            BridgeError::new(ErrorCode::Configuration, "durable jobs are disabled"),
+            request_id.clone(),
+        )
+    })?;
+    let mut items = manager
+        .list(
+            before,
+            query.limit.saturating_add(1),
+            query.include_deleted,
+            query.status,
+        )
+        .await
+        .map_err(|error| ApiError::from_bridge(error, request_id.clone()))?;
+    let has_more = items.len() > query.limit;
+    items.truncate(query.limit);
+    let next_cursor = has_more
+        .then(|| {
+            items
+                .last()
+                .map(|item| encode_job_cursor(item.created, &item.id))
+        })
+        .flatten();
+    Ok(Json(ImageJobPage { items, next_cursor }))
+}
+
+async fn get_job(
+    State(state): State<ServerState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(id): Path<String>,
+) -> Result<Json<ImageJob>, ApiError> {
+    let manager = state.jobs.as_ref().ok_or_else(|| {
+        ApiError::from_bridge(
+            BridgeError::new(ErrorCode::Configuration, "durable jobs are disabled"),
+            request_id.clone(),
+        )
+    })?;
+    manager
+        .get(&id)
+        .await
+        .map(Json)
+        .map_err(|error| job_api_error(error, request_id))
+}
+
+async fn cancel_job(
+    State(state): State<ServerState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(id): Path<String>,
+) -> Result<Json<ImageJob>, ApiError> {
+    let manager = state.jobs.as_ref().ok_or_else(|| {
+        ApiError::from_bridge(
+            BridgeError::new(ErrorCode::Configuration, "durable jobs are disabled"),
+            request_id.clone(),
+        )
+    })?;
+    manager
+        .cancel(&id)
+        .await
+        .map(Json)
+        .map_err(|error| job_api_error(error, request_id))
+}
+
+fn job_api_error(error: BridgeError, request_id: RequestId) -> ApiError {
+    let not_found = error.code == ErrorCode::InvalidRequest
+        && error
+            .details
+            .get("resource")
+            .and_then(serde_json::Value::as_str)
+            == Some("job");
+    let error = ApiError::from_bridge(error, request_id);
+    if not_found {
+        error.with_status(StatusCode::NOT_FOUND)
+    } else {
+        error
+    }
+}
+
 pub(crate) async fn run_request(
     state: &ServerState,
     request_id: RequestId,
@@ -598,6 +756,22 @@ fn decode_cursor(value: &str) -> Result<String, &'static str> {
     Ok(decoded)
 }
 
+fn encode_job_cursor(created: u64, id: &str) -> String {
+    encode_cursor(&format!("{created}:{id}"))
+}
+
+fn decode_job_cursor(value: &str) -> Result<(u64, String), &'static str> {
+    let decoded = decode_cursor(value).map_err(|_| "job cursor is malformed")?;
+    let (created, id) = decoded.split_once(':').ok_or("job cursor is malformed")?;
+    let created = created
+        .parse::<u64>()
+        .map_err(|_| "job cursor is malformed")?;
+    if Uuid::parse_str(id).is_err() {
+        return Err("job cursor is malformed");
+    }
+    Ok((created, id.to_owned()))
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -608,7 +782,7 @@ mod tests {
     use imagegen_bridge_core::{
         Background, GeneratedImage, ImageAction, ImagePayload, ImageProvider, ImageResponse,
         InputCapabilities, InputFidelity, Moderation, OutputFormat, ProviderCapabilities,
-        ProviderContext, Quality, SizeCapabilities, SupportLevel, Timings, U8Range,
+        ProviderContext, Quality, ResponseFormat, SizeCapabilities, SupportLevel, Timings, U8Range,
     };
     use imagegen_bridge_runtime::{ProviderRegistry, RuntimeConfig};
     use tower::ServiceExt as _;
@@ -760,6 +934,23 @@ mod tests {
         router(state, settings)
     }
 
+    async fn test_job_router(directory: &std::path::Path) -> (Router, Arc<JobManager>) {
+        let registry =
+            ProviderRegistry::new([Arc::new(ReadyProvider) as Arc<dyn ImageProvider>], "ready")
+                .unwrap();
+        let mut config = imagegen_bridge_config::BridgeConfig::default();
+        config.artifacts.root = directory.join("artifacts");
+        config.server.jobs.database = directory.join("jobs.sqlite3");
+        let mut runtime_config = config.runtime_config().unwrap();
+        runtime_config.materialization.artifact_store = Some(config.artifact_store().unwrap());
+        let runtime = Arc::new(ImagegenRuntime::new(registry, runtime_config).unwrap());
+        let state = ServerState::from_settings(runtime, &config.server)
+            .await
+            .unwrap();
+        let jobs = state.jobs.clone().unwrap();
+        (router(state, &config.server), jobs)
+    }
+
     #[tokio::test]
     async fn health_is_public_but_v1_requires_valid_bearer() {
         let app = test_router(Some("bridge-secret"));
@@ -818,6 +1009,93 @@ mod tests {
             value["data"][0]["sha256"],
             "431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460"
         );
+    }
+
+    #[tokio::test]
+    async fn durable_job_routes_execute_list_and_return_artifacts() {
+        let directory = tempfile::tempdir().unwrap();
+        let (app, jobs) = test_job_router(directory.path()).await;
+        let created = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/jobs")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&ImageRequest::generate("durable test")).unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = created.status();
+        let body = created.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(
+            status,
+            StatusCode::ACCEPTED,
+            "{}",
+            String::from_utf8_lossy(&body)
+        );
+        let created: ImageJob = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            created.request.output.response_format,
+            ResponseFormat::Artifact
+        );
+
+        let id = created.summary.id;
+        let completed = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        Request::get(format!("/v1/jobs/{id}"))
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = response.into_body().collect().await.unwrap().to_bytes();
+                let job: ImageJob = serde_json::from_slice(&body).unwrap();
+                if job.summary.status.terminal() {
+                    break job;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(completed.summary.status, ImageJobStatus::Succeeded);
+        let result = completed.result.unwrap();
+        assert!(matches!(
+            result.data[0].payload,
+            ImagePayload::Artifact { .. }
+        ));
+
+        let listed = app
+            .clone()
+            .oneshot(
+                Request::get("/v1/jobs?limit=1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(listed.status(), StatusCode::OK);
+        let body = listed.into_body().collect().await.unwrap().to_bytes();
+        let page: ImageJobPage = serde_json::from_slice(&body).unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].id, id);
+
+        let missing = app
+            .oneshot(
+                Request::get("/v1/jobs/019f0000-0000-7000-8000-000000000000")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        jobs.shutdown().await;
     }
 
     #[tokio::test]

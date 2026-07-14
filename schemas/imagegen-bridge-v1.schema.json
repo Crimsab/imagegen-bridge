@@ -89,6 +89,40 @@
       ]
     },
     {
+      "description": "Complete durable job detail.",
+      "type": "object",
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/ImageJob"
+        },
+        "message": {
+          "type": "string",
+          "const": "job"
+        }
+      },
+      "required": [
+        "message",
+        "body"
+      ]
+    },
+    {
+      "description": "Cursor-paginated durable job summaries.",
+      "type": "object",
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/ImageJobPage"
+        },
+        "message": {
+          "type": "string",
+          "const": "job_page"
+        }
+      },
+      "required": [
+        "message",
+        "body"
+      ]
+    },
+    {
       "description": "Public bridge error.",
       "type": "object",
       "properties": {
@@ -720,6 +754,270 @@
         }
       ],
       "unevaluatedProperties": false
+    },
+    "ImageJob": {
+      "description": "Complete durable job record returned by detail lookup.",
+      "type": "object",
+      "properties": {
+        "cancel_requested": {
+          "description": "Whether cancellation has been durably requested.",
+          "type": "boolean"
+        },
+        "completed": {
+          "description": "Terminal transition timestamp.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "created": {
+          "description": "Unix creation timestamp.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "deleted": {
+          "description": "Soft-delete timestamp; deleted jobs are hidden from ordinary lists.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "error": {
+          "description": "Structured terminal error.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BridgeError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "favorite": {
+          "description": "User-selected gallery favorite state.",
+          "type": "boolean"
+        },
+        "id": {
+          "description": "Stable `UUIDv7` job identifier.",
+          "type": "string"
+        },
+        "progress": {
+          "description": "Latest bounded progress snapshot.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ImageJobProgress"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request": {
+          "description": "Original normalized request retained for recovery and inspection.",
+          "$ref": "#/$defs/ImageRequest"
+        },
+        "result": {
+          "description": "Verified terminal result.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ImageResponse"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "started": {
+          "description": "Worker claim timestamp.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "status": {
+          "description": "Current durable lifecycle state.",
+          "$ref": "#/$defs/ImageJobStatus"
+        },
+        "updated": {
+          "description": "Unix timestamp of the last durable transition.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "status",
+        "created",
+        "updated",
+        "favorite",
+        "request",
+        "cancel_requested"
+      ]
+    },
+    "ImageJobPage": {
+      "description": "Cursor-paginated job/history result.",
+      "type": "object",
+      "properties": {
+        "items": {
+          "description": "Stable newest-first page.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ImageJobSummary"
+          }
+        },
+        "next_cursor": {
+          "description": "Opaque cursor for the next page.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "items"
+      ]
+    },
+    "ImageJobProgress": {
+      "description": "Bounded latest progress snapshot for a durable job.",
+      "type": "object",
+      "properties": {
+        "partial_images": {
+          "description": "Number of bounded partial-image events observed.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "stage": {
+          "description": "Stable stage label without prompt or image content.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "stage",
+        "partial_images"
+      ]
+    },
+    "ImageJobStatus": {
+      "description": "Durable lifecycle state for one asynchronous image operation.",
+      "oneOf": [
+        {
+          "description": "Accepted and waiting for bounded worker capacity.",
+          "type": "string",
+          "const": "queued"
+        },
+        {
+          "description": "Claimed by a worker; provider completion may be ambiguous after a crash.",
+          "type": "string",
+          "const": "running"
+        },
+        {
+          "description": "Completed with a verified response.",
+          "type": "string",
+          "const": "succeeded"
+        },
+        {
+          "description": "Completed with a structured bridge error.",
+          "type": "string",
+          "const": "failed"
+        },
+        {
+          "description": "Cancelled before or during execution.",
+          "type": "string",
+          "const": "cancelled"
+        },
+        {
+          "description": "Process stopped while a paid provider call may have been in flight.",
+          "type": "string",
+          "const": "interrupted"
+        }
+      ]
+    },
+    "ImageJobSummary": {
+      "description": "List-safe durable job state without request image bodies.",
+      "type": "object",
+      "properties": {
+        "completed": {
+          "description": "Terminal transition timestamp.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "created": {
+          "description": "Unix creation timestamp.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "deleted": {
+          "description": "Soft-delete timestamp; deleted jobs are hidden from ordinary lists.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "favorite": {
+          "description": "User-selected gallery favorite state.",
+          "type": "boolean"
+        },
+        "id": {
+          "description": "Stable `UUIDv7` job identifier.",
+          "type": "string"
+        },
+        "progress": {
+          "description": "Latest bounded progress snapshot.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ImageJobProgress"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "started": {
+          "description": "Worker claim timestamp.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "status": {
+          "description": "Current durable lifecycle state.",
+          "$ref": "#/$defs/ImageJobStatus"
+        },
+        "updated": {
+          "description": "Unix timestamp of the last durable transition.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "status",
+        "created",
+        "updated",
+        "favorite"
+      ]
     },
     "ImageRequest": {
       "description": "A complete provider-neutral image request.",

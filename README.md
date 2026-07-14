@@ -37,6 +37,8 @@ implemented yet.
   SSRF controls.
 - Isolated, persistent, and explicit-thread sessions for app-server.
 - A native JSON API plus OpenAI-familiar generation and multipart edit routes.
+- Durable asynchronous jobs with a bounded SQLite queue, restart-safe history,
+  cancellation, progress snapshots, artifact-only results, and cursor pagination.
 - Optional bridge bearer authentication, readiness checks, JSON tracing, and
   Prometheus metrics.
 - Rust library facade and typed Python and TypeScript HTTP clients.
@@ -69,7 +71,7 @@ cargo install --locked --path crates/cli
 
 `setup` detects Codex and ChatGPT OAuth, previews every filesystem change,
 writes a user configuration atomically, creates private state and artifact
-directories, and applies the SQLite schema idempotently. It never generates an
+directories, and applies the session and job SQLite schemas idempotently. It never generates an
 image unless `--live-probe` is explicitly requested and confirmed. Use
 `setup --dry-run --json` to inspect the plan or `setup --yes --non-interactive`
 for automation. `doctor` checks the executable/version, configuration, OAuth,
@@ -199,6 +201,22 @@ curl --fail --silent --show-error \
   http://127.0.0.1:8787/v1/images/generations
 ```
 
+Queue a durable artifact-backed operation and inspect it later:
+
+```sh
+JOB_ID="$(curl --fail --silent --show-error \
+  -H 'Content-Type: application/json' \
+  -d '{"operation":"generate","prompt":"A small stone bridge in fog"}' \
+  http://127.0.0.1:8787/v1/jobs | jq -r .id)"
+curl --fail --silent --show-error "http://127.0.0.1:8787/v1/jobs/$JOB_ID"
+```
+
+Durable jobs always normalize delivery to bridge-owned artifacts so completed
+history never stores large base64 outputs. The queue and running worker counts
+are separately bounded. Queued work resumes after restart; work that was
+already running is marked `interrupted` and is not automatically repeated
+because the paid upstream operation may have completed.
+
 Important routes:
 
 | Route | Purpose |
@@ -207,6 +225,10 @@ Important routes:
 | `POST /v1/images/generations` | OpenAI-familiar JSON generation |
 | `POST /v1/images/edits` | OpenAI-familiar multipart editing |
 | `POST /v1/images/stream` | Bounded SSE progress/partial/completion stream |
+| `POST /v1/jobs` | Create a durable asynchronous image operation |
+| `GET /v1/jobs` | Cursor-paginated job history |
+| `GET /v1/jobs/{id}` | Job state, request, result, and structured error |
+| `DELETE /v1/jobs/{id}` | Request durable cancellation |
 | `GET /v1/providers` | Provider inventory |
 | `GET /v1/providers/{provider}/capabilities` | Model-aware capabilities |
 | `GET /v1/sessions/{key}` | Persistent session lookup |

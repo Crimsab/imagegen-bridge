@@ -10,9 +10,12 @@ use std::{
 
 use imagegen_bridge::{
     codex_responses::{CodexAuthFile, CodexCredentialSource as _},
-    config::{BridgeConfig, ConfigLoader},
+    config::{BridgeConfig, ConfigLoader, JobSettings},
     core::{BridgeError, ErrorCode},
-    runtime::{SqliteSessionBindingStore, inspect_sqlite_session_schema},
+    runtime::{
+        SqliteImageJobStore, SqliteSessionBindingStore, inspect_sqlite_job_schema,
+        inspect_sqlite_session_schema,
+    },
 };
 use serde::Serialize;
 use tokio::{process::Command, time::timeout};
@@ -31,6 +34,7 @@ struct SetupPlan {
     state_root: PathBuf,
     output_root: PathBuf,
     session_database: PathBuf,
+    job_database: PathBuf,
     codex: CodexStatus,
     oauth_ready: bool,
     changes: Vec<SetupChange>,
@@ -47,6 +51,7 @@ struct SetupResult {
     codex: CodexStatus,
     oauth_ready: bool,
     database_schema: u32,
+    job_database_schema: u32,
     applied_changes: Vec<SetupChange>,
     live_probe: Option<doctor::LiveProbeResult>,
     next_steps: Vec<&'static str>,
@@ -85,6 +90,12 @@ pub(crate) async fn run(
     if original.is_none() || args.state_root.is_some() {
         config.providers.codex_app_server.session_database = state_root.join("sessions.sqlite3");
     }
+    if original.is_none()
+        || args.state_root.is_some()
+        || config.server.jobs.database == JobSettings::default().database
+    {
+        config.server.jobs.database = state_root.join("jobs.sqlite3");
+    }
     if original.is_none() || args.output_root.is_some() {
         config.artifacts.root = output_root.clone();
     }
@@ -98,9 +109,17 @@ pub(crate) async fn run(
         .map(Path::to_path_buf)
         .ok_or_else(|| input("session database requires a parent directory"))?;
     let effective_output_root = config.artifacts.root.clone();
+    let job_state_root = config
+        .server
+        .jobs
+        .database
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| input("job database requires a parent directory"))?;
     let config_changed = original.as_ref() != Some(&config);
     let schema =
         inspect_sqlite_session_schema(&config.providers.codex_app_server.session_database).await?;
+    let job_schema = inspect_sqlite_job_schema(&config.server.jobs.database).await?;
     let mut changes = Vec::new();
     if config_changed {
         changes.push(SetupChange {
@@ -118,6 +137,15 @@ pub(crate) async fn run(
             target: effective_state_root.clone(),
         });
     }
+    if config.server.jobs.enabled
+        && job_state_root != effective_state_root
+        && !job_state_root.is_dir()
+    {
+        changes.push(SetupChange {
+            action: "create_private_job_state_directory",
+            target: job_state_root.clone(),
+        });
+    }
     if !effective_output_root.is_dir() {
         changes.push(SetupChange {
             action: "create_output_directory",
@@ -130,6 +158,14 @@ pub(crate) async fn run(
             target: config.providers.codex_app_server.session_database.clone(),
         });
     }
+    if config.server.jobs.enabled
+        && (!job_schema.initialized || job_schema.version != Some(job_schema.current_version))
+    {
+        changes.push(SetupChange {
+            action: "migrate_job_database",
+            target: config.server.jobs.database.clone(),
+        });
+    }
 
     let codex = probe_codex(&config.providers.codex_app_server.executable).await;
     let oauth_ready = probe_oauth().await.is_ok();
@@ -138,6 +174,7 @@ pub(crate) async fn run(
         state_root: effective_state_root.clone(),
         output_root: effective_output_root.clone(),
         session_database: config.providers.codex_app_server.session_database.clone(),
+        job_database: config.server.jobs.database.clone(),
         codex: codex.clone(),
         oauth_ready,
         changes,
@@ -181,6 +218,9 @@ pub(crate) async fn run(
         write_config_atomic(&config_path, &config)?;
     }
     create_directory(&effective_state_root, true)?;
+    if config.server.jobs.enabled {
+        create_directory(&job_state_root, true)?;
+    }
     create_directory(&effective_output_root, false)?;
     let store = SqliteSessionBindingStore::open(
         &config.providers.codex_app_server.session_database,
@@ -188,6 +228,10 @@ pub(crate) async fn run(
     )
     .await?;
     store.close().await?;
+    if config.server.jobs.enabled {
+        let jobs = SqliteImageJobStore::open(&config.server.jobs.database).await?;
+        jobs.close().await?;
+    }
 
     let live_probe = if args.live_probe {
         if !confirm(
@@ -224,6 +268,7 @@ pub(crate) async fn run(
         codex: codex.clone(),
         oauth_ready,
         database_schema: schema.current_version,
+        job_database_schema: job_schema.current_version,
         applied_changes: plan.changes.clone(),
         live_probe,
         next_steps,

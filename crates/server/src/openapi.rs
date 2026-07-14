@@ -26,6 +26,7 @@ pub fn openapi_document() -> Value {
         "tags": [
             {"name":"health","description":"Liveness and provider readiness"},
             {"name":"images","description":"Native lossless image operations"},
+            {"name":"jobs","description":"Durable asynchronous image operations and history"},
             {"name":"compatibility","description":"OpenAI-familiar Images API"},
             {"name":"providers","description":"Provider discovery and capability negotiation"},
             {"name":"sessions","description":"Persistent session lifecycle"},
@@ -117,6 +118,62 @@ pub fn openapi_document() -> Value {
             "/v1/images/edits": {
                 "post": compatible_edit_operation()
             },
+            "/v1/jobs": {
+                "post": {
+                    "operationId":"createImageJob",
+                    "tags":["jobs"],
+                    "security":[{"bridgeBearer":[]}],
+                    "description":"Persists and schedules an image operation. Durable jobs always use artifact delivery.",
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ImageRequest"},"example":native_request_example()}}},
+                    "responses": {
+                        "202": json_response("Job accepted", json!({"$ref":"#/components/schemas/ImageJob"}), job_example("queued")),
+                        "400": error_response("Invalid input or unsupported capability"),
+                        "401": error_response("Bridge authentication required"),
+                        "422": error_response("Request validation failed"),
+                        "503": error_response("Durable queue is full")
+                    }
+                },
+                "get": {
+                    "operationId":"listImageJobs",
+                    "tags":["jobs"],
+                    "security":[{"bridgeBearer":[]}],
+                    "parameters":[
+                        {"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"maximum":100,"default":20}},
+                        {"name":"cursor","in":"query","schema":{"type":"string","maxLength":256}},
+                        {"name":"status","in":"query","schema":{"$ref":"#/components/schemas/ImageJobStatus"}},
+                        {"name":"include_deleted","in":"query","schema":{"type":"boolean","default":false}}
+                    ],
+                    "responses": {
+                        "200": json_response("Job page", json!({"$ref":"#/components/schemas/ImageJobPage"}), json!({"items":[job_example("succeeded")]})),
+                        "400": error_response("Invalid job query or cursor"),
+                        "401": error_response("Bridge authentication required")
+                    }
+                }
+            },
+            "/v1/jobs/{id}": {
+                "get": {
+                    "operationId":"getImageJob",
+                    "tags":["jobs"],
+                    "security":[{"bridgeBearer":[]}],
+                    "parameters":[job_id_parameter()],
+                    "responses": {
+                        "200": json_response("Job detail", json!({"$ref":"#/components/schemas/ImageJob"}), job_example("succeeded")),
+                        "401": error_response("Bridge authentication required"),
+                        "404": error_response("Job not found")
+                    }
+                },
+                "delete": {
+                    "operationId":"cancelImageJob",
+                    "tags":["jobs"],
+                    "security":[{"bridgeBearer":[]}],
+                    "parameters":[job_id_parameter()],
+                    "responses": {
+                        "200": json_response("Cancellation state", json!({"$ref":"#/components/schemas/ImageJob"}), job_example("cancelled")),
+                        "401": error_response("Bridge authentication required"),
+                        "404": error_response("Job not found")
+                    }
+                }
+            },
             "/metrics": {
                 "get": {
                     "operationId":"getMetrics",
@@ -136,6 +193,22 @@ pub fn openapi_document() -> Value {
             "schemas": schemas,
             "responses": {"ErrorResponse": error_response_component()}
         }
+    })
+}
+
+fn job_id_parameter() -> Value {
+    json!({"name":"id","in":"path","required":true,"schema":{"type":"string","format":"uuid","example":"019f0000-0000-7000-8000-000000000000"}})
+}
+
+fn job_example(status: &str) -> Value {
+    json!({
+        "id":"019f0000-0000-7000-8000-000000000000",
+        "status":status,
+        "created":1_784_000_000,
+        "updated":1_784_000_001,
+        "favorite":false,
+        "request":native_request_example(),
+        "cancel_requested":status == "cancelled"
     })
 }
 

@@ -217,6 +217,11 @@ impl ImagegenRuntime {
         &self.registry
     }
 
+    /// Validates intrinsic request bounds without starting provider work.
+    pub fn validate_request(&self, request: &ImageRequest) -> Result<(), BridgeError> {
+        validate_request(request, self.config.request_limits)
+    }
+
     /// Executes with generated request metadata and the default idempotency scope.
     pub async fn execute(&self, request: ImageRequest) -> Result<ImageResponse, BridgeError> {
         self.execute_with(request, ExecutionContext::default())
