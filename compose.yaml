@@ -8,7 +8,7 @@ services:
         CODEX_VERSION: 0.144.0
     restart: unless-stopped
     environment:
-      TZ: ${TZ:-UTC}
+      TZ: ${TZ:-Europe/Rome}
       IMAGEGEN_BRIDGE_BEARER_TOKEN: ${IMAGEGEN_BRIDGE_BEARER_TOKEN:?set a bridge bearer token}
     ports:
       - "${IMAGEGEN_BRIDGE_LISTEN_HOST:-127.0.0.1}:${IMAGEGEN_BRIDGE_PORT:-8787}:8787"
