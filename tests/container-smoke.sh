@@ -11,15 +11,26 @@ WORKSPACE_VOLUME="${NAME}-workspace"
 STATE_VOLUME="${NAME}-state"
 ARTIFACT_VOLUME="${NAME}-artifacts"
 CODEX_VOLUME="${NAME}-codex-home"
+NETWORK="${NAME}-network"
+CLIENT_CONTAINER=""
 SMOKE_TOKEN="container-smoke-test-token"
 
 cleanup() {
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    docker logs --tail 100 "$NAME" >&2 2>/dev/null || true
+  fi
   docker rm -f "$SEEDER" >/dev/null 2>&1 || true
   docker rm -f "$NAME" >/dev/null 2>&1 || true
+  if [ -n "$CLIENT_CONTAINER" ]; then
+    docker network disconnect -f "$NETWORK" "$CLIENT_CONTAINER" >/dev/null 2>&1 || true
+  fi
+  docker network rm "$NETWORK" >/dev/null 2>&1 || true
   docker volume rm -f \
     "$CONFIG_VOLUME" "$WORKSPACE_VOLUME" "$STATE_VOLUME" \
     "$ARTIFACT_VOLUME" "$CODEX_VOLUME" >/dev/null 2>&1 || true
   rm -rf "$TEMP"
+  return "$status"
 }
 trap cleanup EXIT INT TERM
 
@@ -72,6 +83,15 @@ for volume in \
 do
   docker volume create "$volume" >/dev/null
 done
+docker network create "$NETWORK" >/dev/null
+
+# A containerized self-hosted runner cannot reach ports published on its own
+# loopback. Join the disposable test network when the Docker daemon recognizes
+# this client's hostname; ordinary host clients continue through localhost.
+if [ -n "${HOSTNAME:-}" ] && docker inspect "$HOSTNAME" >/dev/null 2>&1; then
+  docker network connect "$NETWORK" "$HOSTNAME"
+  CLIENT_CONTAINER=$HOSTNAME
+fi
 
 # Seed through the Docker API instead of bind-mounting client-side temporary
 # paths. This also works when the test client itself uses a host Docker socket.
@@ -91,6 +111,7 @@ docker start --attach "$SEEDER" >/dev/null
 docker rm "$SEEDER" >/dev/null
 
 docker run --detach --name "$NAME" \
+  --network "$NETWORK" \
   --read-only \
   --cap-drop ALL \
   --security-opt no-new-privileges:true \
@@ -107,8 +128,12 @@ docker run --detach --name "$NAME" \
   "$IMAGE" >/dev/null
 
 PORT=$(docker port "$NAME" 8787/tcp | sed -n 's/.*://p')
+BASE_URL="http://127.0.0.1:$PORT"
+if [ -n "$CLIENT_CONTAINER" ]; then
+  BASE_URL="http://$NAME:8787"
+fi
 attempt=0
-until curl --fail --silent "http://127.0.0.1:$PORT/health/live" >/dev/null; do
+until curl --fail --silent "$BASE_URL/health/live" >/dev/null; do
   attempt=$((attempt + 1))
   if [ "$attempt" -ge 100 ]; then
     docker logs --tail 100 "$NAME" >&2
@@ -123,13 +148,13 @@ if docker exec "$NAME" touch /rootfs-must-be-read-only >/dev/null 2>&1; then
   exit 1
 fi
 
-curl --fail --silent "http://127.0.0.1:$PORT/health/ready" | grep -q '"status":"ready"'
+curl --fail --silent "$BASE_URL/health/ready" | grep -q '"status":"ready"'
 curl --fail --silent \
   --header "Authorization: Bearer $SMOKE_TOKEN" \
-  "http://127.0.0.1:$PORT/metrics" | grep -q '^# HELP imagegen_bridge_requests_total'
+  "$BASE_URL/metrics" | grep -q '^# HELP imagegen_bridge_requests_total'
 
 STATUS=$(curl --silent --output /dev/null --write-out '%{http_code}' \
-  "http://127.0.0.1:$PORT/v1/providers")
+  "$BASE_URL/v1/providers")
 [ "$STATUS" = "401" ]
 
 docker stop --time 45 "$NAME" >/dev/null
