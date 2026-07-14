@@ -23,12 +23,18 @@ use tokio_util::{
 };
 
 type PendingSender = oneshot::Sender<Result<Value, BridgeError>>;
+const MAX_RPC_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_NOTIFICATION_CAPACITY: usize = 64;
+const MAX_NOTIFICATION_BYTES: usize = 48 * 1024 * 1024;
+const MAX_NOTIFICATION_RING_BYTES: usize = 256 * 1024 * 1024;
 
 /// Bounded connection settings.
 #[derive(Debug, Clone, Copy)]
 pub struct RpcConfig {
     /// Maximum incoming or outgoing JSONL message bytes.
     pub max_message_bytes: usize,
+    /// Maximum bytes accepted for one notification line.
+    pub max_notification_bytes: usize,
     /// Default request timeout.
     pub request_timeout: Duration,
     /// Notification ring capacity.
@@ -39,8 +45,9 @@ impl Default for RpcConfig {
     fn default() -> Self {
         Self {
             max_message_bytes: 64 * 1024 * 1024,
+            max_notification_bytes: 48 * 1024 * 1024,
             request_timeout: Duration::from_secs(60),
-            notification_capacity: 32,
+            notification_capacity: 4,
         }
     }
 }
@@ -86,7 +93,23 @@ impl AppServerRpc {
         R: AsyncRead + Send + Unpin + 'static,
         W: AsyncWrite + Send + Unpin + 'static,
     {
-        if config.max_message_bytes == 0 || config.notification_capacity == 0 {
+        let notification_slots = config
+            .notification_capacity
+            .checked_next_power_of_two()
+            .ok_or_else(|| protocol_error("notification capacity is too large"))?;
+        let notification_budget = config
+            .max_notification_bytes
+            .checked_mul(notification_slots)
+            .ok_or_else(|| protocol_error("notification ring budget overflowed"))?;
+        if config.max_message_bytes == 0
+            || config.max_message_bytes > MAX_RPC_MESSAGE_BYTES
+            || config.max_notification_bytes == 0
+            || config.max_notification_bytes > config.max_message_bytes
+            || config.max_notification_bytes > MAX_NOTIFICATION_BYTES
+            || config.notification_capacity == 0
+            || config.notification_capacity > MAX_NOTIFICATION_CAPACITY
+            || notification_budget > MAX_NOTIFICATION_RING_BYTES
+        {
             return Err(protocol_error("RPC limits must be greater than zero"));
         }
         let (notifications, _) = broadcast::channel(config.notification_capacity);
@@ -95,6 +118,7 @@ impl AppServerRpc {
         tokio::spawn(read_loop(
             reader,
             config.max_message_bytes,
+            config.max_notification_bytes,
             Arc::clone(&pending),
             notifications.clone(),
             closed_sender.clone(),
@@ -159,6 +183,30 @@ impl AppServerRpc {
         deadline: Instant,
         cancellation: CancellationToken,
     ) -> Result<Value, BridgeError> {
+        self.request_with_delivery(method, params, deadline, cancellation, false)
+            .await
+    }
+
+    /// Sends a side-effecting request and marks post-flush ambiguity explicitly.
+    pub async fn request_side_effecting_until(
+        &self,
+        method: &str,
+        params: Value,
+        deadline: Instant,
+        cancellation: CancellationToken,
+    ) -> Result<Value, BridgeError> {
+        self.request_with_delivery(method, params, deadline, cancellation, true)
+            .await
+    }
+
+    async fn request_with_delivery(
+        &self,
+        method: &str,
+        params: Value,
+        deadline: Instant,
+        cancellation: CancellationToken,
+        side_effecting: bool,
+    ) -> Result<Value, BridgeError> {
         if let Some(error) = self.closed.borrow().clone() {
             return Err(error);
         }
@@ -178,11 +226,21 @@ impl AppServerRpc {
                 .map_err(|_| protocol_error("app-server response channel closed"))?,
             () = cancellation.cancelled() => {
                 self.pending.lock().remove(&id);
-                Err(BridgeError::new(ErrorCode::Cancelled, "app-server request was cancelled"))
+                Err(request_interrupted(
+                    ErrorCode::Cancelled,
+                    "app-server request was cancelled",
+                    side_effecting,
+                    id,
+                ))
             }
             () = tokio::time::sleep(timeout) => {
                 self.pending.lock().remove(&id);
-                Err(BridgeError::new(ErrorCode::Timeout, "app-server request timed out").retryable(true))
+                Err(request_interrupted(
+                    ErrorCode::Timeout,
+                    "app-server request timed out",
+                    side_effecting,
+                    id,
+                ))
             }
         }
     }
@@ -226,6 +284,7 @@ fn render_message(message: &Value, maximum: usize) -> Result<Vec<u8>, BridgeErro
 async fn read_loop<R>(
     reader: R,
     maximum: usize,
+    maximum_notification: usize,
     pending: Arc<ParkingMutex<HashMap<u64, PendingSender>>>,
     notifications: broadcast::Sender<RpcNotification>,
     closed: watch::Sender<Option<BridgeError>>,
@@ -235,7 +294,7 @@ async fn read_loop<R>(
     let mut lines = FramedRead::new(reader, LinesCodec::new_with_max_length(maximum));
     while let Some(line) = lines.next().await {
         let result = match line {
-            Ok(line) => dispatch_message(&line, &pending, &notifications),
+            Ok(line) => dispatch_message(&line, maximum_notification, &pending, &notifications),
             Err(_) => Err(protocol_error(
                 "app-server message exceeds limit or is not valid UTF-8",
             )),
@@ -254,6 +313,7 @@ async fn read_loop<R>(
 
 fn dispatch_message(
     line: &str,
+    maximum_notification: usize,
     pending: &ParkingMutex<HashMap<u64, PendingSender>>,
     notifications: &broadcast::Sender<RpcNotification>,
 ) -> Result<(), BridgeError> {
@@ -272,6 +332,9 @@ fn dispatch_message(
             let _ = sender.send(result);
         }
         return Ok(());
+    }
+    if line.len() > maximum_notification {
+        return Err(protocol_error("app-server notification exceeds limit"));
     }
     let method = object
         .get("method")
@@ -330,6 +393,24 @@ fn protocol_error(message: &str) -> BridgeError {
     BridgeError::new(ErrorCode::Protocol, message).with_provider("codex-app-server")
 }
 
+fn request_interrupted(
+    code: ErrorCode,
+    message: &str,
+    side_effecting: bool,
+    request_id: u64,
+) -> BridgeError {
+    let error = BridgeError::new(code, message).with_provider("codex-app-server");
+    if side_effecting {
+        error
+            .retryable(false)
+            .with_detail("outcome", "unknown")
+            .with_detail("request_sent", true)
+            .with_detail("rpc_id", request_id)
+    } else {
+        error.retryable(code == ErrorCode::Timeout)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -352,6 +433,7 @@ mod tests {
             client_write,
             RpcConfig {
                 max_message_bytes: 4096,
+                max_notification_bytes: 4096,
                 request_timeout: Duration::from_secs(1),
                 notification_capacity: 8,
             },
@@ -396,6 +478,51 @@ mod tests {
         let values = [first.await.unwrap(), second.await.unwrap()];
         assert!(values.contains(&json!("one")));
         assert!(values.contains(&json!("two")));
+    }
+
+    #[tokio::test]
+    async fn side_effecting_timeout_records_post_flush_unknown_outcome() {
+        let (rpc, mut server) = initialized_connection().await;
+        let request = tokio::spawn({
+            let rpc = Arc::clone(&rpc);
+            async move {
+                rpc.request_side_effecting_until(
+                    "turn/start",
+                    json!({"threadId": "thread-1"}),
+                    Instant::now() + Duration::from_millis(20),
+                    CancellationToken::new(),
+                )
+                .await
+            }
+        });
+        let sent: Value = serde_json::from_str(&server.next().await.unwrap().unwrap()).unwrap();
+        assert_eq!(sent["method"], "turn/start");
+        let error = request.await.unwrap().unwrap_err();
+        assert_eq!(error.code, ErrorCode::Timeout);
+        assert!(!error.retryable);
+        assert_eq!(error.details["outcome"], "unknown");
+        assert_eq!(error.details["request_sent"], true);
+        assert_eq!(error.details["rpc_id"], sent["id"]);
+    }
+
+    #[tokio::test]
+    async fn rejects_notification_ring_above_the_absolute_byte_budget() {
+        let (client, _server) = duplex(64);
+        let (reader, writer) = tokio::io::split(client);
+        let error = AppServerRpc::connect(
+            reader,
+            writer,
+            RpcConfig {
+                max_message_bytes: 64 * 1024 * 1024,
+                max_notification_bytes: 48 * 1024 * 1024,
+                request_timeout: Duration::from_secs(1),
+                notification_capacity: 8,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::Protocol);
+        assert!(error.message.contains("RPC limits"));
     }
 
     #[tokio::test]

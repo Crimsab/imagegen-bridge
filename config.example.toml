@@ -72,8 +72,9 @@ executable = "codex"
 args = []
 session_database = "./data/state.sqlite3"
 rpc_max_message_bytes = 67108864
+rpc_max_notification_bytes = 50331648
 rpc_timeout_ms = 60000
-notification_capacity = 32
+notification_capacity = 4
 shutdown_timeout_ms = 5000
 restart_backoff_ms = 250
 

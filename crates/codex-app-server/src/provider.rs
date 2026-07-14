@@ -1,10 +1,10 @@
 //! Image provider and persistent Codex thread semantics.
 
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, HashSet},
     path::PathBuf,
     sync::{Arc, Weak},
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
@@ -23,6 +23,9 @@ use serde_json::{Value, json};
 use tokio::sync::{Mutex, broadcast};
 
 use crate::{AppServerRpc, CodexProcess};
+
+const TURN_CLEANUP_GRACE: Duration = Duration::from_secs(2);
+const MAX_REVISED_PROMPT_BYTES: usize = 128 * 1024;
 
 /// Durable binding interface implemented by memory and runtime `SQLite` stores.
 #[async_trait]
@@ -254,12 +257,13 @@ impl AppServerImageProvider {
         let (thread_id, reused) = self.resolve_thread(&rpc, &request, &context).await?;
         let result = self.run_turn(&rpc, &thread_id, &request, &context).await;
         if request.session.mode == SessionMode::Isolated {
+            let cleanup_deadline = Instant::now() + TURN_CLEANUP_GRACE;
             let _ = rpc
-                .request_until(
+                .request_side_effecting_until(
                     "thread/archive",
                     json!({"threadId": thread_id}),
-                    context.deadline,
-                    context.cancellation.clone(),
+                    cleanup_deadline,
+                    tokio_util::sync::CancellationToken::new(),
                 )
                 .await;
         }
@@ -412,7 +416,7 @@ impl AppServerImageProvider {
         );
         let mut notifications = rpc.subscribe();
         let result = rpc
-            .request_until(
+            .request_side_effecting_until(
                 "turn/start",
                 json!({"threadId": thread_id, "input": input}),
                 context.deadline,
@@ -420,19 +424,52 @@ impl AppServerImageProvider {
             )
             .await?;
         let turn_id = string_at(&result, &["turn", "id"], "turn/start returned no turn ID")?;
-        let mut images = Vec::new();
-        let mut revised_prompt = None;
+        let max_images = usize::from(request.parameters.n);
+        let encoded_each = self
+            .config
+            .image_limits
+            .max_encoded_bytes
+            .saturating_add(2)
+            .saturating_div(3)
+            .saturating_mul(4);
+        let max_result_bytes = usize::try_from(encoded_each)
+            .unwrap_or(usize::MAX)
+            .saturating_mul(max_images);
+        let mut accumulator = TurnAccumulator {
+            images: Vec::with_capacity(max_images),
+            revised_prompt: None,
+            completed_item_ids: HashSet::with_capacity(max_images),
+            result_bytes: 0,
+            max_images,
+            max_result_bytes,
+        };
         loop {
             let remaining = context.deadline.saturating_duration_since(Instant::now());
             let notification = tokio::select! {
                 result = notifications.recv() => result.map_err(|error| notification_error(&error))?,
                 () = context.cancellation.cancelled() => {
-                    self.interrupt(rpc, thread_id, &turn_id, context).await;
-                    return Err(BridgeError::new(ErrorCode::Cancelled, "image generation was cancelled"));
+                    return Err(self
+                        .interrupt_outcome(
+                            rpc,
+                            &mut notifications,
+                            thread_id,
+                            &turn_id,
+                            ErrorCode::Cancelled,
+                            "image generation was cancelled",
+                        )
+                        .await);
                 }
                 () = tokio::time::sleep(remaining) => {
-                    self.interrupt(rpc, thread_id, &turn_id, context).await;
-                    return Err(BridgeError::new(ErrorCode::Timeout, "image generation timed out").retryable(true));
+                    return Err(self
+                        .interrupt_outcome(
+                            rpc,
+                            &mut notifications,
+                            thread_id,
+                            &turn_id,
+                            ErrorCode::Timeout,
+                            "image generation timed out",
+                        )
+                        .await);
                 }
             };
             if notification.method == "item/completed"
@@ -440,12 +477,18 @@ impl AppServerImageProvider {
                 && notification.params["item"]["type"] == "imageGeneration"
             {
                 let item = &notification.params["item"];
-                if item["status"] == "completed" {
-                    if let Some(result) = item["result"].as_str().filter(|value| !value.is_empty())
-                    {
-                        images.push(result.to_owned());
-                    }
-                    revised_prompt = item["revisedPrompt"].as_str().map(str::to_owned);
+                if item["status"] == "completed"
+                    && let Err(error) = accumulator.capture(item)
+                {
+                    return Err(self
+                        .protocol_failure_outcome(
+                            rpc,
+                            &mut notifications,
+                            thread_id,
+                            &turn_id,
+                            error,
+                        )
+                        .await);
                 }
             }
             if notification.method == "turn/completed"
@@ -454,7 +497,7 @@ impl AppServerImageProvider {
                 if notification.params["turn"]["status"] != "completed" {
                     return Err(turn_failure_error(&notification.params["turn"], request));
                 }
-                if images.is_empty() {
+                if accumulator.images.is_empty() {
                     return Err(BridgeError::new(
                         ErrorCode::Upstream,
                         "Codex turn completed without an image",
@@ -462,8 +505,8 @@ impl AppServerImageProvider {
                     .with_provider("codex-app-server"));
                 }
                 return Ok(TurnImages {
-                    images,
-                    revised_prompt,
+                    images: accumulator.images,
+                    revised_prompt: accumulator.revised_prompt,
                 });
             }
         }
@@ -515,21 +558,92 @@ impl AppServerImageProvider {
         Ok(paths)
     }
 
-    async fn interrupt(
+    async fn interrupt_and_confirm(
         &self,
         rpc: &AppServerRpc,
+        notifications: &mut broadcast::Receiver<crate::RpcNotification>,
         thread_id: &str,
         turn_id: &str,
-        context: &ProviderContext,
-    ) {
-        let _ = rpc
-            .request_until(
-                "turn/interrupt",
-                json!({"threadId": thread_id, "turnId": turn_id}),
-                context.deadline,
-                tokio_util::sync::CancellationToken::new(),
-            )
-            .await;
+    ) -> Result<String, BridgeError> {
+        let cleanup_deadline = Instant::now() + TURN_CLEANUP_GRACE;
+        rpc.request_side_effecting_until(
+            "turn/interrupt",
+            json!({"threadId": thread_id, "turnId": turn_id}),
+            cleanup_deadline,
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await?;
+        loop {
+            let remaining = cleanup_deadline.saturating_duration_since(Instant::now());
+            let notification = tokio::time::timeout(remaining, notifications.recv())
+                .await
+                .map_err(|_| {
+                    unknown_app_server_outcome(
+                        ErrorCode::Timeout,
+                        "turn interruption was not confirmed",
+                    )
+                })?
+                .map_err(|error| notification_error(&error))?;
+            if notification.method == "turn/completed"
+                && belongs_to(&notification.params, thread_id, turn_id)
+            {
+                return Ok(notification.params["turn"]["status"]
+                    .as_str()
+                    .and_then(safe_failure_label)
+                    .unwrap_or("unknown")
+                    .to_owned());
+            }
+        }
+    }
+
+    async fn interrupt_outcome(
+        &self,
+        rpc: &AppServerRpc,
+        notifications: &mut broadcast::Receiver<crate::RpcNotification>,
+        thread_id: &str,
+        turn_id: &str,
+        code: ErrorCode,
+        message: &str,
+    ) -> BridgeError {
+        match self
+            .interrupt_and_confirm(rpc, notifications, thread_id, turn_id)
+            .await
+        {
+            Ok(status) if matches!(status.as_str(), "interrupted" | "cancelled" | "failed") => {
+                BridgeError::new(code, message)
+                    .with_provider("codex-app-server")
+                    .retryable(code == ErrorCode::Timeout)
+                    .with_detail("outcome", "cancelled")
+                    .with_detail("terminal_status", status)
+            }
+            Ok(status) => {
+                unknown_app_server_outcome(code, message).with_detail("terminal_status", status)
+            }
+            Err(_) => unknown_app_server_outcome(code, message),
+        }
+    }
+
+    async fn protocol_failure_outcome(
+        &self,
+        rpc: &AppServerRpc,
+        notifications: &mut broadcast::Receiver<crate::RpcNotification>,
+        thread_id: &str,
+        turn_id: &str,
+        error: BridgeError,
+    ) -> BridgeError {
+        match self
+            .interrupt_and_confirm(rpc, notifications, thread_id, turn_id)
+            .await
+        {
+            Ok(status) if matches!(status.as_str(), "interrupted" | "cancelled" | "failed") => {
+                error.with_detail("terminal_status", status)
+            }
+            Ok(status) => error
+                .retryable(false)
+                .with_detail("outcome", "unknown")
+                .with_detail("terminal_status", status),
+            Err(_) => error.retryable(false).with_detail("outcome", "unknown"),
+        }
     }
 
     fn normalized_image(&self, encoded: &str) -> Result<GeneratedImage, BridgeError> {
@@ -801,6 +915,74 @@ fn is_safety_failure_label(value: &str) -> bool {
         || lower.contains("refusal")
 }
 
+fn unknown_app_server_outcome(code: ErrorCode, message: &str) -> BridgeError {
+    BridgeError::new(code, message)
+        .with_provider("codex-app-server")
+        .retryable(false)
+        .with_detail("outcome", "unknown")
+}
+
+struct TurnAccumulator {
+    images: Vec<String>,
+    revised_prompt: Option<String>,
+    completed_item_ids: HashSet<String>,
+    result_bytes: usize,
+    max_images: usize,
+    max_result_bytes: usize,
+}
+
+impl TurnAccumulator {
+    fn capture(&mut self, item: &Value) -> Result<(), BridgeError> {
+        let item_id = item["id"]
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| app_server_protocol_error("completed image has no item ID"))?;
+        if self.completed_item_ids.contains(item_id) {
+            return Err(app_server_protocol_error(
+                "app-server returned a duplicate completed image item",
+            ));
+        }
+        if self.images.len() >= self.max_images {
+            return Err(app_server_protocol_error(
+                "app-server returned more images than negotiated",
+            ));
+        }
+        let result = item["result"]
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| app_server_protocol_error("completed image has no result"))?;
+        let next_result_bytes = self
+            .result_bytes
+            .checked_add(result.len())
+            .ok_or_else(|| app_server_protocol_error("aggregate image result size overflowed"))?;
+        if next_result_bytes > self.max_result_bytes {
+            return Err(app_server_protocol_error(
+                "aggregate image results exceed the byte limit",
+            ));
+        }
+        let revised = item["revisedPrompt"]
+            .as_str()
+            .or_else(|| item["revised_prompt"].as_str())
+            .filter(|value| !value.is_empty());
+        if revised.is_some_and(|value| value.len() > MAX_REVISED_PROMPT_BYTES) {
+            return Err(app_server_protocol_error(
+                "Codex revised prompt exceeds the configured limit",
+            ));
+        }
+        self.completed_item_ids.insert(item_id.to_owned());
+        self.result_bytes = next_result_bytes;
+        self.images.push(result.to_owned());
+        if let Some(revised) = revised {
+            self.revised_prompt = Some(revised.to_owned());
+        }
+        Ok(())
+    }
+}
+
+fn app_server_protocol_error(message: &str) -> BridgeError {
+    BridgeError::new(ErrorCode::Protocol, message).with_provider("codex-app-server")
+}
+
 struct TurnImages {
     images: Vec<String>,
     revised_prompt: Option<String>,
@@ -847,6 +1029,68 @@ mod tests {
         assert!(!error.message.contains("secret"));
     }
 
+    #[test]
+    fn turn_accumulator_bounds_count_identity_bytes_and_revised_prompt() {
+        fn accumulator(max_images: usize, max_result_bytes: usize) -> TurnAccumulator {
+            TurnAccumulator {
+                images: Vec::new(),
+                revised_prompt: None,
+                completed_item_ids: HashSet::new(),
+                result_bytes: 0,
+                max_images,
+                max_result_bytes,
+            }
+        }
+
+        let first = json!({
+            "id": "image-1",
+            "result": "1234",
+            "revisedPrompt": "safe"
+        });
+        let mut bounded = accumulator(1, 4);
+        bounded.capture(&first).unwrap();
+        assert_eq!(bounded.images, ["1234"]);
+        assert!(
+            bounded
+                .capture(&first)
+                .unwrap_err()
+                .message
+                .contains("duplicate")
+        );
+
+        let second = json!({"id": "image-2", "result": "1"});
+        assert!(
+            bounded
+                .capture(&second)
+                .unwrap_err()
+                .message
+                .contains("more images")
+        );
+
+        let mut bytes = accumulator(2, 3);
+        assert!(
+            bytes
+                .capture(&first)
+                .unwrap_err()
+                .message
+                .contains("byte limit")
+        );
+
+        let mut revised = accumulator(1, 4);
+        let revised_item = json!({
+            "id": "image-1",
+            "result": "1",
+            "revisedPrompt": "x".repeat(MAX_REVISED_PROMPT_BYTES + 1)
+        });
+        assert!(
+            revised
+                .capture(&revised_item)
+                .unwrap_err()
+                .message
+                .contains("revised prompt")
+        );
+    }
+
     async fn rpc_and_server() -> (
         Arc<AppServerRpc>,
         Framed<tokio::io::DuplexStream, LinesCodec>,
@@ -859,6 +1103,7 @@ mod tests {
             writer,
             RpcConfig {
                 max_message_bytes: 128 * 1024,
+                max_notification_bytes: 128 * 1024,
                 request_timeout: Duration::from_secs(2),
                 notification_capacity: 16,
             },
@@ -1264,8 +1509,35 @@ done
             .send(json!({"id": turn["id"], "result": {"turn": {"id": "turn-timeout"}}}).to_string())
             .await
             .unwrap();
+        let interrupt = next_message(&mut server).await;
+        assert_eq!(interrupt["method"], "turn/interrupt");
+        server
+            .send(json!({"id": interrupt["id"], "result": {}}).to_string())
+            .await
+            .unwrap();
+        server
+            .send(
+                json!({
+                    "method": "turn/completed",
+                    "params": {
+                        "threadId": "thread-timeout",
+                        "turn": {"id": "turn-timeout", "status": "interrupted"}
+                    }
+                })
+                .to_string(),
+            )
+            .await
+            .unwrap();
+        let archive = next_message(&mut server).await;
+        assert_eq!(archive["method"], "thread/archive");
+        server
+            .send(json!({"id": archive["id"], "result": {}}).to_string())
+            .await
+            .unwrap();
         let error = execution.await.unwrap().unwrap_err();
         assert_eq!(error.code, ErrorCode::Timeout);
+        assert!(error.retryable);
+        assert_eq!(error.details["outcome"], "cancelled");
     }
 
     #[tokio::test]
@@ -1320,6 +1592,19 @@ done
             .send(json!({"id": interrupt["id"], "result": {}}).to_string())
             .await
             .unwrap();
+        server
+            .send(
+                json!({
+                    "method": "turn/completed",
+                    "params": {
+                        "threadId": "thread-cancel",
+                        "turn": {"id": "turn-cancel", "status": "interrupted"}
+                    }
+                })
+                .to_string(),
+            )
+            .await
+            .unwrap();
         let archive = next_message(&mut server).await;
         assert_eq!(archive["method"], "thread/archive");
         server
@@ -1328,6 +1613,8 @@ done
             .unwrap();
         let error = execution.await.unwrap().unwrap_err();
         assert_eq!(error.code, ErrorCode::Cancelled);
+        assert!(!error.retryable);
+        assert_eq!(error.details["outcome"], "cancelled");
     }
 
     #[tokio::test]

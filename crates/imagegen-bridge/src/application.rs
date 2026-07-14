@@ -79,6 +79,7 @@ impl BridgeApplication {
                         cwd: settings.cwd.clone(),
                         rpc: RpcConfig {
                             max_message_bytes: settings.rpc_max_message_bytes,
+                            max_notification_bytes: settings.rpc_max_notification_bytes,
                             request_timeout: Duration::from_millis(settings.rpc_timeout_ms),
                             notification_capacity: settings.notification_capacity,
                         },

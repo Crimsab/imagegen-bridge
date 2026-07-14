@@ -338,6 +338,8 @@ pub struct CodexAppServerSettings {
     pub session_database: PathBuf,
     /// Maximum JSONL message bytes.
     pub rpc_max_message_bytes: usize,
+    /// Maximum JSONL bytes retained for one app-server notification.
+    pub rpc_max_notification_bytes: usize,
     /// Default RPC request timeout in milliseconds.
     pub rpc_timeout_ms: u64,
     /// Notification broadcast capacity.
@@ -358,8 +360,9 @@ impl Default for CodexAppServerSettings {
             codex_model: None,
             session_database: PathBuf::from("./data/state.sqlite3"),
             rpc_max_message_bytes: 64 * 1024 * 1024,
+            rpc_max_notification_bytes: 48 * 1024 * 1024,
             rpc_timeout_ms: 60_000,
-            notification_capacity: 32,
+            notification_capacity: 4,
             shutdown_timeout_ms: 5_000,
             restart_backoff_ms: 250,
         }

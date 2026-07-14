@@ -193,8 +193,18 @@ impl BridgeConfig {
                 );
             }
             if app.rpc_max_message_bytes == 0
+                || app.rpc_max_message_bytes > 64 * 1024 * 1024
+                || app.rpc_max_notification_bytes == 0
+                || app.rpc_max_notification_bytes > app.rpc_max_message_bytes
+                || app.rpc_max_notification_bytes > 48 * 1024 * 1024
                 || app.rpc_timeout_ms == 0
                 || app.notification_capacity == 0
+                || app.notification_capacity > 64
+                || app
+                    .notification_capacity
+                    .checked_next_power_of_two()
+                    .and_then(|slots| app.rpc_max_notification_bytes.checked_mul(slots))
+                    .is_none_or(|bytes| bytes > 256 * 1024 * 1024)
                 || app.shutdown_timeout_ms == 0
                 || app.restart_backoff_ms > 30_000
             {
