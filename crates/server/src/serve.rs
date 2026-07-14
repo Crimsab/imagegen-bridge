@@ -35,6 +35,7 @@ pub async fn serve(
         listener,
         settings.max_connections,
         Duration::from_millis(settings.read_timeout_ms),
+        Duration::from_millis(settings.write_timeout_ms),
     );
     axum::serve(listener, router)
         .with_graceful_shutdown(shutdown)
@@ -45,14 +46,21 @@ struct LimitedListener {
     listener: TcpListener,
     permits: Arc<Semaphore>,
     read_timeout: Duration,
+    write_timeout: Duration,
 }
 
 impl LimitedListener {
-    fn new(listener: TcpListener, maximum: usize, read_timeout: Duration) -> Self {
+    fn new(
+        listener: TcpListener,
+        maximum: usize,
+        read_timeout: Duration,
+        write_timeout: Duration,
+    ) -> Self {
         Self {
             listener,
             permits: Arc::new(Semaphore::new(maximum)),
             read_timeout,
+            write_timeout,
         }
     }
 }
@@ -69,7 +77,10 @@ impl Listener for LimitedListener {
         loop {
             match self.listener.accept().await {
                 Ok((stream, address)) => {
-                    return (LimitedIo::new(stream, permit, self.read_timeout), address);
+                    return (
+                        LimitedIo::new(stream, permit, self.read_timeout, self.write_timeout),
+                        address,
+                    );
                 }
                 Err(_) => sleep(Duration::from_secs(1)).await,
             }
@@ -86,16 +97,48 @@ struct LimitedIo {
     _permit: OwnedSemaphorePermit,
     read_timeout: Duration,
     read_deadline: Pin<Box<Sleep>>,
+    write_timeout: Duration,
+    write_deadline: Pin<Box<Sleep>>,
+    write_stalled: bool,
 }
 
 impl LimitedIo {
-    fn new(stream: TcpStream, permit: OwnedSemaphorePermit, read_timeout: Duration) -> Self {
+    fn new(
+        stream: TcpStream,
+        permit: OwnedSemaphorePermit,
+        read_timeout: Duration,
+        write_timeout: Duration,
+    ) -> Self {
         Self {
             stream,
             _permit: permit,
             read_timeout,
             read_deadline: Box::pin(sleep(read_timeout)),
+            write_timeout,
+            write_deadline: Box::pin(sleep(write_timeout)),
+            write_stalled: false,
         }
+    }
+
+    fn poll_write_stall(&mut self, context: &mut Context<'_>) -> Poll<io::Result<()>> {
+        if !self.write_stalled {
+            self.write_stalled = true;
+            self.write_deadline
+                .as_mut()
+                .reset(tokio::time::Instant::now() + self.write_timeout);
+        }
+        if self.write_deadline.as_mut().poll(context).is_ready() {
+            Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "HTTP connection write timed out",
+            )))
+        } else {
+            Poll::Pending
+        }
+    }
+
+    fn record_write_progress(&mut self) {
+        self.write_stalled = false;
     }
 }
 
@@ -132,15 +175,40 @@ impl AsyncWrite for LimitedIo {
         context: &mut Context<'_>,
         buffer: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.stream).poll_write(context, buffer)
+        match Pin::new(&mut self.stream).poll_write(context, buffer) {
+            Poll::Ready(Ok(written)) => {
+                if written > 0 {
+                    self.record_write_progress();
+                }
+                Poll::Ready(Ok(written))
+            }
+            Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
+            Poll::Pending => self
+                .poll_write_stall(context)
+                .map(|result| result.map(|()| 0)),
+        }
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.stream).poll_flush(context)
+        match Pin::new(&mut self.stream).poll_flush(context) {
+            Poll::Ready(Ok(())) => {
+                self.record_write_progress();
+                Poll::Ready(Ok(()))
+            }
+            Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
+            Poll::Pending => self.poll_write_stall(context),
+        }
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.stream).poll_shutdown(context)
+        match Pin::new(&mut self.stream).poll_shutdown(context) {
+            Poll::Ready(Ok(())) => {
+                self.record_write_progress();
+                Poll::Ready(Ok(()))
+            }
+            Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
+            Poll::Pending => self.poll_write_stall(context),
+        }
     }
 }
 
@@ -148,10 +216,12 @@ impl AsyncWrite for LimitedIo {
 mod tests {
     #![allow(clippy::unwrap_used)]
 
-    use axum::{Router, routing::get};
+    use axum::{Router, body::Body, http::Response, routing::get};
     use tokio::{
         io::{AsyncReadExt as _, AsyncWriteExt as _},
+        net::TcpSocket,
         sync::oneshot,
+        time::timeout,
     };
 
     use super::*;
@@ -163,6 +233,7 @@ mod tests {
         let settings = ServerSettings {
             max_connections: 1,
             read_timeout_ms: 1_000,
+            write_timeout_ms: 1_000,
             ..ServerSettings::default()
         };
         let (shutdown, signal) = oneshot::channel();
@@ -185,5 +256,55 @@ mod tests {
         assert!(response.ends_with(b"ok"));
         let _ = shutdown.send(());
         server.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn stalled_writer_releases_the_connection_permit() {
+        let listener = bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let settings = ServerSettings {
+            max_connections: 1,
+            read_timeout_ms: 5_000,
+            write_timeout_ms: 150,
+            ..ServerSettings::default()
+        };
+        let router = Router::new()
+            .route(
+                "/large",
+                get(|| async { Response::new(Body::from(vec![b'A'; 8 * 1024 * 1024])) }),
+            )
+            .route("/probe", get(|| async { "probe-ok" }));
+        let (shutdown, signal) = oneshot::channel();
+        let server = tokio::spawn(serve(listener, router, settings, async move {
+            let _ = signal.await;
+        }));
+
+        let socket = TcpSocket::new_v4().unwrap();
+        socket.set_recv_buffer_size(4 * 1024).unwrap();
+        let mut slow_client = socket.connect(address).await.unwrap();
+        slow_client
+            .write_all(b"GET /large HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n")
+            .await
+            .unwrap();
+
+        let mut probe = TcpStream::connect(address).await.unwrap();
+        probe
+            .write_all(b"GET /probe HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        let mut response = Vec::new();
+        timeout(Duration::from_secs(3), probe.read_to_end(&mut response))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(response.starts_with(b"HTTP/1.1 200 OK"));
+        assert!(response.ends_with(b"probe-ok"));
+
+        let _ = shutdown.send(());
+        timeout(Duration::from_secs(3), server)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
     }
 }

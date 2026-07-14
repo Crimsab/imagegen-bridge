@@ -435,6 +435,8 @@ pub struct ServerSettings {
     pub max_connections: usize,
     /// Request read timeout in milliseconds.
     pub read_timeout_ms: u64,
+    /// Maximum time a socket write may remain stalled without progress.
+    pub write_timeout_ms: u64,
     /// Opt-in low-cardinality Prometheus exposition.
     pub metrics: MetricsSettings,
     /// Structured content-safe tracing for the standalone server.
@@ -452,6 +454,7 @@ impl Default for ServerSettings {
             max_header_bytes: 32 * 1024,
             max_connections: 256,
             read_timeout_ms: 30_000,
+            write_timeout_ms: 30_000,
             metrics: MetricsSettings::default(),
             tracing: TracingSettings::default(),
             jobs: JobSettings::default(),

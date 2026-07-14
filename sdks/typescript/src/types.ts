@@ -280,6 +280,7 @@ export interface ConfigurationDiagnostics {
   max_connections: number;
   max_body_bytes: number;
   read_timeout_ms: number;
+  write_timeout_ms: number;
   provenance: ConfigurationOrigin[];
 }
 

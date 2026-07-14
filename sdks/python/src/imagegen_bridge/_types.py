@@ -474,6 +474,7 @@ class ConfigurationDiagnostics:
     max_connections: int
     max_body_bytes: int
     read_timeout_ms: int
+    write_timeout_ms: int
     provenance: tuple[ConfigurationOrigin, ...]
     version: int | None = None
     default_provider: str | None = None

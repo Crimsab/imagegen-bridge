@@ -29,6 +29,7 @@ pub(crate) struct ConfigurationDiagnostics {
     pub(crate) max_connections: usize,
     pub(crate) max_body_bytes: u64,
     pub(crate) read_timeout_ms: u64,
+    pub(crate) write_timeout_ms: u64,
     pub(crate) provenance: Vec<ConfigurationOrigin>,
 }
 
@@ -52,6 +53,7 @@ impl ConfigurationDiagnostics {
             max_connections: settings.max_connections,
             max_body_bytes: settings.max_body_bytes,
             read_timeout_ms: settings.read_timeout_ms,
+            write_timeout_ms: settings.write_timeout_ms,
             provenance: Vec::new(),
         }
     }
@@ -84,6 +86,7 @@ impl ConfigurationDiagnostics {
             max_connections: 0,
             max_body_bytes: 0,
             read_timeout_ms: 0,
+            write_timeout_ms: 0,
             provenance: Vec::new(),
         }
     }

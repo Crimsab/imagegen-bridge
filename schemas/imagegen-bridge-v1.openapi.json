@@ -503,6 +503,10 @@
           "version": {
             "minimum": 1,
             "type": "integer"
+          },
+          "write_timeout_ms": {
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
@@ -513,6 +517,7 @@
           "max_connections",
           "max_body_bytes",
           "read_timeout_ms",
+          "write_timeout_ms",
           "provenance"
         ],
         "type": "object"
@@ -3084,7 +3089,8 @@
                     "metrics_enabled": false,
                     "provenance": [],
                     "read_timeout_ms": 30000,
-                    "version": 1
+                    "version": 1,
+                    "write_timeout_ms": 30000
                   },
                   "events": {
                     "capacity": 256,

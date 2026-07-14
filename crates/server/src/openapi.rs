@@ -92,7 +92,7 @@ pub fn openapi_document() -> Value {
                     "responses": {
                         "200": json_response("Redaction-safe operator diagnostics", json!({"$ref":"#/components/schemas/OperatorDiagnostics"}), json!({
                             "bridge_version":"0.1.0",
-                            "configuration":{"version":1,"default_provider":"codex-app-server","listener_scope":"loopback","listener_port":8787,"authentication_required":true,"metrics_enabled":false,"jobs_enabled":true,"max_connections":256,"max_body_bytes":83_886_080,"read_timeout_ms":30000,"provenance":[]},
+                            "configuration":{"version":1,"default_provider":"codex-app-server","listener_scope":"loopback","listener_port":8787,"authentication_required":true,"metrics_enabled":false,"jobs_enabled":true,"max_connections":256,"max_body_bytes":83_886_080,"read_timeout_ms":30000,"write_timeout_ms":30000,"provenance":[]},
                             "artifact_storage_enabled":true,
                             "runtime":{"global_queued":0,"providers_queued":{"codex-app-server":0}},
                             "jobs":{"total":12,"queued":0,"running":1,"succeeded":10,"failed":1,"cancelled":0,"interrupted":0,"hidden":0,"database_bytes":40960,"active_workers":1,"max_pending":1000,"max_running":4,"retention_secs":604_800,"max_retained":10000},
@@ -571,7 +571,7 @@ fn add_compatibility_schemas(schemas: &mut Map<String, Value>) {
     }));
     schemas.insert("ConfigurationDiagnostics".to_owned(), json!({
         "type":"object","additionalProperties":false,
-        "required":["listener_scope","authentication_required","metrics_enabled","jobs_enabled","max_connections","max_body_bytes","read_timeout_ms","provenance"],
+        "required":["listener_scope","authentication_required","metrics_enabled","jobs_enabled","max_connections","max_body_bytes","read_timeout_ms","write_timeout_ms","provenance"],
         "properties":{
             "version":{"type":"integer","minimum":1},
             "default_provider":{"type":"string"},
@@ -583,6 +583,7 @@ fn add_compatibility_schemas(schemas: &mut Map<String, Value>) {
             "max_connections":{"type":"integer","minimum":0},
             "max_body_bytes":{"type":"integer","minimum":0},
             "read_timeout_ms":{"type":"integer","minimum":0},
+            "write_timeout_ms":{"type":"integer","minimum":0},
             "provenance":{"type":"array","items":{"$ref":"#/components/schemas/ConfigurationOrigin"}}
         }
     }));

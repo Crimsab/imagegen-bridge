@@ -97,6 +97,7 @@ max_body_bytes = 83886080
 max_header_bytes = 32768
 max_connections = 256
 read_timeout_ms = 30000
+write_timeout_ms = 30000
 
 [server.metrics]
 enabled = false

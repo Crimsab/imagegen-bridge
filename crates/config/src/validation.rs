@@ -253,17 +253,27 @@ impl BridgeConfig {
         if let Some(name) = &self.server.bearer_token_env {
             validate_env_name("server.bearer_token_env", name, &mut issue);
         }
-        if self.server.bind.parse::<SocketAddr>().is_err() {
-            issue(
+        match self.server.bind.parse::<SocketAddr>() {
+            Ok(address) => {
+                if !address.ip().is_loopback() && self.server.bearer_token_env.is_none() {
+                    issue(
+                        "server.bearer_token_env",
+                        "required_for_remote_bind",
+                        "a non-loopback server bind requires bridge bearer authentication",
+                    );
+                }
+            }
+            Err(_) => issue(
                 "server.bind",
                 "invalid",
                 "server bind must be a numeric socket address",
-            );
+            ),
         }
         if self.server.max_body_bytes == 0
             || self.server.max_header_bytes == 0
             || self.server.max_connections == 0
             || self.server.read_timeout_ms == 0
+            || self.server.write_timeout_ms == 0
         {
             issue(
                 "server",
@@ -466,6 +476,25 @@ mod tests {
                 .iter()
                 .any(|issue| { issue.field == "providers.codex_responses.max_parallel_outputs" })
         );
+    }
+
+    #[test]
+    fn remote_server_binds_require_a_bearer_reference() {
+        for bind in ["0.0.0.0:8787", "[::]:8787", "192.0.2.1:8787"] {
+            let mut config = BridgeConfig::default();
+            config.server.bind = bind.to_owned();
+            assert!(config.check().iter().any(|issue| {
+                issue.field == "server.bearer_token_env" && issue.code == "required_for_remote_bind"
+            }));
+            config.server.bearer_token_env = Some("IMAGEGEN_BRIDGE_BEARER_TOKEN".to_owned());
+            assert!(config.check().is_empty(), "remote bind {bind} with auth");
+        }
+
+        for bind in ["127.0.0.1:8787", "[::1]:8787"] {
+            let mut config = BridgeConfig::default();
+            config.server.bind = bind.to_owned();
+            assert!(config.check().is_empty(), "loopback bind {bind}");
+        }
     }
 
     #[test]

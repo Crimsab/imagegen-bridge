@@ -85,6 +85,7 @@ async fn diagnostics(headers: HeaderMap) -> Response {
             "max_connections": 32,
             "max_body_bytes": 83_886_080,
             "read_timeout_ms": 30000,
+            "write_timeout_ms": 30000,
             "provenance": [
                 {"field":"default_provider","source":"file","key":"default_provider"},
                 {"field":"server.jobs.enabled","source":"default","key":"server.jobs.enabled"}
