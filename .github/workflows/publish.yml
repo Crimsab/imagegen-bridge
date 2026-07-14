@@ -252,17 +252,23 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public --provenance
 
-  ghcr:
-    name: GHCR
+  ghcr-build:
+    name: GHCR build (${{ matrix.platform }})
     needs: verify
     if: ${{ inputs.publish_container }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write
-      attestations: write
-      id-token: write
     steps:
       - name: Check out released source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -289,20 +295,111 @@ jobs:
             type=semver,pattern={{major}}.{{minor}},value=${{ inputs.tag }}
             type=raw,value=latest
 
-      - name: Build and push multi-architecture image
+      - name: Prepare platform artifact name
+        id: platform
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: echo "name=${PLATFORM//\//-}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push platform image by digest
         id: push
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.metadata.outputs.tags }}
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=ghcr.io/crimsab/imagegen-bridge,push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.metadata.outputs.labels }}
           build-args: IMAGE_VERSION=${{ needs.verify.outputs.version }}
+
+      - name: Export platform digest
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+
+      - name: Upload platform digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: digests-${{ steps.platform.outputs.name }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  ghcr:
+    name: GHCR manifest
+    needs: [verify, ghcr-build]
+    if: ${{ inputs.publish_container }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    steps:
+      - name: Download platform digests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: digests-*
+          path: /tmp/digests
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive image metadata
+        id: metadata
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/crimsab/imagegen-bridge
+          tags: |
+            type=semver,pattern={{version}},value=${{ inputs.tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.tag }}
+            type=raw,value=latest
+
+      - name: Create and verify multi-architecture manifest
+        id: manifest
+        working-directory: /tmp/digests
+        env:
+          IMAGE: ghcr.io/crimsab/imagegen-bridge
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          mapfile -t tags < <(jq -r '.tags[]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          mapfile -t digests < <(find . -maxdepth 1 -type f -printf '%f\n' | sort)
+          [[ "${#tags[@]}" -gt 0 ]]
+          [[ "${#digests[@]}" -eq 2 ]]
+
+          args=()
+          for tag in "${tags[@]}"; do
+            args+=(--tag "$tag")
+          done
+          for digest in "${digests[@]}"; do
+            [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+            args+=("$IMAGE@sha256:$digest")
+          done
+          docker buildx imagetools create "${args[@]}"
+
+          manifest_digest="$(
+            docker buildx imagetools inspect "$IMAGE:$VERSION" \
+              --format '{{json .Manifest}}' | jq -er '.digest'
+          )"
+          [[ "$manifest_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "digest=$manifest_digest" >> "$GITHUB_OUTPUT"
 
       - name: Attest container provenance
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-name: ghcr.io/crimsab/imagegen-bridge
-          subject-digest: ${{ steps.push.outputs.digest }}
+          subject-digest: ${{ steps.manifest.outputs.digest }}
           push-to-registry: true
