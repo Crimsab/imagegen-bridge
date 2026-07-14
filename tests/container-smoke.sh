@@ -182,11 +182,29 @@ docker run --detach --name "$NAME" \
   --volume "$ARTIFACT_VOLUME:/data/artifacts" \
   "$IMAGE" >/dev/null
 
-PORT=$(docker port "$NAME" 8787/tcp | sed -n 's/.*://p')
-BASE_URL="http://127.0.0.1:$PORT"
-if [ -n "$CLIENT_CONTAINER" ]; then
-  BASE_URL="http://$NAME:8787"
-fi
+refresh_base_url() {
+  if [ -n "$CLIENT_CONTAINER" ]; then
+    BASE_URL="http://$NAME:8787"
+  else
+    PORT=$(docker port "$NAME" 8787/tcp | sed -n 's/.*://p')
+    BASE_URL="http://127.0.0.1:$PORT"
+  fi
+}
+
+refresh_base_url
+
+wait_until_ready() {
+  attempt=0
+  until curl --fail --silent "$BASE_URL/health/ready" | grep -q '"status":"ready"'; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge 100 ]; then
+      docker logs --tail 100 "$NAME" >&2
+      return 1
+    fi
+    sleep 0.1
+  done
+}
+
 attempt=0
 until curl --fail --silent "$BASE_URL/health/live" >/dev/null; do
   attempt=$((attempt + 1))
@@ -203,7 +221,7 @@ if docker exec "$NAME" touch /rootfs-must-be-read-only >/dev/null 2>&1; then
   exit 1
 fi
 
-curl --fail --silent "$BASE_URL/health/ready" | grep -q '"status":"ready"'
+wait_until_ready
 curl --fail --silent \
   --header "Authorization: Bearer $SMOKE_TOKEN" \
   "$BASE_URL/metrics" | grep -q '^# HELP imagegen_bridge_requests_total'
@@ -228,6 +246,7 @@ docker stop --time 45 "$NAME" >/dev/null
 # migrated SQLite state and resume the existing Codex thread rather than create
 # another chat.
 docker start "$NAME" >/dev/null
+refresh_base_url
 attempt=0
 until curl --fail --silent "$BASE_URL/health/live" >/dev/null; do
   attempt=$((attempt + 1))
@@ -237,7 +256,7 @@ until curl --fail --silent "$BASE_URL/health/live" >/dev/null; do
   fi
   sleep 0.1
 done
-curl --fail --silent "$BASE_URL/health/ready" | grep -q '"status":"ready"'
+wait_until_ready
 curl --fail --silent --show-error \
   --header "Authorization: Bearer $SMOKE_TOKEN" \
   --header "Content-Type: application/json" \
