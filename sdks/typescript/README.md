@@ -22,7 +22,12 @@ const result = await bridge.images.generate({
 });
 const queued = await bridge.jobs.create({ operation: "generate", prompt: "a second paper fox" });
 const completed = await bridge.jobs.get(queued.id);
-const page = await bridge.jobs.list({ status: "succeeded" });
+const page = await bridge.jobs.list({
+  status: "succeeded",
+  visibility: "active",
+  favorite: true,
+  search: "paper fox",
+});
 const diagnostics = await bridge.diagnostics();
 console.log(diagnostics.configuration.listener_scope, diagnostics.providers);
 ```
@@ -31,5 +36,7 @@ Changing `routing.provider` is the only SDK change needed to select another
 configured provider.
 `bridge.jobs` exposes typed `create`, `get`, `list`, `cancel`, and `update` operations for
 durable artifact-backed work.
+List filters include stable cursor pagination, status, active/hidden/all
+visibility, favorite state, and literal prompt search.
 `diagnostics()` exposes the typed, redaction-safe operator snapshot used by the
 embedded dashboard without credential values, prompts, or host paths.

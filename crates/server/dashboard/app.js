@@ -14,6 +14,7 @@ const state = {
 	summaries: [],
 	assetUrls: new Map(),
 	pollTimer: null,
+	searchTimer: null,
 	loadSequence: 0,
 	authenticationPrompted: false,
 	providers: [],
@@ -31,6 +32,7 @@ const elements = {
 	grid: document.querySelector("#job-grid"),
 	libraryMessage: document.querySelector("#library-message"),
 	statusFilter: document.querySelector("#status-filter"),
+	searchFilter: document.querySelector("#search-filter"),
 	favoritesFilter: document.querySelector("#favorites-filter"),
 	deletedFilter: document.querySelector("#deleted-filter"),
 	loadMore: document.querySelector("#load-more-button"),
@@ -50,7 +52,9 @@ const elements = {
 	operatorSessionProvider: document.querySelector("#operator-session-provider"),
 	sessionResult: document.querySelector("#session-result"),
 	confirmDialog: document.querySelector("#confirm-dialog"),
+	confirmTitle: document.querySelector("#confirm-title"),
 	confirmMessage: document.querySelector("#confirm-message"),
+	confirmAction: document.querySelector("#confirm-action-button"),
 	cancelConfirmation: document.querySelector("#cancel-confirmation-button"),
 	connectionDialog: document.querySelector("#connection-dialog"),
 	token: document.querySelector("#bearer-token"),
@@ -188,22 +192,28 @@ function renderOperatorSummary(diagnostics) {
 	const totalProviders = (diagnostics.providers || []).length;
 	const items = [
 		["Bridge", diagnostics.bridge_version || "unknown"],
-		[
-			"Providers",
-			`${ready}/${totalProviders} ready`,
-		],
+		["Providers", `${ready}/${totalProviders} ready`],
 		[
 			"Listener",
 			config.listener_port == null
 				? config.listener_scope || "unknown"
 				: `${config.listener_scope || "unknown"} · ${config.listener_port}`,
 		],
-		["Bridge auth", config.authentication_required ? "required" : "not configured"],
+		[
+			"Bridge auth",
+			config.authentication_required ? "required" : "not configured",
+		],
 		["Runtime queued", String(diagnostics.runtime?.global_queued ?? 0)],
-		["Active workers", jobs ? `${jobs.active_workers}/${jobs.max_running}` : "disabled"],
+		[
+			"Active workers",
+			jobs ? `${jobs.active_workers}/${jobs.max_running}` : "disabled",
+		],
 		["Retained jobs", jobs ? String(jobs.total) : "disabled"],
 		["Job database", jobs ? formatBytes(jobs.database_bytes) : "disabled"],
-		["Artifact storage", diagnostics.artifact_storage_enabled ? "enabled" : "disabled"],
+		[
+			"Artifact storage",
+			diagnostics.artifact_storage_enabled ? "enabled" : "disabled",
+		],
 		["Metrics", config.metrics_enabled ? "enabled" : "disabled"],
 	];
 	const nodes = items.map(([term, value]) => {
@@ -280,12 +290,20 @@ function renderProvenance(provenance) {
 	elements.provenanceList.replaceChildren(
 		...(rows.length > 0
 			? rows
-			: [create("div", "provenance-row", "Provenance unavailable for this embedded host.")]),
+			: [
+					create(
+						"div",
+						"provenance-row",
+						"Provenance unavailable for this embedded host.",
+					),
+				]),
 	);
 }
 
 function joinValues(values) {
-	return Array.isArray(values) && values.length > 0 ? values.join(", ") : "None";
+	return Array.isArray(values) && values.length > 0
+		? values.join(", ")
+		: "None";
 }
 
 async function inspectSession(event) {
@@ -312,7 +330,11 @@ function renderSession(session, provider) {
 		details.append(create("dt", "", term), create("dd", "", value || "—"));
 	}
 	const remove = makeButton("Delete binding", "danger", async () => {
-		const confirmed = await confirmSessionDeletion(session.key);
+		const confirmed = await confirmAction({
+			title: "Delete persistent session?",
+			message: `Delete the local binding “${session.key}”? The upstream Codex thread is not deleted.`,
+			action: "Delete session",
+		});
 		if (!confirmed) return;
 		remove.disabled = true;
 		try {
@@ -327,8 +349,10 @@ function renderSession(session, provider) {
 	elements.sessionResult.replaceChildren(details, remove);
 }
 
-function confirmSessionDeletion(key) {
-	elements.confirmMessage.textContent = `Delete the local binding “${key}”? The upstream Codex thread is not deleted.`;
+function confirmAction({ title, message, action }) {
+	elements.confirmTitle.textContent = title;
+	elements.confirmMessage.textContent = message;
+	elements.confirmAction.textContent = action;
 	elements.confirmDialog.showModal();
 	elements.cancelConfirmation.focus();
 	return new Promise((resolve) => {
@@ -359,7 +383,9 @@ async function loadJobs({ append = false, quiet = false } = {}) {
 		const page = await api.listJobs({
 			cursor: append ? state.cursor : "",
 			status: elements.statusFilter.value,
-			includeDeleted: elements.deletedFilter.checked,
+			visibility: elements.deletedFilter.checked ? "hidden" : "active",
+			favorite: elements.favoritesFilter.checked,
+			search: elements.searchFilter.value,
 		});
 		if (sequence !== state.loadSequence) return;
 
@@ -414,13 +440,7 @@ async function mapLimit(items, limit, task) {
 }
 
 function visibleSummaries() {
-	return state.summaries.filter((summary) => {
-		if (elements.favoritesFilter.checked && !summary.favorite) return false;
-		if (!elements.deletedFilter.checked && summary.deleted != null)
-			return false;
-		if (elements.deletedFilter.checked && summary.deleted == null) return false;
-		return true;
-	});
+	return state.summaries;
 }
 
 function renderJobs() {
@@ -583,6 +603,13 @@ async function updateJob(id, update) {
 }
 
 async function cancelJob(id) {
+	const confirmed = await confirmAction({
+		title: "Cancel this operation?",
+		message:
+			"Provider cancellation is best-effort. Paid work may already have completed upstream.",
+		action: "Cancel operation",
+	});
+	if (!confirmed) return;
 	try {
 		const detail = await api.cancelJob(id);
 		state.details.set(id, detail);
@@ -647,10 +674,16 @@ function renderDetail(job) {
 		image.alt = `Generated output ${output.index + 1}`;
 		open.append(image);
 		open.addEventListener("click", () => openArtifact(output.id));
-		const caption = create(
-			"figcaption",
-			"",
-			`${output.width} x ${output.height} · ${output.format.toUpperCase()} · ${formatBytes(output.bytes)}`,
+		const caption = create("figcaption");
+		caption.append(
+			create(
+				"span",
+				"",
+				`${output.width} x ${output.height} · ${output.format.toUpperCase()} · ${formatBytes(output.bytes)}`,
+			),
+			makeButton("Download", "secondary compact detail-download", () =>
+				downloadArtifact(output),
+			),
 		);
 		figure.append(open, caption);
 		images.append(figure);
@@ -782,6 +815,26 @@ async function openArtifact(id) {
 	}
 }
 
+async function downloadArtifact(output) {
+	try {
+		const blob = await api.artifact(output.id);
+		const url = URL.createObjectURL(blob);
+		const fallback = `image-${Number(output.index ?? 0) + 1}.${output.format || "png"}`;
+		const filename =
+			(output.name || fallback).split(/[\\/]/).at(-1) || fallback;
+		const link = document.createElement("a");
+		link.href = url;
+		link.download = filename;
+		link.hidden = true;
+		document.body.append(link);
+		link.click();
+		link.remove();
+		window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+	} catch (error) {
+		handleError(error);
+	}
+}
+
 async function submitGeneration(event) {
 	event.preventDefault();
 	elements.submit.disabled = true;
@@ -862,12 +915,10 @@ function bindEvents() {
 	elements.loadMore.addEventListener("click", () => loadJobs({ append: true }));
 	elements.statusFilter.addEventListener("change", () => loadJobs());
 	elements.deletedFilter.addEventListener("change", () => loadJobs());
-	elements.favoritesFilter.addEventListener("change", () => {
-		renderJobs();
-		setMessage(
-			elements.libraryMessage,
-			`${visibleSummaries().length} jobs shown`,
-		);
+	elements.favoritesFilter.addEventListener("change", () => loadJobs());
+	elements.searchFilter.addEventListener("input", () => {
+		window.clearTimeout(state.searchTimer);
+		state.searchTimer = window.setTimeout(() => loadJobs(), 300);
 	});
 	elements.connectionButton.addEventListener("click", showAuthentication);
 	elements.operatorButton.addEventListener("click", () => {
@@ -880,7 +931,8 @@ function bindEvents() {
 		elements.operatorDialog.close(),
 	);
 	elements.operatorDialog.addEventListener("click", (event) => {
-		if (event.target === elements.operatorDialog) elements.operatorDialog.close();
+		if (event.target === elements.operatorDialog)
+			elements.operatorDialog.close();
 	});
 	elements.sessionForm.addEventListener("submit", inspectSession);
 	elements.clearToken.addEventListener("click", () => {

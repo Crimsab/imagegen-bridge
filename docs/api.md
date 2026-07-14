@@ -61,7 +61,11 @@ retried automatically because provider completion and billing may be
 ambiguous. Retention is bounded by both age and terminal-record count.
 
 `GET /v1/jobs?limit=20&cursor=...&status=succeeded` uses an opaque, stable
-newest-first cursor. `limit` is `1..=100`. The current lifecycle values are
+newest-first cursor. `limit` is `1..=100`. Optional `visibility` selects
+`active` (default), `hidden`, or `all`; `favorite=true|false` and the
+case-insensitive literal prompt substring `search` are applied before cursor
+pagination. The deprecated `include_deleted=true` alias still means
+`visibility=all` for existing clients. The current lifecycle values are
 `queued`, `running`, `succeeded`, `failed`, `cancelled`, and `interrupted`.
 `PATCH /v1/jobs/{id}` accepts `favorite` and/or `deleted` booleans. Deletion is
 soft, terminal-only, hidden from ordinary lists, and reversible. It preserves

@@ -52,13 +52,17 @@ export class BridgeApi {
 	async listJobs({
 		cursor = "",
 		status = "",
-		includeDeleted = false,
+		visibility = "active",
+		favorite = false,
+		search = "",
 		limit = 24,
 	} = {}) {
 		const query = new URLSearchParams({ limit: String(limit) });
 		if (cursor) query.set("cursor", cursor);
 		if (status) query.set("status", status);
-		if (includeDeleted) query.set("include_deleted", "true");
+		if (visibility) query.set("visibility", visibility);
+		if (favorite) query.set("favorite", "true");
+		if (search.trim()) query.set("search", search.trim());
 		return this.request(`/v1/jobs?${query}`);
 	}
 
@@ -67,16 +71,12 @@ export class BridgeApi {
 	}
 
 	async getSession(key, provider = "") {
-		const query = provider
-			? `?provider=${encodeURIComponent(provider)}`
-			: "";
+		const query = provider ? `?provider=${encodeURIComponent(provider)}` : "";
 		return this.request(`/v1/sessions/${encodeURIComponent(key)}${query}`);
 	}
 
 	async deleteSession(key, provider = "") {
-		const query = provider
-			? `?provider=${encodeURIComponent(provider)}`
-			: "";
+		const query = provider ? `?provider=${encodeURIComponent(provider)}` : "";
 		return this.request(`/v1/sessions/${encodeURIComponent(key)}${query}`, {
 			method: "DELETE",
 		});

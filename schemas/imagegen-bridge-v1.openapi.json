@@ -3635,6 +3635,39 @@
             }
           },
           {
+            "description": "Select active, hidden, or all history before pagination.",
+            "in": "query",
+            "name": "visibility",
+            "schema": {
+              "default": "active",
+              "enum": [
+                "active",
+                "hidden",
+                "all"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by favorite state before pagination.",
+            "in": "query",
+            "name": "favorite",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Case-insensitive literal prompt substring.",
+            "in": "query",
+            "name": "search",
+            "schema": {
+              "maxLength": 512,
+              "type": "string"
+            }
+          },
+          {
+            "deprecated": true,
+            "description": "Compatibility alias for visibility=all; do not combine with visibility.",
             "in": "query",
             "name": "include_deleted",
             "schema": {
@@ -3697,13 +3730,13 @@
             },
             "description": "Job page"
           },
-          "400": {
-            "$ref": "#/components/responses/ErrorResponse",
-            "description": "Invalid job query or cursor"
-          },
           "401": {
             "$ref": "#/components/responses/ErrorResponse",
             "description": "Bridge authentication required"
+          },
+          "422": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Invalid job query or cursor"
           }
         },
         "security": [

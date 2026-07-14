@@ -78,7 +78,12 @@ describe("ImagegenBridgeClient", () => {
     const completed = await client.jobs.get(queued.id);
     expect(completed.status).toBe("succeeded");
     expect(completed.result?.data[0]?.type).toBe("artifact");
-    const jobs = await client.jobs.list({ status: "succeeded" });
+    const jobs = await client.jobs.list({
+      status: "succeeded",
+      visibility: "active",
+      favorite: true,
+      search: "fixture",
+    });
     expect(jobs.items[0]?.id).toBe(queued.id);
     expect(jobs.next_cursor).toBe("sdk-next");
     expect((await client.jobs.update(queued.id, { favorite: true, deleted: false })).favorite).toBe(
@@ -119,6 +124,9 @@ describe("ImagegenBridgeClient", () => {
         // The fixture emits only a terminal error.
       }
     }).toThrow(BridgeAPIError);
+    await expect(client.jobs.list({ includeDeleted: true, visibility: "hidden" })).rejects.toThrow(
+      "cannot be combined",
+    );
   });
 
   test("supports abort signals and provider switching as request configuration", async () => {

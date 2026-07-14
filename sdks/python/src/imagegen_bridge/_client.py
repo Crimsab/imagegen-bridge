@@ -16,6 +16,7 @@ from ._types import (
     ImageJob,
     ImageJobPage,
     ImageJobStatus,
+    ImageJobVisibility,
     ImageRequest,
     ImageResponse,
     JSONValue,
@@ -174,9 +175,14 @@ class AsyncJobsResource:
         cursor: str | None = None,
         status: ImageJobStatus | None = None,
         include_deleted: bool = False,
+        visibility: ImageJobVisibility | None = None,
+        favorite: bool | None = None,
+        search: str | None = None,
         timeout: Timeout = None,
     ) -> ImageJobPage:
-        return await self._client._list_jobs(limit, cursor, status, include_deleted, timeout)
+        return await self._client._list_jobs(
+            limit, cursor, status, include_deleted, visibility, favorite, search, timeout
+        )
 
     async def cancel(self, job_id: str, *, timeout: Timeout = None) -> ImageJob:
         return await self._client._cancel_job(job_id, timeout)
@@ -209,9 +215,14 @@ class JobsResource:
         cursor: str | None = None,
         status: ImageJobStatus | None = None,
         include_deleted: bool = False,
+        visibility: ImageJobVisibility | None = None,
+        favorite: bool | None = None,
+        search: str | None = None,
         timeout: Timeout = None,
     ) -> ImageJobPage:
-        return self._client._list_jobs(limit, cursor, status, include_deleted, timeout)
+        return self._client._list_jobs(
+            limit, cursor, status, include_deleted, visibility, favorite, search, timeout
+        )
 
     def cancel(self, job_id: str, *, timeout: Timeout = None) -> ImageJob:
         return self._client._cancel_job(job_id, timeout)
@@ -317,8 +328,13 @@ class AsyncImagegenBridgeClient:
         cursor: str | None,
         status: ImageJobStatus | None,
         include_deleted: bool,
+        visibility: ImageJobVisibility | None,
+        favorite: bool | None,
+        search: str | None,
         timeout: Timeout,
     ) -> ImageJobPage:
+        if include_deleted and visibility is not None:
+            raise ValueError("include_deleted cannot be combined with visibility")
         response = await self._send(
             "GET",
             "/v1/jobs",
@@ -326,7 +342,10 @@ class AsyncImagegenBridgeClient:
                 "limit": limit,
                 "cursor": cursor,
                 "status": status,
-                "include_deleted": str(include_deleted).lower(),
+                "visibility": visibility,
+                "favorite": None if favorite is None else str(favorite).lower(),
+                "search": search,
+                "include_deleted": "true" if include_deleted else None,
             },
             timeout=timeout,
         )
@@ -492,8 +511,13 @@ class ImagegenBridgeClient:
         cursor: str | None,
         status: ImageJobStatus | None,
         include_deleted: bool,
+        visibility: ImageJobVisibility | None,
+        favorite: bool | None,
+        search: str | None,
         timeout: Timeout,
     ) -> ImageJobPage:
+        if include_deleted and visibility is not None:
+            raise ValueError("include_deleted cannot be combined with visibility")
         response = self._send(
             "GET",
             "/v1/jobs",
@@ -501,7 +525,10 @@ class ImagegenBridgeClient:
                 "limit": limit,
                 "cursor": cursor,
                 "status": status,
-                "include_deleted": str(include_deleted).lower(),
+                "visibility": visibility,
+                "favorite": None if favorite is None else str(favorite).lower(),
+                "search": search,
+                "include_deleted": "true" if include_deleted else None,
             },
             timeout=timeout,
         )

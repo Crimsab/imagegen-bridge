@@ -268,7 +268,12 @@
             <p class="kicker">Durable history</p>
             <h2 id="library-title">Recent work</h2>
           </div>
-          <div class="filters" aria-label="History filters">
+          <fieldset class="filters">
+            <legend class="sr-only">History filters</legend>
+            <label class="search-filter">
+              <span class="sr-only">Search job prompts</span>
+              <input id="search-filter" type="search" maxlength="512" autocomplete="off" placeholder="Search prompts">
+            </label>
             <label>
               <span class="sr-only">Filter by status</span>
               <select id="status-filter">
@@ -283,7 +288,7 @@
             </label>
             <label class="check-filter"><input id="favorites-filter" type="checkbox"> Favorites</label>
             <label class="check-filter"><input id="deleted-filter" type="checkbox"> Hidden only</label>
-          </div>
+          </fieldset>
         </div>
 
         <div id="library-message" class="library-message" role="status" aria-live="polite"></div>
@@ -352,7 +357,7 @@
               <p class="quiet">Current default capabilities reported by each configured provider.</p>
             </div>
           </div>
-          <div class="table-scroll" tabindex="0" aria-label="Scrollable provider capability matrix">
+          <section class="table-scroll" aria-label="Scrollable provider capability matrix">
             <table class="capability-table">
               <thead>
                 <tr>
@@ -368,7 +373,7 @@
               </thead>
               <tbody id="capability-table-body"></tbody>
             </table>
-          </div>
+          </section>
         </section>
         <section class="operator-columns" aria-label="Configuration and sessions">
           <div class="operator-panel">

@@ -160,12 +160,17 @@ export class ImagegenBridgeClient {
   }
 
   async listJobs(options: JobListOptions): Promise<ImageJobPage> {
+    if (options.includeDeleted && options.visibility)
+      throw new TypeError("includeDeleted cannot be combined with visibility");
     const value = await this.#json("GET", "v1/jobs", {
       query: {
         limit: options.limit ?? 20,
         cursor: options.cursor,
         status: options.status,
-        include_deleted: String(options.includeDeleted ?? false),
+        visibility: options.visibility,
+        favorite: options.favorite === undefined ? undefined : String(options.favorite),
+        search: options.search,
+        include_deleted: options.includeDeleted ? "true" : undefined,
       },
       options,
     });

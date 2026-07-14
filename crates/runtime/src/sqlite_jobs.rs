@@ -6,9 +6,41 @@ use imagegen_bridge_core::{
     BridgeError, ErrorCode, ImageJob, ImageJobProgress, ImageJobStatus, ImageJobSummary,
     ImageRequest, ImageResponse,
 };
-use tokio_rusqlite::{Connection, params, rusqlite::OptionalExtension as _};
+use tokio_rusqlite::{
+    Connection, params,
+    rusqlite::{OptionalExtension as _, params_from_iter, types::Value as SqlValue},
+};
 
-const CURRENT_MIGRATION: u32 = 1;
+const CURRENT_MIGRATION: u32 = 2;
+
+/// Visibility constraint applied before durable history pagination.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ImageJobVisibility {
+    /// Ordinary non-hidden history only.
+    #[default]
+    Active,
+    /// Soft-deleted history only.
+    Hidden,
+    /// Both active and hidden history.
+    All,
+}
+
+/// Server-side durable history filters applied before cursor pagination.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ImageJobListFilter {
+    /// Exclusive newest-first `(created,id)` cursor.
+    pub before: Option<(u64, String)>,
+    /// Maximum rows returned.
+    pub limit: usize,
+    /// Visibility selection.
+    pub visibility: ImageJobVisibility,
+    /// Optional lifecycle status.
+    pub status: Option<ImageJobStatus>,
+    /// Optional favorite state.
+    pub favorite: Option<bool>,
+    /// Optional case-insensitive literal prompt substring.
+    pub search: Option<String>,
+}
 
 /// Read-only status of the durable job database schema.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,6 +169,7 @@ impl SqliteImageJobStore {
                        started_at INTEGER,
                        completed_at INTEGER,
                        request_json TEXT NOT NULL,
+                       prompt_search TEXT NOT NULL DEFAULT '',
                        progress_stage TEXT,
                        partial_images INTEGER NOT NULL DEFAULT 0,
                        response_json TEXT,
@@ -152,6 +185,42 @@ impl SqliteImageJobStore {
                      INSERT OR IGNORE INTO job_schema_migrations(version, applied_at)
                        VALUES (1, unixepoch());",
                 )?;
+                let transaction = connection.transaction()?;
+                let has_prompt_search = transaction
+                    .prepare("PRAGMA table_info(image_jobs)")?
+                    .query_map([], |row| row.get::<_, String>(1))?
+                    .collect::<Result<Vec<_>, _>>()?
+                    .iter()
+                    .any(|name| name == "prompt_search");
+                if !has_prompt_search {
+                    transaction.execute_batch(
+                        "ALTER TABLE image_jobs ADD COLUMN prompt_search TEXT NOT NULL DEFAULT '';",
+                    )?;
+                }
+                let prompts = {
+                    let mut statement = transaction.prepare(
+                        "SELECT id, COALESCE(json_extract(request_json, '$.prompt'), '')
+                         FROM image_jobs WHERE prompt_search='' AND json_valid(request_json)",
+                    )?;
+                    statement
+                        .query_map([], |row| {
+                            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                        })?
+                        .collect::<Result<Vec<_>, _>>()?
+                };
+                for (id, prompt) in prompts {
+                    transaction.execute(
+                        "UPDATE image_jobs SET prompt_search=?2 WHERE id=?1",
+                        params![id, prompt.to_lowercase()],
+                    )?;
+                }
+                transaction.execute_batch(
+                    "CREATE INDEX IF NOT EXISTS image_jobs_history_idx
+                       ON image_jobs(deleted_at, favorite, created_at DESC, id DESC);
+                     INSERT OR IGNORE INTO job_schema_migrations(version, applied_at)
+                       VALUES (2, unixepoch());",
+                )?;
+                transaction.commit()?;
                 Ok::<(), tokio_rusqlite::rusqlite::Error>(())
             })
             .await
@@ -177,6 +246,7 @@ impl SqliteImageJobStore {
     ) -> Result<ImageJob, BridgeError> {
         let request_json = serde_json::to_string(request)
             .map_err(|_| job_error("could not encode job request"))?;
+        let prompt_search = request.prompt.to_lowercase();
         let id = id.to_owned();
         let lookup_id = id.clone();
         let now = to_i64(now)?;
@@ -193,9 +263,9 @@ impl SqliteImageJobStore {
                     return Err(tokio_rusqlite::rusqlite::Error::ExecuteReturnedResults);
                 }
                 transaction.execute(
-                    "INSERT INTO image_jobs(id,status,created_at,updated_at,request_json)
-                     VALUES (?1,'queued',?2,?2,?3)",
-                    params![id, now, request_json],
+                    "INSERT INTO image_jobs(id,status,created_at,updated_at,request_json,prompt_search)
+                     VALUES (?1,'queued',?2,?2,?3,?4)",
+                    params![id, now, request_json, prompt_search],
                 )?;
                 transaction.commit()?;
                 Ok::<(), tokio_rusqlite::rusqlite::Error>(())
@@ -464,35 +534,64 @@ impl SqliteImageJobStore {
     /// Lists newest-first summaries using a stable `(created,id)` cursor.
     pub async fn list(
         &self,
-        before: Option<(u64, String)>,
-        limit: usize,
-        include_deleted: bool,
-        status: Option<ImageJobStatus>,
+        filter: ImageJobListFilter,
     ) -> Result<Vec<ImageJobSummary>, BridgeError> {
-        let before_created = before
+        let before_created = filter
+            .before
             .as_ref()
             .map(|(created, _)| to_i64(*created))
             .transpose()?;
-        let before_id = before.map(|(_, id)| id);
-        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
-        let status = status.map(status_name).map(str::to_owned);
+        let before_id = filter.before.map(|(_, id)| id);
+        let limit = i64::try_from(filter.limit).unwrap_or(i64::MAX);
+        let status = filter.status.map(status_name).map(str::to_owned);
+        let search = filter
+            .search
+            .map(|value| literal_like_pattern(&value.to_lowercase()));
+        let visibility = filter.visibility;
+        let favorite = filter.favorite;
         let rows = self
             .connection
             .call(move |connection| {
-                let mut statement = connection.prepare(
+                let mut predicates = Vec::new();
+                let mut parameters = Vec::new();
+                match visibility {
+                    ImageJobVisibility::Active => predicates.push("deleted_at IS NULL"),
+                    ImageJobVisibility::Hidden => predicates.push("deleted_at IS NOT NULL"),
+                    ImageJobVisibility::All => {}
+                }
+                if let Some(status) = status {
+                    predicates.push("status=?");
+                    parameters.push(SqlValue::Text(status));
+                }
+                if let Some(favorite) = favorite {
+                    predicates.push("favorite=?");
+                    parameters.push(SqlValue::Integer(i64::from(favorite)));
+                }
+                if let Some(search) = search {
+                    predicates.push("prompt_search LIKE ? ESCAPE '\\'");
+                    parameters.push(SqlValue::Text(search));
+                }
+                if let (Some(created), Some(id)) = (before_created, before_id) {
+                    predicates.push("(created_at < ? OR (created_at=? AND id < ?))");
+                    parameters.push(SqlValue::Integer(created));
+                    parameters.push(SqlValue::Integer(created));
+                    parameters.push(SqlValue::Text(id));
+                }
+                let condition = if predicates.is_empty() {
+                    "1".to_owned()
+                } else {
+                    predicates.join(" AND ")
+                };
+                let query = format!(
                     "SELECT id,status,created_at,updated_at,started_at,completed_at,
                             progress_stage,partial_images,favorite,deleted_at
-                     FROM image_jobs
-                     WHERE (?1 OR deleted_at IS NULL)
-                       AND (?2 IS NULL OR status=?2)
-                       AND (?3 IS NULL OR created_at < ?3 OR (created_at=?3 AND id < ?4))
-                     ORDER BY created_at DESC, id DESC LIMIT ?5",
-                )?;
+                     FROM image_jobs WHERE {condition}
+                     ORDER BY created_at DESC, id DESC LIMIT ?"
+                );
+                parameters.push(SqlValue::Integer(limit));
+                let mut statement = connection.prepare(&query)?;
                 statement
-                    .query_map(
-                        params![include_deleted, status, before_created, before_id, limit],
-                        read_summary,
-                    )?
+                    .query_map(params_from_iter(parameters), read_summary)?
                     .collect::<Result<Vec<_>, _>>()
             })
             .await
@@ -731,6 +830,19 @@ fn from_i64(value: i64) -> Result<u64, BridgeError> {
     u64::try_from(value).map_err(|_| job_error("stored job timestamp is invalid"))
 }
 
+fn literal_like_pattern(value: &str) -> String {
+    let mut pattern = String::with_capacity(value.len().saturating_add(2));
+    pattern.push('%');
+    for character in value.chars() {
+        if matches!(character, '%' | '_' | '\\') {
+            pattern.push('\\');
+        }
+        pattern.push(character);
+    }
+    pattern.push('%');
+    pattern
+}
+
 fn not_found() -> BridgeError {
     BridgeError::new(ErrorCode::InvalidRequest, "durable job was not found")
         .with_detail("resource", "job")
@@ -785,15 +897,20 @@ mod tests {
             .unwrap();
         let response = fixture_response("019f-job-a");
         store.succeed("019f-job-a", &response, 14).await.unwrap();
-        let first = store.list(None, 1, false, None).await.unwrap();
+        let first = store
+            .list(ImageJobListFilter {
+                limit: 1,
+                ..ImageJobListFilter::default()
+            })
+            .await
+            .unwrap();
         assert_eq!(first[0].id, "019f-job-b");
         let second = store
-            .list(
-                Some((first[0].created, first[0].id.clone())),
-                2,
-                false,
-                None,
-            )
+            .list(ImageJobListFilter {
+                before: Some((first[0].created, first[0].id.clone())),
+                limit: 2,
+                ..ImageJobListFilter::default()
+            })
             .await
             .unwrap();
         assert_eq!(second[0].id, "019f-job-a");
@@ -906,7 +1023,16 @@ mod tests {
             .unwrap();
         assert!(deleted.summary.favorite);
         assert_eq!(deleted.summary.deleted, Some(14));
-        assert!(store.list(None, 10, false, None).await.unwrap().is_empty());
+        assert!(
+            store
+                .list(ImageJobListFilter {
+                    limit: 10,
+                    ..ImageJobListFilter::default()
+                })
+                .await
+                .unwrap()
+                .is_empty()
+        );
         let restored = store
             .update_history("019f-job", None, Some(false), 15)
             .await
@@ -918,5 +1044,187 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(store.prune(102, 1, 1).await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn history_filters_apply_before_cursor_pagination() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SqliteImageJobStore::open(&directory.path().join("jobs.sqlite3"))
+            .await
+            .unwrap();
+        for (id, prompt, created) in [
+            ("019f-job-a", "Red fox 100%", 10),
+            ("019f-job-b", "BLUE_bird study", 11),
+            ("019f-job-c", "ČERVENÁ liška", 12),
+        ] {
+            store
+                .create(id, &ImageRequest::generate(prompt), created, 10)
+                .await
+                .unwrap();
+            assert!(store.claim(id, created + 1).await.unwrap());
+            store
+                .succeed(id, &fixture_response(id), created + 2)
+                .await
+                .unwrap();
+        }
+        store
+            .update_history("019f-job-a", Some(true), None, 20)
+            .await
+            .unwrap();
+        store
+            .update_history("019f-job-b", None, Some(true), 21)
+            .await
+            .unwrap();
+
+        let percent = store
+            .list(ImageJobListFilter {
+                limit: 10,
+                search: Some("100%".to_owned()),
+                favorite: Some(true),
+                ..ImageJobListFilter::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(percent.len(), 1);
+        assert_eq!(percent[0].id, "019f-job-a");
+
+        let underscore = store
+            .list(ImageJobListFilter {
+                limit: 10,
+                visibility: ImageJobVisibility::Hidden,
+                search: Some("blue_".to_owned()),
+                ..ImageJobListFilter::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(underscore.len(), 1);
+        assert_eq!(underscore[0].id, "019f-job-b");
+
+        let unicode_case = store
+            .list(ImageJobListFilter {
+                limit: 10,
+                search: Some("červená".to_owned()),
+                ..ImageJobListFilter::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(unicode_case.len(), 1);
+        assert_eq!(unicode_case[0].id, "019f-job-c");
+
+        let injection = store
+            .list(ImageJobListFilter {
+                limit: 10,
+                visibility: ImageJobVisibility::All,
+                search: Some("' OR 1=1 --".to_owned()),
+                ..ImageJobListFilter::default()
+            })
+            .await
+            .unwrap();
+        assert!(injection.is_empty());
+
+        let newest_favorite = store
+            .list(ImageJobListFilter {
+                limit: 1,
+                visibility: ImageJobVisibility::All,
+                favorite: Some(true),
+                ..ImageJobListFilter::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(newest_favorite[0].id, "019f-job-a");
+        let after_favorite = store
+            .list(ImageJobListFilter {
+                before: Some((newest_favorite[0].created, newest_favorite[0].id.clone())),
+                limit: 1,
+                visibility: ImageJobVisibility::All,
+                favorite: Some(true),
+                ..ImageJobListFilter::default()
+            })
+            .await
+            .unwrap();
+        assert!(after_favorite.is_empty());
+    }
+
+    #[tokio::test]
+    async fn version_one_database_migrates_prompt_search_without_losing_jobs() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("jobs.sqlite3");
+        let connection = Connection::open(&path).await.unwrap();
+        let request = serde_json::to_string(&ImageRequest::generate("legacy copper fox")).unwrap();
+        connection
+            .call(move |connection| {
+                connection.execute_batch(
+                    "CREATE TABLE job_schema_migrations (
+                       version INTEGER PRIMARY KEY,
+                       applied_at INTEGER NOT NULL
+                     );
+                     CREATE TABLE image_jobs (
+                       id TEXT PRIMARY KEY,
+                       status TEXT NOT NULL,
+                       created_at INTEGER NOT NULL,
+                       updated_at INTEGER NOT NULL,
+                       started_at INTEGER,
+                       completed_at INTEGER,
+                       request_json TEXT NOT NULL,
+                       progress_stage TEXT,
+                       partial_images INTEGER NOT NULL DEFAULT 0,
+                       response_json TEXT,
+                       error_json TEXT,
+                       cancel_requested INTEGER NOT NULL DEFAULT 0,
+                       favorite INTEGER NOT NULL DEFAULT 0,
+                       deleted_at INTEGER
+                     );
+                     INSERT INTO job_schema_migrations(version, applied_at) VALUES (1, 10);",
+                )?;
+                connection.execute(
+                    "INSERT INTO image_jobs(id,status,created_at,updated_at,request_json)
+                     VALUES ('019f-legacy','queued',10,10,?1)",
+                    [request],
+                )?;
+                Ok::<(), tokio_rusqlite::rusqlite::Error>(())
+            })
+            .await
+            .unwrap();
+        connection.close().await.unwrap();
+
+        let store = SqliteImageJobStore::open(&path).await.unwrap();
+        let results = store
+            .list(ImageJobListFilter {
+                limit: 10,
+                search: Some("COPPER".to_owned()),
+                ..ImageJobListFilter::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "019f-legacy");
+        let status = inspect_sqlite_job_schema(&path).await.unwrap();
+        assert_eq!(status.version, Some(2));
+        assert_eq!(status.current_version, 2);
+        store.close().await.unwrap();
+
+        let connection = Connection::open(&path).await.unwrap();
+        connection
+            .call(|connection| {
+                connection.execute("UPDATE image_jobs SET prompt_search=''", [])?;
+                connection.execute("DELETE FROM job_schema_migrations WHERE version=2", [])?;
+                Ok::<(), tokio_rusqlite::rusqlite::Error>(())
+            })
+            .await
+            .unwrap();
+        connection.close().await.unwrap();
+        let repaired = SqliteImageJobStore::open(&path).await.unwrap();
+        assert_eq!(
+            repaired
+                .list(ImageJobListFilter {
+                    limit: 10,
+                    search: Some("legacy copper".to_owned()),
+                    ..ImageJobListFilter::default()
+                })
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }

@@ -64,7 +64,9 @@ def test_sync_client_matches_shared_http_contract(
         completed = client.jobs.get(queued.id)
         assert completed.status == "succeeded"
         assert completed.result is not None and completed.result.data[0].type == "artifact"
-        page = client.jobs.list(status="succeeded")
+        page = client.jobs.list(
+            status="succeeded", visibility="active", favorite=True, search="fixture"
+        )
         assert page.items[0].id == queued.id
         assert page.next_cursor == "sdk-next"
         assert client.jobs.update(queued.id, favorite=True, deleted=False).favorite
@@ -130,6 +132,9 @@ def test_structured_errors_are_available_for_http_and_sse(bridge_url: str) -> No
         with pytest.raises(BridgeAPIError) as streamed:
             list(client.images.stream(request))
         assert streamed.value.bridge_code == "rate_limited"
+
+        with pytest.raises(ValueError, match="cannot be combined"):
+            client.jobs.list(include_deleted=True, visibility="hidden")
 
 
 def test_bridge_authentication_is_applied(bridge_url: str) -> None:

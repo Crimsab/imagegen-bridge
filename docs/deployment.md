@@ -41,7 +41,7 @@ The default layout is:
 | --- | --- | --- |
 | `/config/imagegen-bridge.toml` | Versioned bridge configuration | read-only |
 | `/codex-home` | Dedicated Codex OAuth state | read/write, secret |
-| `/data/state` | SQLite session bindings | read/write, persistent |
+| `/data/state` | SQLite session bindings and durable job history | read/write, persistent |
 | `/data/artifacts` | Verified bridge-owned outputs | read/write, persistent |
 | `/workspace` | Optional local/reference inputs | read-only |
 | `/tmp`, `/home/imagegen` | Bounded ephemeral scratch | tmpfs |

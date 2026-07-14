@@ -7,7 +7,9 @@ use imagegen_bridge_core::{
     BridgeError, ErrorCode, ImageJob, ImageJobStatus, ImageJobSummary, ImageRequest, ProviderEvent,
     ResponseFormat,
 };
-use imagegen_bridge_runtime::{ExecutionContext, ImagegenRuntime, SqliteImageJobStore};
+use imagegen_bridge_runtime::{
+    ExecutionContext, ImageJobListFilter, ImagegenRuntime, SqliteImageJobStore,
+};
 use serde::Serialize;
 use tokio::sync::{Mutex, Notify, Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
@@ -78,12 +80,11 @@ impl JobManager {
         });
         let mut queued = manager
             .store
-            .list(
-                None,
-                manager.settings.max_pending,
-                false,
-                Some(ImageJobStatus::Queued),
-            )
+            .list(ImageJobListFilter {
+                limit: manager.settings.max_pending,
+                status: Some(ImageJobStatus::Queued),
+                ..ImageJobListFilter::default()
+            })
             .await?;
         queued.reverse();
         for job in queued {
@@ -123,14 +124,9 @@ impl JobManager {
     /// Returns newest-first durable job summaries.
     pub async fn list(
         &self,
-        before: Option<(u64, String)>,
-        limit: usize,
-        include_deleted: bool,
-        status: Option<ImageJobStatus>,
+        filter: ImageJobListFilter,
     ) -> Result<Vec<ImageJobSummary>, BridgeError> {
-        self.store
-            .list(before, limit, include_deleted, status)
-            .await
+        self.store.list(filter).await
     }
 
     /// Requests durable cancellation and signals active provider work.

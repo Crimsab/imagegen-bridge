@@ -161,11 +161,14 @@ pub fn openapi_document() -> Value {
                         {"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"maximum":100,"default":20}},
                         {"name":"cursor","in":"query","schema":{"type":"string","maxLength":256}},
                         {"name":"status","in":"query","schema":{"$ref":"#/components/schemas/ImageJobStatus"}},
-                        {"name":"include_deleted","in":"query","schema":{"type":"boolean","default":false}}
+                        {"name":"visibility","in":"query","description":"Select active, hidden, or all history before pagination.","schema":{"type":"string","enum":["active","hidden","all"],"default":"active"}},
+                        {"name":"favorite","in":"query","description":"Filter by favorite state before pagination.","schema":{"type":"boolean"}},
+                        {"name":"search","in":"query","description":"Case-insensitive literal prompt substring.","schema":{"type":"string","maxLength":512}},
+                        {"name":"include_deleted","in":"query","deprecated":true,"description":"Compatibility alias for visibility=all; do not combine with visibility.","schema":{"type":"boolean","default":false}}
                     ],
                     "responses": {
                         "200": json_response("Job page", json!({"$ref":"#/components/schemas/ImageJobPage"}), json!({"items":[job_example("succeeded")]})),
-                        "400": error_response("Invalid job query or cursor"),
+                        "422": error_response("Invalid job query or cursor"),
                         "401": error_response("Bridge authentication required")
                     }
                 }

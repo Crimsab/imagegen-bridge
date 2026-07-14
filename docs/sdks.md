@@ -48,6 +48,9 @@ async with AsyncImagegenBridgeClient(
     response = await client.images.generate(request)
     job = await client.jobs.create(request)
     completed = await client.jobs.get(job.id)
+    favorites = await client.jobs.list(
+        visibility="active", favorite=True, search="paper fox"
+    )
     diagnostics = await client.diagnostics()
 ```
 
@@ -81,6 +84,11 @@ const response = await client.images.generate({
 });
 const job = await client.jobs.create({ operation: "generate", prompt: "a paper fox" });
 const completed = await client.jobs.get(job.id);
+const favorites = await client.jobs.list({
+  visibility: "active",
+  favorite: true,
+  search: "paper fox",
+});
 const diagnostics = await client.diagnostics();
 ```
 

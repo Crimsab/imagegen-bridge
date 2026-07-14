@@ -25,6 +25,7 @@ SupportLevel: TypeAlias = Literal["unsupported", "emulated", "native"]
 ImageJobStatus: TypeAlias = Literal[
     "queued", "running", "succeeded", "failed", "cancelled", "interrupted"
 ]
+ImageJobVisibility: TypeAlias = Literal["active", "hidden", "all"]
 
 
 def _wire(value: Any) -> JSONValue:

@@ -75,6 +75,10 @@ bearer_token_env = "IMAGEGEN_BRIDGE_BEARER_TOKEN"
 
 [server.metrics]
 enabled = true
+
+[server.jobs]
+enabled = true
+database = "/data/state/jobs.sqlite3"
 EOF
 
 for volume in \

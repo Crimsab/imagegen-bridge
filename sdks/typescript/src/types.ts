@@ -374,6 +374,8 @@ export type StreamEvent =
   | { type: "partial_image"; index: number; partial_index: number; b64_json: string }
   | { type: "completed"; response: ImageResponse };
 
+export type ImageJobVisibility = "active" | "hidden" | "all";
+
 export interface RequestOptions {
   idempotencyKey?: string;
   signal?: AbortSignal;
@@ -384,5 +386,9 @@ export interface JobListOptions extends RequestOptions {
   limit?: number;
   cursor?: string;
   status?: ImageJobStatus;
+  visibility?: ImageJobVisibility;
+  favorite?: boolean;
+  search?: string;
+  /** @deprecated Prefer `visibility: "all"`. */
   includeDeleted?: boolean;
 }

@@ -21,7 +21,9 @@ async with AsyncImagegenBridgeClient("http://127.0.0.1:8787") as client:
 
     queued = await client.jobs.create(ImageRequest.generate("a second paper fox"))
     completed = await client.jobs.get(queued.id)
-    page = await client.jobs.list(status="succeeded")
+    page = await client.jobs.list(
+        status="succeeded", visibility="active", favorite=True, search="paper fox"
+    )
     diagnostics = await client.diagnostics()
     print(diagnostics.configuration.listener_scope, diagnostics.providers)
 ```
@@ -30,6 +32,8 @@ Set `provider` in `ImageRequest.routing` to switch between configured bridge
 providers; client construction and response types do not change.
 `client.jobs` is also available on the synchronous client and exposes
 `create`, `get`, `list`, `cancel`, and `update` with typed durable job models.
+List filters include stable cursor pagination, status, active/hidden/all
+visibility, favorite state, and literal prompt search.
 `diagnostics()` returns the same typed, redaction-safe operator snapshot used by
 the embedded dashboard; it never includes credential values, prompts, or host
 paths.

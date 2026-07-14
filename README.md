@@ -199,9 +199,10 @@ imagegen-bridge serve --bind 127.0.0.1:8787
 Then open `http://127.0.0.1:8787/dashboard`. The dashboard is served by the
 same Rust process and needs no Node runtime, static-file server, CDN, or build
 step. It supports generation and edit uploads, provider/model selection,
-capability-aware controls, durable queue progress, cancellation, favorites,
-hide/restore, verified thumbnails, full images, timings, revised prompts, and
-raw retained metadata. When bridge bearer authentication is enabled, enter the
+capability-aware controls, durable queue progress, cancellation confirmations,
+server-side prompt search, favorites, hide/restore, verified thumbnails,
+full-image viewing and download, timings, revised prompts, and raw retained
+metadata. When bridge bearer authentication is enabled, enter the
 token in the Connection dialog; it is kept in `sessionStorage` for that browser
 tab and is never placed in a URL. The HTML shell contains no job or prompt data.
 

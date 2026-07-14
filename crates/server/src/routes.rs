@@ -19,7 +19,10 @@ use imagegen_bridge_core::{
     BridgeError, ErrorCode, ImageJob, ImageJobPage, ImageJobStatus, ImageJobUpdate, ImageRequest,
     ProviderDescriptor, ProviderEvent,
 };
-use imagegen_bridge_runtime::{ExecutionContext, ImagegenRuntime, ProviderReadinessStatus};
+use imagegen_bridge_runtime::{
+    ExecutionContext, ImageJobListFilter, ImageJobVisibility, ImagegenRuntime,
+    ProviderReadinessStatus,
+};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -44,6 +47,7 @@ const REQUEST_ID_HEADER: &str = "x-request-id";
 const MAX_CURSOR_BYTES: usize = 256;
 const MAX_PAGE_SIZE: usize = 100;
 const MAX_IDEMPOTENCY_KEY_BYTES: usize = 512;
+const MAX_JOB_SEARCH_BYTES: usize = 512;
 
 /// Immutable state shared by every HTTP request.
 #[derive(Clone)]
@@ -552,7 +556,29 @@ struct JobQuery {
     limit: usize,
     cursor: Option<String>,
     status: Option<ImageJobStatus>,
+    visibility: Option<JobVisibilityQuery>,
+    favorite: Option<bool>,
+    search: Option<String>,
+    /// Deprecated compatibility alias for `visibility=all`.
     include_deleted: bool,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum JobVisibilityQuery {
+    Active,
+    Hidden,
+    All,
+}
+
+impl From<JobVisibilityQuery> for ImageJobVisibility {
+    fn from(value: JobVisibilityQuery) -> Self {
+        match value {
+            JobVisibilityQuery::Active => Self::Active,
+            JobVisibilityQuery::Hidden => Self::Hidden,
+            JobVisibilityQuery::All => Self::All,
+        }
+    }
 }
 
 impl Default for JobQuery {
@@ -561,6 +587,9 @@ impl Default for JobQuery {
             limit: default_page_size(),
             cursor: None,
             status: None,
+            visibility: None,
+            favorite: None,
+            search: None,
             include_deleted: false,
         }
     }
@@ -580,6 +609,24 @@ async fn list_jobs(
             request_id,
         ));
     }
+    if query.include_deleted && query.visibility.is_some() {
+        return Err(ApiError::bad_request(
+            "include_deleted cannot be combined with visibility",
+            request_id,
+        ));
+    }
+    let search = query
+        .search
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    if search.as_ref().is_some_and(|value| {
+        value.len() > MAX_JOB_SEARCH_BYTES || value.chars().any(char::is_control)
+    }) {
+        return Err(ApiError::bad_request(
+            "job search must contain at most 512 bytes and no control characters",
+            request_id,
+        ));
+    }
     let before = query
         .cursor
         .as_deref()
@@ -593,12 +640,23 @@ async fn list_jobs(
         )
     })?;
     let mut items = manager
-        .list(
+        .list(ImageJobListFilter {
             before,
-            query.limit.saturating_add(1),
-            query.include_deleted,
-            query.status,
-        )
+            limit: query.limit.saturating_add(1),
+            visibility: query.visibility.map_or_else(
+                || {
+                    if query.include_deleted {
+                        ImageJobVisibility::All
+                    } else {
+                        ImageJobVisibility::Active
+                    }
+                },
+                Into::into,
+            ),
+            status: query.status,
+            favorite: query.favorite,
+            search,
+        })
         .await
         .map_err(|error| ApiError::from_bridge(error, request_id.clone()))?;
     let has_more = items.len() > query.limit;
@@ -1364,6 +1422,32 @@ mod tests {
         let body = hidden.into_body().collect().await.unwrap().to_bytes();
         let hidden: ImageJobPage = serde_json::from_slice(&body).unwrap();
         assert!(hidden.items.is_empty());
+
+        let filtered = app
+            .clone()
+            .oneshot(
+                Request::get("/v1/jobs?visibility=hidden&favorite=true&search=DURABLE%20TEST")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(filtered.status(), StatusCode::OK);
+        let body = filtered.into_body().collect().await.unwrap().to_bytes();
+        let filtered: ImageJobPage = serde_json::from_slice(&body).unwrap();
+        assert_eq!(filtered.items.len(), 1);
+        assert_eq!(filtered.items[0].id, id);
+
+        let conflicting = app
+            .clone()
+            .oneshot(
+                Request::get("/v1/jobs?visibility=hidden&include_deleted=true")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(conflicting.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
         let restored = app
             .clone()
