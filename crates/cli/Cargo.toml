@@ -16,7 +16,7 @@ categories.workspace = true
 base64 = "0.22"
 clap = { version = "4.5.60", features = ["derive", "env", "wrap_help"] }
 clap_complete = "4.5.66"
-clap_mangen = "0.2.33"
+clap_mangen = "0.3.0"
 imagegen-bridge = { path = "../imagegen-bridge", version = "0.1.0", features = ["codex-responses"] }
 imagegen-bridge-server = { path = "../server", version = "0.1.0" }
 serde = { version = "1", features = ["derive"] }
