@@ -244,13 +244,42 @@ jobs:
           bun run test:node
 
       - name: Install npm with trusted-publishing support
-        run: npm install --global npm@11.5.1
+        run: npm install --global npm@11.18.0
 
-      - name: Publish to npm
+      - name: Publish or stage the npm package
         working-directory: sdks/typescript
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public --provenance
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          package_status="$(
+            curl --silent --output /dev/null --write-out '%{http_code}' \
+              --max-time 15 --retry 3 --retry-connrefused \
+              "https://registry.npmjs.org/imagegen-bridge/$VERSION"
+          )"
+
+          if [[ "$package_status" == "200" ]]; then
+            echo "imagegen-bridge@$VERSION is already published; skipping."
+          elif [[ "$package_status" == "404" ]]; then
+            package_root_status="$(
+              curl --silent --output /dev/null --write-out '%{http_code}' \
+                --max-time 15 --retry 3 --retry-connrefused \
+                https://registry.npmjs.org/imagegen-bridge
+            )"
+            if [[ "$package_root_status" == "404" ]]; then
+              echo "First release: staging the package for 2FA approval on npmjs.com."
+              npm stage publish --access public --provenance
+            elif [[ "$package_root_status" == "200" ]]; then
+              npm publish --access public --provenance
+            else
+              echo "::error::Unexpected registry response: HTTP $package_root_status"
+              exit 1
+            fi
+          else
+            echo "::error::Unexpected registry response: HTTP $package_status"
+            exit 1
+          fi
 
   ghcr-build:
     name: GHCR build (${{ matrix.platform }})
