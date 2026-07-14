@@ -139,14 +139,13 @@ jobs:
             [[ "$status" == "200" ]]
           }
 
-          wait_for_crate() {
-            for _ in {1..30}; do
-              if crate_available "$1"; then
-                return 0
-              fi
-              sleep 10
-            done
-            return 1
+          crate_exists() {
+            local status
+            status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+              --max-time 15 --retry 3 --retry-connrefused \
+              --user-agent 'imagegen-bridge-release/0.1' \
+              "https://crates.io/api/v1/crates/$1")"
+            [[ "$status" == "200" ]]
           }
 
           for crate in "${crates[@]}"; do
@@ -155,13 +154,37 @@ jobs:
               continue
             fi
 
-            if ! cargo publish --locked --package "$crate"; then
-              echo "::warning::$crate did not become visible within Cargo's polling window; checking the registry before failing."
+            new_crate=false
+            if ! crate_exists "$crate"; then
+              new_crate=true
             fi
 
-            if ! wait_for_crate "$crate"; then
-              echo "::error::$crate $VERSION is still unavailable after publication."
+            published=false
+            for attempt in 1 2 3; do
+              if cargo publish --locked --package "$crate"; then
+                published=true
+                break
+              fi
+
+              if crate_available "$crate"; then
+                published=true
+                break
+              fi
+
+              if [[ "$attempt" -lt 3 ]]; then
+                echo "::warning::$crate publish attempt $attempt failed; waiting 90 seconds before retrying."
+                sleep 90
+              fi
+            done
+
+            if [[ "$published" != "true" ]]; then
+              echo "::error::$crate $VERSION is still unavailable after three attempts."
               exit 1
+            fi
+
+            if [[ "$new_crate" == "true" && "$crate" != "imagegen-bridge-cli" ]]; then
+              echo "New crate published; waiting 90 seconds before creating the next crate."
+              sleep 90
             fi
           done
 
