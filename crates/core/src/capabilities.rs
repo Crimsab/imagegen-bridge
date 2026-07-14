@@ -32,6 +32,28 @@ pub struct U8Range {
     pub max: u8,
 }
 
+/// How a provider fulfills a request for more than one output image.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BatchMode {
+    /// One upstream provider operation can return the requested output count.
+    Native,
+    /// The bridge fans the request out into multiple bounded upstream operations.
+    FanOut,
+}
+
+/// Effective and native multi-output behavior for a provider/model pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BatchCapabilities {
+    /// Whether multi-output execution is native or bridge-managed fan-out.
+    pub mode: BatchMode,
+    /// Output-count range accepted by one upstream provider operation.
+    pub native_count: U8Range,
+    /// Maximum simultaneous upstream operations across active batches.
+    pub max_parallel_outputs: u8,
+}
+
 impl U8Range {
     /// Returns true when the range contains the value.
     #[must_use]
@@ -104,6 +126,8 @@ pub struct ProviderCapabilities {
     pub edits: bool,
     /// Supported output count range.
     pub count: U8Range,
+    /// How the advertised output count is fulfilled upstream.
+    pub batching: BatchCapabilities,
     /// Supported size behavior.
     pub sizes: SizeCapabilities,
     /// Aspect-ratio hint support.
@@ -145,10 +169,25 @@ pub struct ProviderCapabilities {
 impl ProviderCapabilities {
     /// Rejects semantically inconsistent dynamic provider declarations.
     pub fn validate(&self) -> Result<(), BridgeError> {
-        if self.count.min > self.count.max {
+        if self.count.min == 0 || self.count.min > self.count.max {
             return Err(invalid_capability(
                 self,
                 "provider output-count capability range is invalid",
+            ));
+        }
+        if self.batching.native_count.min == 0
+            || self.batching.native_count.min > self.batching.native_count.max
+            || self.batching.native_count.min < self.count.min
+            || self.batching.native_count.max > self.count.max
+            || self.batching.max_parallel_outputs == 0
+            || self.batching.max_parallel_outputs > self.count.max
+            || (self.batching.mode == BatchMode::Native && self.batching.native_count != self.count)
+            || (self.batching.mode == BatchMode::FanOut
+                && self.batching.native_count.max >= self.count.max)
+        {
+            return Err(invalid_capability(
+                self,
+                "provider batching capability is inconsistent with its output-count range",
             ));
         }
         if self.partial_images.min > self.partial_images.max {

@@ -6,6 +6,7 @@
   "generation": true,
   "edits": true,
   "count": { "min": 1, "max": 1 },
+  "batching": { "mode": "native", "native_count": { "min": 1, "max": 1 }, "max_parallel_outputs": 1 },
   "sizes": { "auto": true, "allowed": [], "arbitrary": false, "min_edge": null, "max_edge": null, "edge_multiple": null, "min_pixels": null, "max_pixels": null, "max_aspect_ratio": null },
   "aspect_ratio": "unsupported",
   "resolution": "unsupported",

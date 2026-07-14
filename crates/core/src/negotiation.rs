@@ -702,7 +702,9 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::{InputCapabilities, RequestPolicies, SizeCapabilities, U8Range};
+    use crate::{
+        BatchCapabilities, BatchMode, InputCapabilities, RequestPolicies, SizeCapabilities, U8Range,
+    };
 
     fn capabilities() -> ProviderCapabilities {
         ProviderCapabilities {
@@ -713,6 +715,11 @@ mod tests {
             generation: true,
             edits: false,
             count: U8Range { min: 1, max: 2 },
+            batching: BatchCapabilities {
+                mode: BatchMode::Native,
+                native_count: U8Range { min: 1, max: 2 },
+                max_parallel_outputs: 1,
+            },
             sizes: SizeCapabilities {
                 auto: true,
                 allowed: BTreeSet::new(),
@@ -742,6 +749,19 @@ mod tests {
             persistent_sessions: true,
             explicit_threads: true,
         }
+    }
+
+    #[test]
+    fn capability_validation_rejects_inconsistent_batching() {
+        let mut value = capabilities();
+        value.batching.mode = BatchMode::FanOut;
+        value.batching.native_count = value.count;
+        let error = value.validate().unwrap_err();
+        assert_eq!(error.code, ErrorCode::Protocol);
+
+        let mut value = capabilities();
+        value.batching.max_parallel_outputs = 0;
+        assert!(value.validate().is_err());
     }
 
     fn no_inputs() -> InputCapabilities {

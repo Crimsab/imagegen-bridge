@@ -21,6 +21,7 @@ export type NegativePromptMode = "auto" | "native" | "merge" | "reject";
 export type RevisedPromptPolicy = "include" | "omit" | "require";
 export type SessionMode = "isolated" | "persistent" | "thread";
 export type SupportLevel = "unsupported" | "emulated" | "native";
+export type BatchMode = "native" | "fan_out";
 
 interface InputMetadata {
   media_type?: string | null;
@@ -344,6 +345,11 @@ export interface U8Range {
   min: number;
   max: number;
 }
+export interface BatchCapabilities {
+  mode: BatchMode;
+  native_count: U8Range;
+  max_parallel_outputs: number;
+}
 export interface SizeCapabilities {
   auto: boolean;
   allowed?: string[];
@@ -369,6 +375,7 @@ export interface ProviderCapabilities {
   generation: boolean;
   edits: boolean;
   count: U8Range;
+  batching: BatchCapabilities;
   sizes: SizeCapabilities;
   aspect_ratio: SupportLevel;
   resolution: SupportLevel;

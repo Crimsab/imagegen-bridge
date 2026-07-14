@@ -143,6 +143,8 @@ def test_sync_client_matches_shared_http_contract(
         ]
         capabilities = client.capabilities("codex-app-server")
         assert capabilities.persistent_sessions
+        assert capabilities.batching.mode == "native"
+        assert capabilities.batching.native_count.max == 1
         assert capabilities.input_fidelities == ("high",)
         assert capabilities.actions == ("auto",)
         diagnostics = client.diagnostics()

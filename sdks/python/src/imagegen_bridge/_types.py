@@ -22,6 +22,7 @@ NegativePromptMode: TypeAlias = Literal["auto", "native", "merge", "reject"]
 RevisedPromptPolicy: TypeAlias = Literal["include", "omit", "require"]
 SessionMode: TypeAlias = Literal["isolated", "persistent", "thread"]
 SupportLevel: TypeAlias = Literal["unsupported", "emulated", "native"]
+BatchMode: TypeAlias = Literal["native", "fan_out"]
 ImageJobStatus: TypeAlias = Literal[
     "queued", "running", "succeeded", "failed", "cancelled", "interrupted"
 ]
@@ -588,6 +589,13 @@ class U8Range:
 
 
 @dataclass(frozen=True, slots=True)
+class BatchCapabilities:
+    mode: BatchMode
+    native_count: U8Range
+    max_parallel_outputs: int
+
+
+@dataclass(frozen=True, slots=True)
 class SizeCapabilities:
     auto: bool
     allowed: tuple[str, ...]
@@ -617,6 +625,7 @@ class ProviderCapabilities:
     generation: bool
     edits: bool
     count: U8Range
+    batching: BatchCapabilities
     sizes: SizeCapabilities
     aspect_ratio: SupportLevel
     resolution: SupportLevel
@@ -649,6 +658,11 @@ class ProviderCapabilities:
         ):
             copied[key] = tuple(copied[key])
         copied["count"] = U8Range(**copied["count"])
+        copied["batching"] = BatchCapabilities(
+            mode=copied["batching"]["mode"],
+            native_count=U8Range(**copied["batching"]["native_count"]),
+            max_parallel_outputs=copied["batching"]["max_parallel_outputs"],
+        )
         copied["sizes"] = SizeCapabilities(
             allowed=tuple(copied["sizes"]["allowed"]),
             **{k: v for k, v in copied["sizes"].items() if k != "allowed"},

@@ -244,6 +244,48 @@
         }
       ]
     },
+    "BatchCapabilities": {
+      "description": "Effective and native multi-output behavior for a provider/model pair.",
+      "type": "object",
+      "properties": {
+        "max_parallel_outputs": {
+          "description": "Maximum simultaneous upstream operations across active batches.",
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "mode": {
+          "description": "Whether multi-output execution is native or bridge-managed fan-out.",
+          "$ref": "#/$defs/BatchMode"
+        },
+        "native_count": {
+          "description": "Output-count range accepted by one upstream provider operation.",
+          "$ref": "#/$defs/U8Range"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "native_count",
+        "max_parallel_outputs"
+      ]
+    },
+    "BatchMode": {
+      "description": "How a provider fulfills a request for more than one output image.",
+      "oneOf": [
+        {
+          "description": "One upstream provider operation can return the requested output count.",
+          "type": "string",
+          "const": "native"
+        },
+        {
+          "description": "The bridge fans the request out into multiple bounded upstream operations.",
+          "type": "string",
+          "const": "fan_out"
+        }
+      ]
+    },
     "BridgeError": {
       "description": "Public, redaction-safe error returned by the bridge.",
       "type": "object",
@@ -1552,6 +1594,10 @@
           },
           "uniqueItems": true
         },
+        "batching": {
+          "description": "How the advertised output count is fulfilled upstream.",
+          "$ref": "#/$defs/BatchCapabilities"
+        },
         "count": {
           "description": "Supported output count range.",
           "$ref": "#/$defs/U8Range"
@@ -1668,6 +1714,7 @@
         "generation",
         "edits",
         "count",
+        "batching",
         "sizes",
         "aspect_ratio",
         "resolution",

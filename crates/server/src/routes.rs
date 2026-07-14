@@ -1194,6 +1194,11 @@ mod tests {
                 generation: true,
                 edits: true,
                 count: U8Range { min: 1, max: 4 },
+                batching: imagegen_bridge_core::BatchCapabilities {
+                    mode: imagegen_bridge_core::BatchMode::Native,
+                    native_count: U8Range { min: 1, max: 4 },
+                    max_parallel_outputs: 1,
+                },
                 sizes: SizeCapabilities {
                     auto: true,
                     allowed: std::collections::BTreeSet::default(),

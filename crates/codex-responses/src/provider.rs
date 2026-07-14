@@ -13,12 +13,12 @@ use imagegen_bridge_artifacts::{
     ImageLimits, InputLoader, LoadedImage, RemoteImageFetcher, inspect_image,
 };
 use imagegen_bridge_core::{
-    Background, BridgeError, ErrorCode, GeneratedImage, ImageAction, ImageFailure, ImageOperation,
-    ImagePayload, ImageProvider, ImageRequest, ImageResponse, ImageSize, ImageSource,
-    InputCapabilities, InputFidelity, Moderation, MultiImageFailurePolicy, OutputFormat,
-    ProviderCapabilities, ProviderContext, ProviderDescriptor, ProviderEvent, Quality,
-    RequestLimits, RevisedPromptPolicy, SizeCapabilities, SupportLevel, Timings, U8Range, Usage,
-    negotiate_request, validate_request,
+    Background, BatchCapabilities, BatchMode, BridgeError, ErrorCode, GeneratedImage, ImageAction,
+    ImageFailure, ImageOperation, ImagePayload, ImageProvider, ImageRequest, ImageResponse,
+    ImageSize, ImageSource, InputCapabilities, InputFidelity, Moderation, MultiImageFailurePolicy,
+    OutputFormat, ProviderCapabilities, ProviderContext, ProviderDescriptor, ProviderEvent,
+    Quality, RequestLimits, RevisedPromptPolicy, SizeCapabilities, SupportLevel, Timings, U8Range,
+    Usage, negotiate_request, validate_request,
 };
 use reqwest::{Client, StatusCode, Url, header};
 use secrecy::ExposeSecret as _;
@@ -167,7 +167,10 @@ impl CodexResponsesProvider {
     ) -> Result<ImageResponse, BridgeError> {
         validate_request(&request, RequestLimits::default())?;
         let image_model = self.selected_image_model(request.routing.model.as_deref())?;
-        let negotiated = negotiate_request(&request, &capabilities(image_model)?)?;
+        let negotiated = negotiate_request(
+            &request,
+            &capabilities(image_model, self.config.max_parallel_outputs)?,
+        )?;
         let request = negotiated.effective_request;
         let user_content = self.input_content(&request).await?;
         let started = Instant::now();
@@ -538,7 +541,10 @@ impl CodexResponsesProvider {
         &self,
         requested: Option<&str>,
     ) -> Result<ProviderCapabilities, BridgeError> {
-        capabilities(self.selected_image_model(requested)?)
+        capabilities(
+            self.selected_image_model(requested)?,
+            self.config.max_parallel_outputs,
+        )
     }
 }
 
@@ -590,7 +596,10 @@ impl ImageProvider for CodexResponsesProvider {
     }
 }
 
-fn capabilities(model: &str) -> Result<ProviderCapabilities, BridgeError> {
+fn capabilities(
+    model: &str,
+    max_parallel_outputs: usize,
+) -> Result<ProviderCapabilities, BridgeError> {
     if !SUPPORTED_IMAGE_MODELS.contains(&model) {
         return Err(BridgeError::new(
             ErrorCode::UnsupportedCapability,
@@ -635,6 +644,16 @@ fn capabilities(model: &str) -> Result<ProviderCapabilities, BridgeError> {
         generation: true,
         edits: true,
         count: U8Range { min: 1, max: 4 },
+        batching: BatchCapabilities {
+            mode: BatchMode::FanOut,
+            native_count: U8Range { min: 1, max: 1 },
+            max_parallel_outputs: u8::try_from(max_parallel_outputs).map_err(|_| {
+                BridgeError::new(
+                    ErrorCode::Configuration,
+                    "Codex Responses parallel output limit is invalid",
+                )
+            })?,
+        },
         sizes: SizeCapabilities {
             auto: true,
             allowed,

@@ -717,10 +717,11 @@ mod tests {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     use imagegen_bridge_artifacts::{ArtifactStore, ImageLimits, inspect_image};
     use imagegen_bridge_core::{
-        Background, CompatibilityMode, GeneratedImage, GenerationParameters, ImageAction,
-        ImagePayload, ImageProvider, ImageSize, InputCapabilities, InputFidelity, Moderation,
-        OutputFormat, ProviderCapabilities, ProviderDescriptor, Quality, ResponseFormat,
-        SizeCapabilities, SupportLevel, Timings, U8Range, Usage,
+        Background, BatchCapabilities, BatchMode, CompatibilityMode, GeneratedImage,
+        GenerationParameters, ImageAction, ImagePayload, ImageProvider, ImageSize,
+        InputCapabilities, InputFidelity, Moderation, OutputFormat, ProviderCapabilities,
+        ProviderDescriptor, Quality, ResponseFormat, SizeCapabilities, SupportLevel, Timings,
+        U8Range, Usage,
     };
 
     use super::*;
@@ -850,6 +851,11 @@ mod tests {
             generation: true,
             edits: false,
             count: U8Range { min: 1, max: 1 },
+            batching: BatchCapabilities {
+                mode: BatchMode::Native,
+                native_count: U8Range { min: 1, max: 1 },
+                max_parallel_outputs: 1,
+            },
             sizes: SizeCapabilities {
                 auto: true,
                 allowed: BTreeSet::from([ImageSize::exact(2, 2).unwrap()]),

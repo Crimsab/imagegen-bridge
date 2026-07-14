@@ -13,11 +13,11 @@ use imagegen_bridge_artifacts::{
     ArtifactStore, ImageLimits, InputLoader, RemoteImageFetcher, inspect_image,
 };
 use imagegen_bridge_core::{
-    Background, BridgeError, ErrorCode, GeneratedImage, ImageAction, ImageOperation, ImagePayload,
-    ImageProvider, ImageRequest, ImageResponse, InputCapabilities, InputFidelity, Moderation,
-    OutputFormat, ProviderCapabilities, ProviderContext, ProviderDescriptor, Quality,
-    RequestLimits, SessionMetadata, SessionMode, SizeCapabilities, SupportLevel, Timings, U8Range,
-    Usage, negotiate_request, validate_request,
+    Background, BatchCapabilities, BatchMode, BridgeError, ErrorCode, GeneratedImage, ImageAction,
+    ImageOperation, ImagePayload, ImageProvider, ImageRequest, ImageResponse, InputCapabilities,
+    InputFidelity, Moderation, OutputFormat, ProviderCapabilities, ProviderContext,
+    ProviderDescriptor, Quality, RequestLimits, SessionMetadata, SessionMode, SizeCapabilities,
+    SupportLevel, Timings, U8Range, Usage, negotiate_request, validate_request,
 };
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, broadcast};
@@ -785,6 +785,11 @@ fn capabilities() -> ProviderCapabilities {
         generation: true,
         edits: true,
         count: U8Range { min: 1, max: 1 },
+        batching: BatchCapabilities {
+            mode: BatchMode::Native,
+            native_count: U8Range { min: 1, max: 1 },
+            max_parallel_outputs: 1,
+        },
         sizes: SizeCapabilities {
             auto: true,
             allowed: BTreeSet::new(),
