@@ -105,7 +105,35 @@ pub struct CleanupReport {
     pub scan_limit_reached: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Aggregate result from one bounded ownership repair pass.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ArtifactRepairReport {
+    /// Ownership entries inspected.
+    pub scanned: usize,
+    /// Fully valid artifact records requiring no repair.
+    pub healthy: usize,
+    /// Valid ownership records whose artifact file is absent.
+    pub orphaned_records: usize,
+    /// Valid artifacts whose recorded metadata sidecar is absent.
+    pub missing_sidecars: usize,
+    /// Orphan records removed or sidecar references cleared.
+    pub repaired: usize,
+    /// Invalid, changed, or otherwise unsafe records left untouched.
+    pub skipped: usize,
+    /// Whether the scan stopped at its configured entry bound.
+    pub scan_limit_reached: bool,
+}
+
+/// Selects whether an orphan-repair pass only reports or also applies repairs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArtifactRepairMode {
+    /// Inspect storage without mutating it.
+    Audit,
+    /// Apply only repairs that can be proven safe from ownership records.
+    Apply,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct OwnershipRecord {
     version: u8,
@@ -124,6 +152,21 @@ struct OwnedCandidate {
     artifact: PathBuf,
     sidecar: Option<PathBuf>,
     record: OwnershipRecord,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SidecarState {
+    None,
+    Missing,
+    Valid,
+    Invalid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OwnedPathState {
+    Missing,
+    Regular(u64),
+    Invalid,
 }
 
 impl ArtifactStore {
@@ -409,6 +452,7 @@ impl ArtifactStore {
                 "retention scan limit must be greater than zero",
             ));
         }
+        self.verify_ownership_root()?;
         let now = unix_timestamp(now)?;
         let cutoff = now.saturating_sub(policy.max_age.as_secs());
         let mut report = CleanupReport::default();
@@ -455,7 +499,79 @@ impl ArtifactStore {
         Ok(report)
     }
 
+    /// Audits or repairs only unambiguous ownership-record orphans.
+    ///
+    /// Audit mode is non-mutating. Apply mode
+    /// removes a valid marker only when its artifact is absent, optionally
+    /// removing an unchanged owned sidecar, or clears a missing-sidecar
+    /// reference from an otherwise valid artifact. Invalid or changed content
+    /// is always left untouched.
+    pub fn repair_orphans(
+        &self,
+        max_scan_entries: usize,
+        mode: ArtifactRepairMode,
+    ) -> Result<ArtifactRepairReport, BridgeError> {
+        if max_scan_entries == 0 {
+            return Err(artifact_error(
+                "artifact repair scan limit must be greater than zero",
+            ));
+        }
+        self.verify_ownership_root()?;
+        let mut report = ArtifactRepairReport::default();
+        for entry in fs::read_dir(&self.ownership_root)
+            .map_err(|error| artifact_error(format!("could not scan ownership records: {error}")))?
+        {
+            if report.scanned >= max_scan_entries {
+                report.scan_limit_reached = true;
+                break;
+            }
+            report.scanned += 1;
+            let Ok(entry) = entry else {
+                report.skipped += 1;
+                continue;
+            };
+            let Ok(candidate) = self.read_candidate(&entry.path()) else {
+                report.skipped += 1;
+                continue;
+            };
+            if self.verify_artifact(&candidate).is_ok() {
+                match self.sidecar_state(&candidate) {
+                    SidecarState::None | SidecarState::Valid => report.healthy += 1,
+                    SidecarState::Missing => {
+                        report.missing_sidecars += 1;
+                        if mode == ArtifactRepairMode::Apply {
+                            if self.clear_missing_sidecar(&candidate).is_ok() {
+                                report.repaired += 1;
+                            } else {
+                                report.skipped += 1;
+                            }
+                        }
+                    }
+                    SidecarState::Invalid => report.skipped += 1,
+                }
+            } else if self.owned_path_state(&candidate.artifact) == OwnedPathState::Missing {
+                report.orphaned_records += 1;
+                match self.sidecar_state(&candidate) {
+                    SidecarState::None | SidecarState::Missing | SidecarState::Valid => {
+                        if mode == ArtifactRepairMode::Apply {
+                            if self.remove_orphaned_record(&candidate).is_ok() {
+                                report.repaired += 1;
+                            } else {
+                                report.skipped += 1;
+                            }
+                        }
+                    }
+                    SidecarState::Invalid => report.skipped += 1,
+                }
+            } else {
+                report.skipped += 1;
+            }
+        }
+        Ok(report)
+    }
+
     fn publish_ownership(&self, record: &OwnershipRecord) -> Result<(), BridgeError> {
+        self.verify_ownership_root()?;
         let encoded = serde_json::to_vec(record)
             .map_err(|_| artifact_error("could not encode artifact ownership record"))?;
         if u64::try_from(encoded.len()).unwrap_or(u64::MAX) > MAX_MARKER_BYTES {
@@ -478,6 +594,7 @@ impl ArtifactStore {
     }
 
     fn replace_ownership(&self, record: &OwnershipRecord) -> Result<(), BridgeError> {
+        self.verify_ownership_root()?;
         let encoded = serde_json::to_vec(record)
             .map_err(|_| artifact_error("could not encode artifact ownership record"))?;
         if u64::try_from(encoded.len()).unwrap_or(u64::MAX) > MAX_MARKER_BYTES {
@@ -497,6 +614,11 @@ impl ArtifactStore {
     }
 
     fn read_candidate(&self, marker: &Path) -> Result<OwnedCandidate, ()> {
+        if marker.parent() != Some(self.ownership_root.as_path())
+            || self.verify_ownership_root().is_err()
+        {
+            return Err(());
+        }
         let marker_metadata = fs::symlink_metadata(marker).map_err(|_| ())?;
         if !marker_metadata.file_type().is_file() || marker_metadata.len() > MAX_MARKER_BYTES {
             return Err(());
@@ -548,9 +670,55 @@ impl ArtifactStore {
         sync_directory(&self.ownership_root).map_err(|_| ())
     }
 
+    fn clear_missing_sidecar(&self, expected: &OwnedCandidate) -> Result<(), ()> {
+        let mut candidate = self.read_candidate(&expected.marker)?;
+        if candidate.record != expected.record
+            || self.verify_artifact(&candidate).is_err()
+            || self.sidecar_state(&candidate) != SidecarState::Missing
+        {
+            return Err(());
+        }
+        candidate.record.sidecar_name = None;
+        candidate.record.sidecar_sha256 = None;
+        self.replace_ownership(&candidate.record).map_err(|_| ())
+    }
+
+    fn remove_orphaned_record(&self, expected: &OwnedCandidate) -> Result<(), ()> {
+        let candidate = self.read_candidate(&expected.marker)?;
+        if candidate.record != expected.record
+            || self.owned_path_state(&candidate.artifact) != OwnedPathState::Missing
+        {
+            return Err(());
+        }
+        match self.sidecar_state(&candidate) {
+            SidecarState::Valid => {
+                let sidecar = candidate.sidecar.as_ref().ok_or(())?;
+                fs::remove_file(sidecar).map_err(|_| ())?;
+                sync_directory(sidecar.parent().ok_or(())?).map_err(|_| ())?;
+            }
+            SidecarState::None | SidecarState::Missing => {}
+            SidecarState::Invalid => return Err(()),
+        }
+        fs::remove_file(&candidate.marker).map_err(|_| ())?;
+        sync_directory(&self.ownership_root).map_err(|_| ())
+    }
+
     fn verify_candidate(&self, candidate: &OwnedCandidate) -> Result<(), ()> {
-        let metadata = fs::symlink_metadata(&candidate.artifact).map_err(|_| ())?;
-        if !metadata.file_type().is_file() || metadata.len() > self.limits.max_encoded_bytes {
+        self.verify_artifact(candidate)?;
+        if !matches!(
+            self.sidecar_state(candidate),
+            SidecarState::None | SidecarState::Valid
+        ) {
+            return Err(());
+        }
+        Ok(())
+    }
+
+    fn verify_artifact(&self, candidate: &OwnedCandidate) -> Result<(), ()> {
+        let OwnedPathState::Regular(length) = self.owned_path_state(&candidate.artifact) else {
+            return Err(());
+        };
+        if length > self.limits.max_encoded_bytes {
             return Err(());
         }
         let bytes = fs::read(&candidate.artifact).map_err(|_| ())?;
@@ -558,25 +726,90 @@ impl ArtifactStore {
         if digest != candidate.record.sha256 || inspect_image(&bytes, self.limits).is_err() {
             return Err(());
         }
-        if let (Some(sidecar), Some(expected)) =
+        Ok(())
+    }
+
+    fn sidecar_state(&self, candidate: &OwnedCandidate) -> SidecarState {
+        let (Some(sidecar), Some(expected)) =
             (&candidate.sidecar, &candidate.record.sidecar_sha256)
+        else {
+            return SidecarState::None;
+        };
+        match self.owned_path_state(sidecar) {
+            OwnedPathState::Missing => SidecarState::Missing,
+            OwnedPathState::Invalid => SidecarState::Invalid,
+            OwnedPathState::Regular(length) => {
+                if length > MAX_SIDECAR_BYTES {
+                    return SidecarState::Invalid;
+                }
+                let Ok(encoded) = fs::read(sidecar) else {
+                    return SidecarState::Invalid;
+                };
+                if format!("{:x}", Sha256::digest(&encoded)) != *expected
+                    || !matches!(
+                        serde_json::from_slice::<serde_json::Value>(&encoded),
+                        Ok(serde_json::Value::Object(_))
+                    )
+                {
+                    SidecarState::Invalid
+                } else {
+                    SidecarState::Valid
+                }
+            }
+        }
+    }
+
+    fn owned_path_state(&self, path: &Path) -> OwnedPathState {
+        owned_path_state_beneath(&self.root, path)
+    }
+
+    fn verify_ownership_root(&self) -> Result<(), BridgeError> {
+        let metadata = fs::symlink_metadata(&self.ownership_root)
+            .map_err(|_| artifact_error("artifact ownership root is unavailable"))?;
+        if !metadata.file_type().is_dir()
+            || self.ownership_root.parent() != Some(self.root.as_path())
         {
-            let metadata = fs::symlink_metadata(sidecar).map_err(|_| ())?;
-            if !metadata.file_type().is_file() || metadata.len() > MAX_SIDECAR_BYTES {
-                return Err(());
-            }
-            let encoded = fs::read(sidecar).map_err(|_| ())?;
-            if format!("{:x}", Sha256::digest(&encoded)) != *expected
-                || !matches!(
-                    serde_json::from_slice::<serde_json::Value>(&encoded),
-                    Ok(serde_json::Value::Object(_))
-                )
-            {
-                return Err(());
-            }
+            return Err(artifact_error("artifact ownership root is invalid"));
         }
         Ok(())
     }
+}
+
+fn owned_path_state_beneath(root: &Path, path: &Path) -> OwnedPathState {
+    let Ok(relative) = path.strip_prefix(root) else {
+        return OwnedPathState::Invalid;
+    };
+    let mut components = relative.components().peekable();
+    if components.peek().is_none() {
+        return OwnedPathState::Invalid;
+    }
+    let mut current = root.to_owned();
+    while let Some(component) = components.next() {
+        let std::path::Component::Normal(component) = component else {
+            return OwnedPathState::Invalid;
+        };
+        current.push(component);
+        let metadata = match fs::symlink_metadata(&current) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return OwnedPathState::Missing;
+            }
+            Err(_) => return OwnedPathState::Invalid,
+        };
+        if metadata.file_type().is_symlink() {
+            return OwnedPathState::Invalid;
+        }
+        if components.peek().is_some() {
+            if !metadata.file_type().is_dir() {
+                return OwnedPathState::Invalid;
+            }
+        } else if metadata.file_type().is_file() {
+            return OwnedPathState::Regular(metadata.len());
+        } else {
+            return OwnedPathState::Invalid;
+        }
+    }
+    OwnedPathState::Invalid
 }
 
 fn safe_relative(value: &str) -> bool {
@@ -856,6 +1089,177 @@ mod tests {
         assert_eq!(report.scanned, 2);
         assert_eq!(report.skipped, 2);
         assert!(report.scan_limit_reached);
+    }
+
+    #[test]
+    fn orphan_repair_is_auditable_and_removes_only_verified_owned_state() {
+        let root = tempfile::tempdir().unwrap();
+        let store = ArtifactStore::new(root.path(), ImageLimits::default()).unwrap();
+        let owned = store
+            .publish(&test_png(2, 2), Some("orphan"), Some(OutputFormat::Png))
+            .unwrap();
+        let sidecar = store
+            .attach_metadata(&owned.id, &owned.name, br#"{"prompt":"test"}"#)
+            .unwrap();
+        let marker = store.ownership_root.join(format!("{}.json", owned.id));
+        let sidecar = root.path().join(sidecar.name);
+        let unowned = root.path().join("unowned.png");
+        fs::write(&unowned, test_png(1, 1)).unwrap();
+        fs::remove_file(&owned.path).unwrap();
+
+        let audit = store.repair_orphans(10, ArtifactRepairMode::Audit).unwrap();
+        assert_eq!(audit.scanned, 1);
+        assert_eq!(audit.orphaned_records, 1);
+        assert_eq!(audit.repaired, 0);
+        assert!(marker.exists());
+        assert!(sidecar.exists());
+
+        let repaired = store.repair_orphans(10, ArtifactRepairMode::Apply).unwrap();
+        assert_eq!(repaired.orphaned_records, 1);
+        assert_eq!(repaired.repaired, 1);
+        assert!(!marker.exists());
+        assert!(!sidecar.exists());
+        assert!(unowned.exists());
+    }
+
+    #[test]
+    fn orphan_repair_clears_only_an_absent_sidecar_reference() {
+        let root = tempfile::tempdir().unwrap();
+        let store = ArtifactStore::new(root.path(), ImageLimits::default()).unwrap();
+        let owned = store
+            .publish(&test_png(2, 2), Some("sidecar"), Some(OutputFormat::Png))
+            .unwrap();
+        let sidecar = store
+            .attach_metadata(&owned.id, &owned.name, br#"{"prompt":"test"}"#)
+            .unwrap();
+        fs::remove_file(root.path().join(sidecar.name)).unwrap();
+        assert!(store.read(&owned.id).is_err());
+
+        let audit = store.repair_orphans(10, ArtifactRepairMode::Audit).unwrap();
+        assert_eq!(audit.missing_sidecars, 1);
+        assert_eq!(audit.repaired, 0);
+        let repaired = store.repair_orphans(10, ArtifactRepairMode::Apply).unwrap();
+        assert_eq!(repaired.missing_sidecars, 1);
+        assert_eq!(repaired.repaired, 1);
+        assert_eq!(store.read(&owned.id).unwrap().name, owned.name);
+        assert_eq!(
+            store
+                .repair_orphans(10, ArtifactRepairMode::Audit)
+                .unwrap()
+                .healthy,
+            1
+        );
+    }
+
+    #[test]
+    fn orphan_repair_never_modifies_changed_or_invalid_content() {
+        let root = tempfile::tempdir().unwrap();
+        let store = ArtifactStore::new(root.path(), ImageLimits::default()).unwrap();
+        let owned = store
+            .publish(&test_png(2, 2), Some("changed"), Some(OutputFormat::Png))
+            .unwrap();
+        let sidecar = store
+            .attach_metadata(&owned.id, &owned.name, br#"{"prompt":"test"}"#)
+            .unwrap();
+        let sidecar = root.path().join(sidecar.name);
+        fs::write(&sidecar, br#"{"prompt":"changed"}"#).unwrap();
+        fs::remove_file(&owned.path).unwrap();
+
+        let report = store.repair_orphans(10, ArtifactRepairMode::Apply).unwrap();
+        assert_eq!(report.repaired, 0);
+        assert_eq!(report.orphaned_records, 1);
+        assert_eq!(report.skipped, 1);
+        assert!(sidecar.exists());
+        assert!(
+            store
+                .ownership_root
+                .join(format!("{}.json", owned.id))
+                .exists()
+        );
+        assert!(store.repair_orphans(0, ArtifactRepairMode::Audit).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reads_cleanup_and_repair_reject_replaced_parent_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let store = ArtifactStore::new(root.path(), ImageLimits::default()).unwrap();
+        let bytes = test_png(2, 2);
+        let owned = store
+            .publish_with_options(
+                &bytes,
+                None,
+                Some(OutputFormat::Png),
+                ArtifactPublication {
+                    directory: Some("gallery"),
+                    ..ArtifactPublication::default()
+                },
+            )
+            .unwrap();
+        fs::remove_file(&owned.path).unwrap();
+        fs::remove_dir(root.path().join("gallery")).unwrap();
+        fs::write(outside.path().join(owned.path.file_name().unwrap()), &bytes).unwrap();
+        symlink(outside.path(), root.path().join("gallery")).unwrap();
+
+        assert!(store.read(&owned.id).is_err());
+        let cleanup = store
+            .cleanup(
+                RetentionPolicy {
+                    max_age: Duration::ZERO,
+                    ..RetentionPolicy::default()
+                },
+                SystemTime::now() + Duration::from_secs(1),
+            )
+            .unwrap();
+        assert_eq!(cleanup.deleted, 0);
+        assert_eq!(cleanup.skipped, 1);
+        let repair = store.repair_orphans(10, ArtifactRepairMode::Apply).unwrap();
+        assert_eq!(repair.repaired, 0);
+        assert_eq!(repair.skipped, 1);
+        assert!(
+            outside
+                .path()
+                .join(owned.path.file_name().unwrap())
+                .exists()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ownership_operations_reject_a_replaced_ownership_root() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let store = ArtifactStore::new(root.path(), ImageLimits::default()).unwrap();
+        let owned = store
+            .publish(&test_png(2, 2), Some("owned"), Some(OutputFormat::Png))
+            .unwrap();
+        let marker_name = format!("{}.json", owned.id);
+        fs::copy(
+            store.ownership_root.join(&marker_name),
+            outside.path().join(&marker_name),
+        )
+        .unwrap();
+        fs::rename(
+            &store.ownership_root,
+            root.path().join("original-ownership"),
+        )
+        .unwrap();
+        symlink(outside.path(), &store.ownership_root).unwrap();
+
+        assert!(store.read(&owned.id).is_err());
+        assert!(
+            store
+                .cleanup(RetentionPolicy::default(), SystemTime::now())
+                .is_err()
+        );
+        assert!(store.repair_orphans(10, ArtifactRepairMode::Apply).is_err());
+        assert!(outside.path().join(marker_name).is_file());
+        assert!(owned.path.is_file());
     }
 
     #[test]

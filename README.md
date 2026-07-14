@@ -32,8 +32,8 @@ deep diagnostic command, and embedded browser dashboard are included.
   `low`/`high`. Masks remain explicitly unsupported by both Codex transports.
 - Independent decoding and verification of format, dimensions, byte length,
   and SHA-256 before an output is returned or stored.
-- Atomic artifact writes, bounded local/remote inputs, retention cleanup, and
-  SSRF controls.
+- Atomic artifact writes, bounded local/remote inputs, retention cleanup,
+  conservative ownership audit/repair, and SSRF controls.
 - Isolated, persistent, and explicit-thread sessions for app-server.
 - A native JSON API plus OpenAI-familiar generation and multipart edit routes.
 - Durable asynchronous jobs with a bounded SQLite queue, restart-safe history,

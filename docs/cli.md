@@ -169,6 +169,20 @@ forms are non-mutating. `serve` reports its listener on stderr and stops
 gracefully on Ctrl-C/SIGINT. With durable jobs enabled it also reports the
 embedded dashboard URL, normally `http://127.0.0.1:8787/dashboard`.
 
+Artifact ownership repair is also explicit and bounded. Stop the bridge before
+applying it, audit first, then confirm the same conservative pass:
+
+```sh
+imagegen-bridge artifacts repair --dry-run --json
+imagegen-bridge artifacts repair --force --json
+```
+
+Repair removes a valid ownership record only when its artifact is absent. It
+may also remove an unchanged owned sidecar attached to that missing artifact,
+or clear a sidecar reference when the artifact is valid but the sidecar is
+absent. Changed artifacts, changed sidecars, invalid markers, symlinks, and
+unowned files are reported as skipped and never modified.
+
 `dashboard` is the local UI launcher. It first probes the configured loopback
 address and, when that endpoint is an Imagegen Bridge dashboard, prints its
 connection details and exits. Otherwise it starts the same API and embedded UI

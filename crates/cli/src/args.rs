@@ -476,6 +476,15 @@ pub(crate) enum ArtifactCommand {
         #[arg(long)]
         force: bool,
     },
+    /// Audit or repair missing artifact/sidecar ownership records.
+    Repair {
+        /// Inspect and report repairable records without mutating storage.
+        #[arg(long, conflicts_with = "force")]
+        dry_run: bool,
+        /// Apply only conservative ownership repairs.
+        #[arg(long, conflicts_with = "dry_run")]
+        force: bool,
+    },
 }
 
 #[derive(Debug, Args)]

@@ -694,6 +694,31 @@ fn artifacts(
                 "scan_limit_reached": report.scan_limit_reached,
             }))
         }
+        ArtifactCommand::Repair {
+            dry_run: false,
+            force: false,
+        } => Err(invalid("artifact repair requires --force or --dry-run")),
+        ArtifactCommand::Repair { dry_run, force } => {
+            let store = resolved.config.artifact_store()?;
+            let max_scan_entries = resolved.config.retention_policy()?.max_scan_entries;
+            let mode = if force {
+                imagegen_bridge::artifacts::ArtifactRepairMode::Apply
+            } else {
+                imagegen_bridge::artifacts::ArtifactRepairMode::Audit
+            };
+            let report = store.repair_orphans(max_scan_entries, mode)?;
+            output.value(&json!({
+                "action": "repair_artifacts",
+                "dry_run": dry_run,
+                "scanned": report.scanned,
+                "healthy": report.healthy,
+                "orphaned_records": report.orphaned_records,
+                "missing_sidecars": report.missing_sidecars,
+                "repaired": report.repaired,
+                "skipped": report.skipped,
+                "scan_limit_reached": report.scan_limit_reached,
+            }))
+        }
     }
 }
 

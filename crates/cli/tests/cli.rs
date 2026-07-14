@@ -87,6 +87,98 @@ fn config_check_is_non_mutating_and_machine_readable() {
 }
 
 #[test]
+fn artifact_repair_audits_before_conservative_mutation() {
+    use base64::Engine as _;
+
+    const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let root = directory.path().join("artifacts");
+    let config = directory.path().join("bridge.toml");
+    std::fs::write(&config, format!("[artifacts]\nroot = {root:?}\n")).expect("write config");
+    cargo_bin_cmd!("imagegen-bridge")
+        .args([
+            "--config",
+            config.to_str().expect("UTF-8 config"),
+            "artifacts",
+            "repair",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "artifact repair requires --force or --dry-run",
+        ));
+    cargo_bin_cmd!("imagegen-bridge")
+        .args([
+            "--config",
+            config.to_str().expect("UTF-8 config"),
+            "artifacts",
+            "repair",
+            "--force",
+            "--dry-run",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be used with"));
+    let store = imagegen_bridge::artifacts::ArtifactStore::new(
+        &root,
+        imagegen_bridge::artifacts::ImageLimits::default(),
+    )
+    .expect("artifact store");
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(PNG)
+        .expect("PNG fixture");
+    let artifact = store
+        .publish(&bytes, Some("repair"), None)
+        .expect("publish artifact");
+    std::fs::remove_file(&artifact.path).expect("remove artifact");
+
+    let output = cargo_bin_cmd!("imagegen-bridge")
+        .args([
+            "--config",
+            config.to_str().expect("UTF-8 config"),
+            "artifacts",
+            "repair",
+            "--dry-run",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let audit: Value = serde_json::from_slice(&output).expect("audit JSON");
+    assert_eq!(audit["orphaned_records"], 1);
+    assert_eq!(audit["repaired"], 0);
+    assert_eq!(
+        store
+            .repair_orphans(10, imagegen_bridge::artifacts::ArtifactRepairMode::Audit)
+            .expect("repeat audit")
+            .orphaned_records,
+        1
+    );
+
+    cargo_bin_cmd!("imagegen-bridge")
+        .args([
+            "--config",
+            config.to_str().expect("UTF-8 config"),
+            "artifacts",
+            "repair",
+            "--force",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"repaired\":1"));
+    assert_eq!(
+        store
+            .repair_orphans(10, imagegen_bridge::artifacts::ArtifactRepairMode::Audit)
+            .expect("post-repair audit")
+            .scanned,
+        0
+    );
+}
+
+#[test]
 fn checked_in_container_profile_remains_valid() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     cargo_bin_cmd!("imagegen-bridge")
