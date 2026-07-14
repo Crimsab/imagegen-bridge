@@ -26,8 +26,10 @@ max_identifier_bytes = 256
 
 [runtime.idempotency]
 max_entries = 10000
+max_completed_bytes = 268435456
 completed_ttl_secs = 86400
 in_flight_ttl_secs = 1860
+unknown_ttl_secs = 86400
 
 [inputs]
 local_roots = ["."]

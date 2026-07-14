@@ -112,8 +112,10 @@ impl BridgeConfig {
             }
         }
         if self.runtime.idempotency.max_entries == 0
+            || self.runtime.idempotency.max_completed_bytes == 0
             || self.runtime.idempotency.completed_ttl_secs == 0
             || self.runtime.idempotency.in_flight_ttl_secs == 0
+            || self.runtime.idempotency.unknown_ttl_secs == 0
         {
             issue(
                 "runtime.idempotency",

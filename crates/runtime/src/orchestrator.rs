@@ -444,7 +444,7 @@ impl ImagegenRuntime {
 
         let provider_started = Instant::now();
         let provider_result = self
-            .await_controlled(
+            .await_provider_execution(
                 provider.execute(
                     effective_request.clone(),
                     ProviderContext {
@@ -457,7 +457,6 @@ impl ImagegenRuntime {
                 deadline,
                 external_cancellation,
                 operation,
-                "request was cancelled during provider execution",
             )
             .await;
         drop(provider_permit);
@@ -522,6 +521,45 @@ impl ImagegenRuntime {
             "request was cancelled while waiting for capacity",
         )
         .await
+    }
+
+    async fn await_provider_execution<T, F>(
+        &self,
+        future: F,
+        deadline: Instant,
+        external: &CancellationToken,
+        operation: &CancellationToken,
+    ) -> Result<T, BridgeError>
+    where
+        F: Future<Output = Result<T, BridgeError>>,
+    {
+        if deadline <= Instant::now() {
+            operation.cancel();
+            return Err(timeout_error());
+        }
+        tokio::pin!(future);
+        let interrupted = tokio::select! {
+            result = &mut future => return classify_provider_execution_result(result),
+            () = external.cancelled() => {
+                operation.cancel();
+                (ErrorCode::Cancelled, "request was cancelled during provider execution")
+            }
+            () = self.shutdown.cancelled() => {
+                operation.cancel();
+                (ErrorCode::Cancelled, "runtime shut down during provider execution")
+            }
+            () = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)) => {
+                operation.cancel();
+                (ErrorCode::Timeout, "request deadline elapsed during provider execution")
+            }
+        };
+        match tokio::time::timeout(self.config.cancellation_grace, &mut future).await {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(error)) if !matches!(error.code, ErrorCode::Timeout | ErrorCode::Cancelled) => {
+                Err(error)
+            }
+            Ok(Err(_)) | Err(_) => Err(unknown_outcome_error(interrupted.0, interrupted.1)),
+        }
     }
 
     async fn await_controlled<T, F>(
@@ -630,6 +668,28 @@ fn elapsed_ms(started: Instant) -> u64 {
 
 fn timeout_error() -> BridgeError {
     BridgeError::new(ErrorCode::Timeout, "request deadline elapsed").retryable(true)
+}
+
+fn unknown_outcome_error(code: ErrorCode, message: impl Into<String>) -> BridgeError {
+    BridgeError::new(code, message)
+        .retryable(false)
+        .with_detail("outcome", "unknown")
+}
+
+fn classify_provider_execution_result<T>(result: Result<T, BridgeError>) -> Result<T, BridgeError> {
+    match result {
+        Err(error)
+            if matches!(error.code, ErrorCode::Timeout | ErrorCode::Cancelled)
+                && error
+                    .details
+                    .get("outcome")
+                    .and_then(serde_json::Value::as_str)
+                    != Some("unknown") =>
+        {
+            Err(error.retryable(false).with_detail("outcome", "unknown"))
+        }
+        result => result,
+    }
 }
 
 fn cancelled_error(message: impl Into<String>) -> BridgeError {
@@ -928,7 +988,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deadline_cancels_provider_work_and_failed_key_can_retry() {
+    async fn deadline_keeps_an_unknown_idempotency_tombstone() {
         let provider = Arc::new(FakeProvider::new(Duration::from_secs(5)));
         let runtime = runtime(&provider, |_| {});
         let mut request = ImageRequest::generate("test");
@@ -936,11 +996,15 @@ mod tests {
         request.idempotency_key = Some("retryable-key".to_owned());
         let first = runtime.execute(request.clone()).await.unwrap_err();
         assert_eq!(first.code, ErrorCode::Timeout);
+        assert!(!first.retryable);
+        assert_eq!(first.details["outcome"], "unknown");
         tokio::task::yield_now().await;
         assert!(provider.saw_cancellation.load(Ordering::Acquire));
         let second = runtime.execute(request).await.unwrap_err();
         assert_eq!(second.code, ErrorCode::Timeout);
-        assert_eq!(provider.calls.load(Ordering::Acquire), 2);
+        assert!(!second.retryable);
+        assert_eq!(second.details["outcome"], "unknown");
+        assert_eq!(provider.calls.load(Ordering::Acquire), 1);
     }
 
     #[tokio::test]

@@ -71,8 +71,10 @@ impl BridgeConfig {
                 .collect(),
             idempotency: IdempotencyConfig {
                 max_entries: self.runtime.idempotency.max_entries,
+                max_completed_bytes: self.runtime.idempotency.max_completed_bytes,
                 completed_ttl: Duration::from_secs(self.runtime.idempotency.completed_ttl_secs),
                 in_flight_ttl: Duration::from_secs(self.runtime.idempotency.in_flight_ttl_secs),
+                unknown_ttl: Duration::from_secs(self.runtime.idempotency.unknown_ttl_secs),
             },
             materialization: MaterializationConfig {
                 image_limits,

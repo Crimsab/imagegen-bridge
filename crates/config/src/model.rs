@@ -144,18 +144,24 @@ impl Default for RequestLimitSettings {
 pub struct IdempotencySettings {
     /// Maximum retained keys.
     pub max_entries: usize,
+    /// Maximum serialized bytes retained across completed responses.
+    pub max_completed_bytes: usize,
     /// Completed replay lifetime in seconds.
     pub completed_ttl_secs: u64,
     /// Maximum abandoned leader lifetime in seconds.
     pub in_flight_ttl_secs: u64,
+    /// Retention for provider operations with unknown outcomes.
+    pub unknown_ttl_secs: u64,
 }
 
 impl Default for IdempotencySettings {
     fn default() -> Self {
         Self {
             max_entries: 10_000,
+            max_completed_bytes: 256 * 1024 * 1024,
             completed_ttl_secs: 24 * 60 * 60,
             in_flight_ttl_secs: 31 * 60,
+            unknown_ttl_secs: 24 * 60 * 60,
         }
     }
 }
