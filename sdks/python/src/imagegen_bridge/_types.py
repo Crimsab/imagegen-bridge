@@ -432,6 +432,17 @@ class ProviderDescriptor:
     display_name: str
     version: str
     experimental: bool
+    models: tuple[str, ...] = ()
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> ProviderDescriptor:
+        return cls(
+            name=value["name"],
+            display_name=value["display_name"],
+            version=value["version"],
+            experimental=value["experimental"],
+            models=tuple(value.get("models", ())),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -442,7 +453,8 @@ class ProviderPage:
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> ProviderPage:
         return cls(
-            tuple(ProviderDescriptor(**item) for item in value["items"]), value.get("next_cursor")
+            tuple(ProviderDescriptor.from_dict(item) for item in value["items"]),
+            value.get("next_cursor"),
         )
 
 

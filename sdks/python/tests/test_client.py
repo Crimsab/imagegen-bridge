@@ -104,8 +104,18 @@ def test_async_client_matches_shared_http_contract(
                 "partial_image",
                 "completed",
             ]
-            assert (await client.providers()).items[1].experimental
+            providers = await client.providers()
+            assert providers.items[1].experimental
+            assert providers.items[1].models == (
+                "gpt-image-2",
+                "gpt-image-1.5",
+                "gpt-image-1",
+                "gpt-image-1-mini",
+            )
             assert (await client.capabilities("codex-app-server")).generation
+            assert (
+                await client.capabilities("codex-responses", model="gpt-image-1")
+            ).model == "gpt-image-1"
             assert (await client.diagnostics()).artifact_storage_enabled
             assert (await client.session("sdk-fixture")).reused
             await client.delete_session("sdk-fixture")

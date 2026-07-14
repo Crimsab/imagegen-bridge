@@ -704,6 +704,7 @@ mod tests {
                 display_name: "Fake".to_owned(),
                 version: "test".to_owned(),
                 experimental: false,
+                models: vec!["test-image".to_owned()],
             }
         }
 

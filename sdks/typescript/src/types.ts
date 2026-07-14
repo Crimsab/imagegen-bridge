@@ -255,6 +255,7 @@ export interface ProviderDescriptor {
   display_name: string;
   version: string;
   experimental: boolean;
+  models?: string[];
 }
 
 export interface ProviderPage {

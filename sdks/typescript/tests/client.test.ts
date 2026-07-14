@@ -62,10 +62,19 @@ describe("ImagegenBridgeClient", () => {
       "codex-app-server",
       "codex-responses",
     ]);
+    expect(providers.items[1]?.models).toEqual([
+      "gpt-image-2",
+      "gpt-image-1.5",
+      "gpt-image-1",
+      "gpt-image-1-mini",
+    ]);
     const capabilities = await client.capabilities("codex-app-server");
     expect(capabilities.persistent_sessions).toBeTrue();
     expect(capabilities.input_fidelities).toEqual(["high"]);
     expect(capabilities.actions).toEqual(["auto"]);
+    expect((await client.capabilities("codex-responses", { model: "gpt-image-1" })).model).toBe(
+      "gpt-image-1",
+    );
     const diagnostics = await client.diagnostics();
     expect(diagnostics.configuration.listener_scope).toBe("loopback");
     expect(diagnostics.jobs?.total).toBe(1);

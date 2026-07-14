@@ -2084,6 +2084,14 @@
             "description": "Whether the adapter is experimental.",
             "type": "boolean"
           },
+          "models": {
+            "default": [],
+            "description": "Image models that can be queried through the capability endpoint.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "name": {
             "description": "Stable registry name.",
             "type": "string"
@@ -4167,6 +4175,9 @@
                     {
                       "display_name": "Codex app-server",
                       "experimental": false,
+                      "models": [
+                        "gpt-image-2"
+                      ],
                       "name": "codex-app-server",
                       "version": "0.1.0"
                     }

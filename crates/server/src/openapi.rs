@@ -62,7 +62,7 @@ pub fn openapi_document() -> Value {
                         {"name":"cursor","in":"query","schema":{"type":"string","maxLength":256}}
                     ],
                     "responses": {
-                        "200": json_response("Provider page", json!({"$ref":"#/components/schemas/ProviderPage"}), json!({"items":[{"name":"codex-app-server","display_name":"Codex app-server","version":"0.1.0","experimental":false}]})),
+                        "200": json_response("Provider page", json!({"$ref":"#/components/schemas/ProviderPage"}), json!({"items":[{"name":"codex-app-server","display_name":"Codex app-server","version":"0.1.0","experimental":false,"models":["gpt-image-2"]}]})),
                         "400": error_response("Invalid provider cursor"),
                         "401": error_response("Bridge authentication required")
                     }

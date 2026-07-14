@@ -185,6 +185,7 @@ mod tests {
                 display_name: self.0.to_owned(),
                 version: "test".to_owned(),
                 experimental: false,
+                models: vec!["test-image".to_owned()],
             }
         }
 

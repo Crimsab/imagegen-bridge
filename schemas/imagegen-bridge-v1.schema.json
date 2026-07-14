@@ -1690,6 +1690,14 @@
           "description": "Whether the adapter is experimental.",
           "type": "boolean"
         },
+        "models": {
+          "description": "Image models that can be queried through the capability endpoint.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
         "name": {
           "description": "Stable registry name.",
           "type": "string"

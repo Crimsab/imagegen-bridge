@@ -1081,6 +1081,7 @@ mod tests {
                 display_name: "Ready".to_owned(),
                 version: "test".to_owned(),
                 experimental: false,
+                models: vec!["test-image".to_owned()],
             }
         }
 
@@ -1263,6 +1264,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(authorized.status(), StatusCode::OK);
+        let body = authorized.into_body().collect().await.unwrap().to_bytes();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["items"][0]["models"][0], "test-image");
     }
 
     #[tokio::test]

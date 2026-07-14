@@ -28,6 +28,7 @@ const elements = {
 	sessionMode: document.querySelector("#session-mode"),
 	provider: document.querySelector("#provider"),
 	model: document.querySelector("#model"),
+	knownModels: document.querySelector("#known-models"),
 	providerNote: document.querySelector("#provider-note"),
 	grid: document.querySelector("#job-grid"),
 	libraryMessage: document.querySelector("#library-message"),
@@ -133,6 +134,7 @@ async function loadProviders() {
 
 async function loadCapabilities() {
 	const provider = elements.provider.value;
+	updateKnownModels(provider);
 	if (!provider) {
 		applyCapabilities(elements.form, null);
 		elements.providerNote.textContent = "Provider default";
@@ -151,6 +153,18 @@ async function loadCapabilities() {
 	}
 }
 
+function updateKnownModels(providerName) {
+	const providers = providerName
+		? state.providers.filter((provider) => provider.name === providerName)
+		: state.providers;
+	const models = [
+		...new Set(providers.flatMap((provider) => provider.models || [])),
+	];
+	elements.knownModels.replaceChildren(
+		...models.map((model) => new Option("", model)),
+	);
+}
+
 async function loadOperator() {
 	setMessage(elements.operatorMessage, "Loading operator diagnostics");
 	elements.refreshOperator.disabled = true;
@@ -160,16 +174,23 @@ async function loadOperator() {
 			api.providers(),
 		]);
 		state.providers = providerPage.items || [];
-		const capabilityRows = new Array(state.providers.length);
-		await mapLimit(state.providers, 4, async (provider) => {
-			const index = state.providers.indexOf(provider);
+		const targets = state.providers.flatMap((provider) => {
+			const models = provider.models?.length ? provider.models : [""];
+			return models.map((model) => ({ provider, model }));
+		});
+		const capabilityRows = new Array(targets.length);
+		const indexedTargets = targets.map((target, index) => ({ index, target }));
+		await mapLimit(indexedTargets, 4, async ({ index, target }) => {
 			try {
 				capabilityRows[index] = {
-					provider,
-					capabilities: await api.capabilities(provider.name),
+					...target,
+					capabilities: await api.capabilities(
+						target.provider.name,
+						target.model,
+					),
 				};
 			} catch (error) {
-				capabilityRows[index] = { provider, error };
+				capabilityRows[index] = { ...target, error };
 			}
 		});
 		renderOperatorSummary(diagnostics);
@@ -227,7 +248,7 @@ function renderOperatorSummary(diagnostics) {
 
 function renderCapabilityMatrix(rows, readiness) {
 	const health = new Map(readiness.map((item) => [item.provider, item]));
-	const rendered = rows.map(({ provider, capabilities, error }) => {
+	const rendered = rows.map(({ provider, model, capabilities, error }) => {
 		const row = document.createElement("tr");
 		const providerHealth = health.get(provider.name);
 		const status = providerHealth?.status || "unknown";
@@ -235,7 +256,8 @@ function renderCapabilityMatrix(rows, readiness) {
 			? [
 					provider.name,
 					status,
-					"Unavailable",
+					model || "provider default",
+					"—",
 					"—",
 					"—",
 					"—",
@@ -255,6 +277,7 @@ function renderCapabilityMatrix(rows, readiness) {
 							? "Keys + threads"
 							: "Keys"
 						: "No",
+					capabilities.experimental ? "Experimental" : "—",
 				];
 		for (const [index, value] of values.entries()) {
 			const cell = create("td", index === 1 ? "readiness" : "", String(value));
@@ -266,7 +289,7 @@ function renderCapabilityMatrix(rows, readiness) {
 	if (rendered.length === 0) {
 		const row = document.createElement("tr");
 		const cell = create("td", "", "No providers are registered.");
-		cell.colSpan = 8;
+		cell.colSpan = 9;
 		row.append(cell);
 		rendered.push(row);
 	}

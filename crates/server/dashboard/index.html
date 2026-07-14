@@ -88,12 +88,7 @@
               <label class="field">
                 <span>Model</span>
                 <input id="model" name="model" type="text" list="known-models" placeholder="Provider default" autocomplete="off">
-                <datalist id="known-models">
-                  <option value="gpt-image-2"></option>
-                  <option value="gpt-image-1.5"></option>
-                  <option value="gpt-image-1"></option>
-                  <option value="gpt-image-1-mini"></option>
-                </datalist>
+                <datalist id="known-models"></datalist>
               </label>
               <label class="field">
                 <span>Size</span>
@@ -355,10 +350,10 @@
           <div class="operator-section-heading">
             <div>
               <h3 id="capabilities-title">Provider capability matrix</h3>
-              <p class="quiet">Current default capabilities reported by each configured provider.</p>
+              <p class="quiet">Current capabilities for every model declared by each configured provider.</p>
             </div>
           </div>
-          <section class="table-scroll" aria-label="Scrollable provider capability matrix">
+          <section class="table-scroll" tabindex="0" aria-label="Scrollable provider capability matrix">
             <table class="capability-table">
               <thead>
                 <tr>
@@ -370,6 +365,7 @@
                   <th scope="col">Count</th>
                   <th scope="col">Formats</th>
                   <th scope="col">Sessions</th>
+                  <th scope="col">Notes</th>
                 </tr>
               </thead>
               <tbody id="capability-table-body"></tbody>

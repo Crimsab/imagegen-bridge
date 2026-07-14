@@ -151,4 +151,30 @@ pub struct ProviderDescriptor {
     pub version: String,
     /// Whether the adapter is experimental.
     pub experimental: bool,
+    /// Image models that can be queried through the capability endpoint.
+    #[serde(default)]
+    pub models: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::ProviderDescriptor;
+
+    #[test]
+    fn provider_model_inventory_is_additive_for_older_payloads() {
+        let descriptor: ProviderDescriptor = serde_json::from_str(
+            r#"{"name":"test","display_name":"Test","version":"1","experimental":false}"#,
+        )
+        .unwrap();
+        assert!(descriptor.models.is_empty());
+
+        let encoded = serde_json::to_value(ProviderDescriptor {
+            models: vec!["gpt-image-2".to_owned()],
+            ..descriptor
+        })
+        .unwrap();
+        assert_eq!(encoded["models"][0], "gpt-image-2");
+    }
 }

@@ -98,7 +98,8 @@ Both SDKs expose durable jobs, requested output indices, optional per-item gener
 and structured failures from best-effort multi-image requests.
 The request and capability types also expose input fidelity, image action, and
 the provider-specific accepted value sets instead of assuming every model can
-honor every edit control.
+honor every edit control. Provider descriptors expose their declared image
+models so clients can build model pickers without hardcoded inventories.
 
 ## Contract verification and packaging
 

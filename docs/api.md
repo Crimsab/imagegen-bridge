@@ -211,4 +211,6 @@ drift by CI and `imagegen-bridge schema --kind openapi --check FILE`.
 
 `GET /v1/providers?limit=20&cursor=...` accepts `1..=100`. Cursors are opaque and
 stable for the immutable provider registry. The response contains `items` and
-an optional `next_cursor`.
+an optional `next_cursor`. Each descriptor includes a `models` inventory. Query
+each entry through `/v1/providers/{name}/capabilities?model=...`; provider/model
+differences are authoritative and unsupported models return a structured error.

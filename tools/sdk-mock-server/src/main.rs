@@ -1,6 +1,6 @@
 //! Shared black-box HTTP fixture server used by every non-Rust SDK test suite.
 
-use std::convert::Infallible;
+use std::{collections::HashMap, convert::Infallible};
 
 use axum::{
     Json, Router,
@@ -328,7 +328,11 @@ async fn providers(headers: HeaderMap, Query(_query): Query<Value>) -> Response 
         .unwrap_or_else(|| fixture_response(StatusCode::OK, PROVIDERS_RESPONSE, "application/json"))
 }
 
-async fn capabilities(headers: HeaderMap, Path(provider): Path<String>) -> Response {
+async fn capabilities(
+    headers: HeaderMap,
+    Path(provider): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
     if let Some(response) = authenticate(&headers) {
         return response;
     }
@@ -343,6 +347,9 @@ async fn capabilities(headers: HeaderMap, Path(provider): Path<String>) -> Respo
     };
     capabilities["provider"] = Value::String(provider.clone());
     capabilities["experimental"] = Value::Bool(provider == "codex-responses");
+    if let Some(model) = query.get("model").filter(|model| !model.is_empty()) {
+        capabilities["model"] = Value::String(model.clone());
+    }
     fixture_response(
         StatusCode::OK,
         &capabilities.to_string(),

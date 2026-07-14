@@ -569,6 +569,7 @@ impl ImageProvider for AppServerImageProvider {
             display_name: "Codex app-server".to_owned(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
             experimental: false,
+            models: vec!["gpt-image-2".to_owned()],
         }
     }
 

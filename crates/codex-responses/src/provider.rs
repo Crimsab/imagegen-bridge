@@ -548,6 +548,10 @@ impl ImageProvider for CodexResponsesProvider {
             display_name: "Codex OAuth Responses (experimental)".to_owned(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
             experimental: true,
+            models: SUPPORTED_IMAGE_MODELS
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
         }
     }
 
