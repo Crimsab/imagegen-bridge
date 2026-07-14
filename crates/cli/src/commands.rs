@@ -26,7 +26,7 @@ use crate::{
         ArtifactCommand, Cli, Command, ConfigCommand, EditArgs, GenerateArgs, ImageArgs,
         PresentationArgs, ProviderCommand, SchemaArgs, SchemaKind, SessionCommand,
     },
-    doctor,
+    dashboard, doctor,
     output::Output,
     presentation, setup,
 };
@@ -55,6 +55,7 @@ pub(crate) async fn run(cli: Cli, output: &Output) -> Result<(), BridgeError> {
         Command::Generate(args) => Box::pin(generate(args, &resolved, output)).await,
         Command::Edit(args) => Box::pin(edit(args, &resolved, output)).await,
         Command::Serve(args) => serve_command(args.bind, resolved, output).await,
+        Command::Dashboard(args) => dashboard::run(args, resolved, output).await,
         Command::Providers(args) => providers(args.command, resolved, output).await,
         Command::Session(args) => session(args.command, resolved, output).await,
         Command::Config(args) => config(args.command, &resolved, output),
@@ -459,23 +460,7 @@ async fn serve_command(
         resolved.config.server.bind = address;
     }
     resolved.config.validate()?;
-    if resolved.config.server.tracing.enabled {
-        let installed = tracing_subscriber::fmt()
-            .json()
-            .flatten_event(true)
-            .with_writer(std::io::stderr)
-            .with_target(false)
-            .with_current_span(true)
-            .with_max_level(tracing_subscriber::filter::LevelFilter::INFO)
-            .try_init()
-            .is_ok();
-        if installed {
-            tracing::info!(
-                event = "server_tracing_initialized",
-                "server tracing initialized"
-            );
-        }
-    }
+    dashboard::initialize_server_tracing(resolved.config.server.tracing.enabled);
     let address: SocketAddr = resolved
         .config
         .server
@@ -514,7 +499,7 @@ async fn serve_command(
 }
 
 #[cfg(unix)]
-async fn shutdown_signal() -> io::Result<()> {
+pub(crate) async fn shutdown_signal() -> io::Result<()> {
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     tokio::select! {
         result = tokio::signal::ctrl_c() => result,
@@ -525,7 +510,7 @@ async fn shutdown_signal() -> io::Result<()> {
 }
 
 #[cfg(not(unix))]
-async fn shutdown_signal() -> io::Result<()> {
+pub(crate) async fn shutdown_signal() -> io::Result<()> {
     tokio::signal::ctrl_c().await
 }
 

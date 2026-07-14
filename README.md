@@ -178,7 +178,19 @@ session commands, schema commands, completions, and man-page generation are in
 
 ## HTTP service
 
-Start the server on loopback:
+The shortest path to the local UI is:
+
+```sh
+imagegen-bridge dashboard
+```
+
+This attaches to an Imagegen Bridge already listening at the configured local
+address or starts one on loopback and opens the system browser when invoked
+interactively. Use `--no-open` on headless systems, or `--attach-only --json`
+when another program only needs discoverable connection details. A process
+started by this command remains in the foreground until Ctrl-C/SIGINT.
+
+To run the API explicitly, start the server on loopback:
 
 ```sh
 imagegen-bridge serve --bind 127.0.0.1:8787

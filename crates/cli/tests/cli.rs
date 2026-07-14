@@ -18,6 +18,41 @@ fn help_and_version_are_available_without_configuration() {
         .assert()
         .success()
         .stdout(predicate::str::starts_with("imagegen-bridge "));
+    cargo_bin_cmd!("imagegen-bridge")
+        .args(["dashboard", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--attach-only"))
+        .stdout(predicate::str::contains("--no-open"));
+}
+
+#[test]
+fn dashboard_rejects_public_listener_and_missing_attach_target() {
+    cargo_bin_cmd!("imagegen-bridge")
+        .args(["dashboard", "--bind", "0.0.0.0:8080", "--no-open"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "dashboard --bind must use a loopback IP address",
+        ));
+
+    let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("ephemeral listener");
+    let address = probe.local_addr().expect("listener address");
+    drop(probe);
+    cargo_bin_cmd!("imagegen-bridge")
+        .args([
+            "dashboard",
+            "--bind",
+            &address.to_string(),
+            "--attach-only",
+            "--no-open",
+            "--json",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "no Imagegen Bridge dashboard is listening",
+        ));
 }
 
 #[test]
@@ -599,6 +634,29 @@ database = "{root}/jobs.sqlite3"
     assert!(dashboard.contains("200 OK"));
     assert!(dashboard.contains("<title>Imagegen Bridge</title>"));
 
+    let attached = cargo_bin_cmd!("imagegen-bridge")
+        .args([
+            "--config",
+            config.to_str().expect("UTF-8 config"),
+            "dashboard",
+            "--attach-only",
+            "--no-open",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let attached: Value = serde_json::from_slice(&attached).expect("dashboard connection JSON");
+    assert_eq!(attached["mode"], "attached");
+    assert_eq!(attached["url"], format!("http://{address}/dashboard"));
+    assert_eq!(attached["api_base_url"], format!("http://{address}"));
+    assert_eq!(attached["bind"], address.to_string());
+    assert_eq!(attached["authentication"], "unknown");
+    assert_eq!(attached["opened"], false);
+    assert!(attached.get("pid").is_none());
+
     let request_body =
         r#"{"prompt":"trace-secret prompt","operation":"generate","parameters":{"n":0}}"#;
     let mut stream = std::net::TcpStream::connect(address).expect("generation connection");
@@ -647,4 +705,144 @@ database = "{root}/jobs.sqlite3"
     }
     child.kill().expect("kill stuck daemon");
     panic!("daemon did not stop after SIGINT");
+}
+
+#[cfg(unix)]
+#[test]
+fn dashboard_launcher_starts_serves_and_stops_on_sigint() {
+    use std::{
+        io::{BufRead as _, Read as _, Write as _},
+        os::unix::fs::PermissionsExt as _,
+        process::Stdio,
+        sync::mpsc,
+        time::Duration,
+    };
+
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let script = directory.path().join("fake-codex");
+    std::fs::write(
+        &script,
+        r#"#!/bin/sh
+while IFS= read -r LINE; do
+  case "$LINE" in
+    *'"method":"initialize"'*) printf '%s\n' '{"id":1,"result":{}}' ;;
+  esac
+done
+"#,
+    )
+    .expect("write fake codex");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700))
+        .expect("script permissions");
+
+    let occupied = std::net::TcpListener::bind("127.0.0.1:0").expect("occupied listener");
+    let configured_address = occupied.local_addr().expect("listener address");
+    let config = directory.path().join("bridge.toml");
+    std::fs::write(
+        &config,
+        format!(
+            r#"
+[inputs]
+local_roots = ["{root}"]
+
+[artifacts]
+root = "{root}/artifacts"
+
+[providers.codex_app_server]
+executable = "{script}"
+cwd = "{root}"
+session_database = "{root}/state.sqlite3"
+restart_backoff_ms = 0
+
+[server]
+bind = "{configured_address}"
+
+[server.jobs]
+database = "{root}/jobs.sqlite3"
+"#,
+            root = directory.path().display(),
+            script = script.display(),
+        ),
+    )
+    .expect("write config");
+
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_imagegen-bridge"))
+        .args([
+            "--config",
+            config.to_str().expect("UTF-8 config"),
+            "dashboard",
+            "--no-open",
+            "--json",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start dashboard launcher");
+
+    let stdout = child.stdout.take().expect("dashboard stdout");
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let result = std::io::BufReader::new(stdout)
+            .read_line(&mut line)
+            .map(|_| line);
+        let _ = sender.send(result);
+    });
+    let connection_line = receiver
+        .recv_timeout(Duration::from_secs(5))
+        .expect("dashboard connection output timed out")
+        .expect("read dashboard connection output");
+    let connection: Value =
+        serde_json::from_str(connection_line.trim()).expect("dashboard connection JSON");
+    let address: std::net::SocketAddr = connection["bind"]
+        .as_str()
+        .expect("dashboard bind")
+        .parse()
+        .expect("dashboard socket address");
+    assert_ne!(address, configured_address);
+    drop(occupied);
+
+    let mut page = None;
+    for _ in 0..100 {
+        if let Ok(mut stream) = std::net::TcpStream::connect(address) {
+            let written = stream
+                .write_all(
+                    b"GET /dashboard HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+                )
+                .is_ok();
+            let mut body = String::new();
+            if written
+                && stream.read_to_string(&mut body).is_ok()
+                && body.contains("200 OK")
+                && body.contains("<title>Imagegen Bridge</title>")
+            {
+                page = Some(body);
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(page.is_some(), "dashboard launcher never served its UI");
+
+    std::process::Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .expect("send SIGINT");
+    for _ in 0..100 {
+        if let Some(status) = child.try_wait().expect("poll dashboard launcher") {
+            assert!(
+                status.success(),
+                "dashboard exited unsuccessfully: {status}"
+            );
+            assert_eq!(connection["mode"], "started");
+            assert_eq!(connection["url"], format!("http://{address}/dashboard"));
+            assert_eq!(connection["bind"], address.to_string());
+            assert_eq!(connection["authentication"], "none");
+            assert_eq!(connection["opened"], false);
+            assert_eq!(connection["pid"], child.id());
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    child.kill().expect("kill stuck dashboard launcher");
+    panic!("dashboard launcher did not stop after SIGINT");
 }

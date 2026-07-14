@@ -86,6 +86,8 @@ pub(crate) enum Command {
     Edit(EditArgs),
     /// Run the bounded HTTP API until interrupted.
     Serve(ServeArgs),
+    /// Open, attach to, or start the local embedded dashboard.
+    Dashboard(DashboardArgs),
     /// Inspect configured providers.
     Providers(ProvidersArgs),
     /// Inspect or delete persistent session bindings.
@@ -374,6 +376,22 @@ pub(crate) struct ServeArgs {
     /// Override the configured numeric bind address.
     #[arg(long, value_name = "IP:PORT")]
     pub bind: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct DashboardArgs {
+    /// Override the local listener; only loopback IP addresses are accepted.
+    #[arg(long, value_name = "IP:PORT")]
+    pub bind: Option<String>,
+    /// Open the dashboard with the system browser even when non-interactive.
+    #[arg(long, conflicts_with = "no_open")]
+    pub open: bool,
+    /// Never open a browser; print connection details only.
+    #[arg(long)]
+    pub no_open: bool,
+    /// Attach to an existing bridge or fail without starting one.
+    #[arg(long)]
+    pub attach_only: bool,
 }
 
 #[derive(Debug, Args)]

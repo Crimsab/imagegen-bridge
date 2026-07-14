@@ -28,6 +28,14 @@ impl Output {
         !self.is_human()
     }
 
+    pub(crate) const fn is_json(&self) -> bool {
+        matches!(self.mode, OutputMode::Json)
+    }
+
+    pub(crate) const fn is_plain(&self) -> bool {
+        matches!(self.mode, OutputMode::Plain)
+    }
+
     pub(crate) fn value(&self, value: &impl Serialize) -> Result<(), BridgeError> {
         let mut stdout = io::stdout().lock();
         match self.mode {

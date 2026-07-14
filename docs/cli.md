@@ -159,12 +159,31 @@ imagegen-bridge session delete gallery --dry-run --json
 imagegen-bridge session delete gallery --force --json
 imagegen-bridge serve
 imagegen-bridge serve --bind 127.0.0.1:9000
+imagegen-bridge dashboard
+imagegen-bridge dashboard --no-open
+imagegen-bridge dashboard --attach-only --json
 ```
 
 Session deletion and artifact cleanup require `--force`; their `--dry-run`
 forms are non-mutating. `serve` reports its listener on stderr and stops
 gracefully on Ctrl-C/SIGINT. With durable jobs enabled it also reports the
 embedded dashboard URL, normally `http://127.0.0.1:8787/dashboard`.
+
+`dashboard` is the local UI launcher. It first probes the configured loopback
+address and, when that endpoint is an Imagegen Bridge dashboard, prints its
+connection details and exits. Otherwise it starts the same API and embedded UI
+in the foreground, choosing an available loopback port if the configured port
+is occupied by an unrelated process. An explicit `--bind IP:PORT` never falls
+back and accepts loopback IPs only. `--attach-only` prohibits startup;
+`--no-open` prohibits browser launch; `--open` requests it even without an
+interactive terminal. Automatic browser opening occurs only for human output
+on an interactive terminal.
+
+JSON connection output has stable `mode`, `url`, `api_base_url`, `bind`,
+`authentication`, and `opened` fields. A launcher-owned `pid` is present only
+when the command started the server. Attached authentication is reported as
+`unknown` because the public HTML shell intentionally cannot disclose server
+policy. Plain mode emits one `key=value` per line and never includes secrets.
 
 ## Configuration, diagnostics, and schemas
 

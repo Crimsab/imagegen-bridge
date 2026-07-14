@@ -2,6 +2,7 @@
 
 mod args;
 mod commands;
+mod dashboard;
 mod doctor;
 mod output;
 mod presentation;

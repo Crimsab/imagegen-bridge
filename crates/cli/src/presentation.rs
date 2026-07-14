@@ -209,22 +209,22 @@ fn open_path(_path: &Path) -> Result<(), BridgeError> {
 }
 
 #[cfg(target_os = "macos")]
-fn open_url(url: &str) -> Result<(), BridgeError> {
+pub(crate) fn open_url(url: &str) -> Result<(), BridgeError> {
     spawn_viewer(Command::new("open").arg(url))
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
-fn open_url(url: &str) -> Result<(), BridgeError> {
+pub(crate) fn open_url(url: &str) -> Result<(), BridgeError> {
     spawn_viewer(Command::new("xdg-open").arg(url))
 }
 
 #[cfg(target_os = "windows")]
-fn open_url(url: &str) -> Result<(), BridgeError> {
+pub(crate) fn open_url(url: &str) -> Result<(), BridgeError> {
     spawn_viewer(Command::new("cmd").args(["/C", "start", "", url]))
 }
 
 #[cfg(not(any(unix, target_os = "windows")))]
-fn open_url(_url: &str) -> Result<(), BridgeError> {
+pub(crate) fn open_url(_url: &str) -> Result<(), BridgeError> {
     Err(artifact_error("system URL opening is unsupported"))
 }
 
