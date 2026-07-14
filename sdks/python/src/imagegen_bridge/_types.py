@@ -446,6 +446,94 @@ class ProviderPage:
 
 
 @dataclass(frozen=True, slots=True)
+class ConfigurationOrigin:
+    field: str
+    source: Literal["default", "file", "environment", "override"]
+    key: str
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigurationDiagnostics:
+    listener_scope: Literal["loopback", "remote", "embedded", "unknown"]
+    authentication_required: bool
+    metrics_enabled: bool
+    jobs_enabled: bool
+    max_connections: int
+    max_body_bytes: int
+    read_timeout_ms: int
+    provenance: tuple[ConfigurationOrigin, ...]
+    version: int | None = None
+    default_provider: str | None = None
+    listener_port: int | None = None
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> ConfigurationDiagnostics:
+        copied = dict(value)
+        copied["provenance"] = tuple(ConfigurationOrigin(**item) for item in value["provenance"])
+        return cls(**copied)
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeDiagnostics:
+    global_queued: int
+    providers_queued: dict[str, int]
+
+
+@dataclass(frozen=True, slots=True)
+class JobManagerDiagnostics:
+    total: int
+    queued: int
+    running: int
+    succeeded: int
+    failed: int
+    cancelled: int
+    interrupted: int
+    hidden: int
+    database_bytes: int
+    active_workers: int
+    max_pending: int
+    max_running: int
+    retention_secs: int
+    max_retained: int
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderReadiness:
+    provider: str
+    status: Literal["ready", "not_ready"]
+    error: BridgeErrorData | None = None
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> ProviderReadiness:
+        return cls(
+            provider=value["provider"],
+            status=value["status"],
+            error=BridgeErrorData(**value["error"]) if value.get("error") is not None else None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class OperatorDiagnostics:
+    bridge_version: str
+    configuration: ConfigurationDiagnostics
+    artifact_storage_enabled: bool
+    runtime: RuntimeDiagnostics
+    providers: tuple[ProviderReadiness, ...]
+    jobs: JobManagerDiagnostics | None = None
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> OperatorDiagnostics:
+        return cls(
+            bridge_version=value["bridge_version"],
+            configuration=ConfigurationDiagnostics.from_dict(value["configuration"]),
+            artifact_storage_enabled=value["artifact_storage_enabled"],
+            runtime=RuntimeDiagnostics(**value["runtime"]),
+            providers=tuple(ProviderReadiness.from_dict(item) for item in value["providers"]),
+            jobs=JobManagerDiagnostics(**value["jobs"]) if value.get("jobs") is not None else None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class U8Range:
     min: int
     max: int

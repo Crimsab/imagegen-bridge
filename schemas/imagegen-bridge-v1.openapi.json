@@ -444,6 +444,94 @@
         ],
         "type": "object"
       },
+      "ConfigurationDiagnostics": {
+        "additionalProperties": false,
+        "properties": {
+          "authentication_required": {
+            "type": "boolean"
+          },
+          "default_provider": {
+            "type": "string"
+          },
+          "jobs_enabled": {
+            "type": "boolean"
+          },
+          "listener_port": {
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "listener_scope": {
+            "enum": [
+              "loopback",
+              "remote",
+              "embedded",
+              "unknown"
+            ]
+          },
+          "max_body_bytes": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_connections": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "metrics_enabled": {
+            "type": "boolean"
+          },
+          "provenance": {
+            "items": {
+              "$ref": "#/components/schemas/ConfigurationOrigin"
+            },
+            "type": "array"
+          },
+          "read_timeout_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "listener_scope",
+          "authentication_required",
+          "metrics_enabled",
+          "jobs_enabled",
+          "max_connections",
+          "max_body_bytes",
+          "read_timeout_ms",
+          "provenance"
+        ],
+        "type": "object"
+      },
+      "ConfigurationOrigin": {
+        "additionalProperties": false,
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "default",
+              "file",
+              "environment",
+              "override"
+            ]
+          }
+        },
+        "required": [
+          "field",
+          "source",
+          "key"
+        ],
+        "type": "object"
+      },
       "ErrorCode": {
         "description": "Stable machine-readable error classification.",
         "oneOf": [
@@ -1522,6 +1610,84 @@
           }
         ]
       },
+      "JobManagerDiagnostics": {
+        "additionalProperties": false,
+        "properties": {
+          "active_workers": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cancelled": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "database_bytes": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "failed": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "hidden": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "interrupted": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_pending": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_retained": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_running": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "queued": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "retention_secs": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "running": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "succeeded": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "queued",
+          "running",
+          "succeeded",
+          "failed",
+          "cancelled",
+          "interrupted",
+          "hidden",
+          "database_bytes",
+          "active_workers",
+          "max_pending",
+          "max_running",
+          "retention_secs",
+          "max_retained"
+        ],
+        "type": "object"
+      },
       "Moderation": {
         "description": "Provider moderation strictness where configurable.",
         "oneOf": [
@@ -1646,6 +1812,40 @@
         "required": [
           "error",
           "request_id"
+        ],
+        "type": "object"
+      },
+      "OperatorDiagnostics": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_storage_enabled": {
+            "type": "boolean"
+          },
+          "bridge_version": {
+            "type": "string"
+          },
+          "configuration": {
+            "$ref": "#/components/schemas/ConfigurationDiagnostics"
+          },
+          "jobs": {
+            "$ref": "#/components/schemas/JobManagerDiagnostics"
+          },
+          "providers": {
+            "items": {
+              "$ref": "#/components/schemas/ProviderReadiness"
+            },
+            "type": "array"
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/RuntimeDiagnostics"
+          }
+        },
+        "required": [
+          "bridge_version",
+          "configuration",
+          "artifact_storage_enabled",
+          "runtime",
+          "providers"
         ],
         "type": "object"
       },
@@ -2011,6 +2211,27 @@
         ],
         "type": "object"
       },
+      "ProviderReadiness": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/BridgeError"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "not_ready"
+            ]
+          }
+        },
+        "required": [
+          "provider",
+          "status"
+        ],
+        "type": "object"
+      },
       "Quality": {
         "description": "Requested generation quality.",
         "oneOf": [
@@ -2041,25 +2262,7 @@
         "properties": {
           "providers": {
             "items": {
-              "properties": {
-                "error": {
-                  "$ref": "#/components/schemas/BridgeError"
-                },
-                "provider": {
-                  "type": "string"
-                },
-                "status": {
-                  "enum": [
-                    "ready",
-                    "not_ready"
-                  ]
-                }
-              },
-              "required": [
-                "provider",
-                "status"
-              ],
-              "type": "object"
+              "$ref": "#/components/schemas/ProviderReadiness"
             },
             "type": "array"
           },
@@ -2182,6 +2385,27 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "RuntimeDiagnostics": {
+        "additionalProperties": false,
+        "properties": {
+          "global_queued": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "providers_queued": {
+            "additionalProperties": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "global_queued",
+          "providers_queued"
+        ],
         "type": "object"
       },
       "SessionMetadata": {
@@ -2744,6 +2968,80 @@
         ],
         "tags": [
           "artifacts"
+        ]
+      }
+    },
+    "/v1/diagnostics": {
+      "get": {
+        "operationId": "getOperatorDiagnostics",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "artifact_storage_enabled": true,
+                  "bridge_version": "0.1.0",
+                  "configuration": {
+                    "authentication_required": true,
+                    "default_provider": "codex-app-server",
+                    "jobs_enabled": true,
+                    "listener_port": 8787,
+                    "listener_scope": "loopback",
+                    "max_body_bytes": 83886080,
+                    "max_connections": 256,
+                    "metrics_enabled": false,
+                    "provenance": [],
+                    "read_timeout_ms": 30000,
+                    "version": 1
+                  },
+                  "jobs": {
+                    "active_workers": 1,
+                    "cancelled": 0,
+                    "database_bytes": 40960,
+                    "failed": 1,
+                    "hidden": 0,
+                    "interrupted": 0,
+                    "max_pending": 1000,
+                    "max_retained": 10000,
+                    "max_running": 4,
+                    "queued": 0,
+                    "retention_secs": 604800,
+                    "running": 1,
+                    "succeeded": 10,
+                    "total": 12
+                  },
+                  "providers": [
+                    {
+                      "provider": "codex-app-server",
+                      "status": "ready"
+                    }
+                  ],
+                  "runtime": {
+                    "global_queued": 0,
+                    "providers_queued": {
+                      "codex-app-server": 0
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorDiagnostics"
+                }
+              }
+            },
+            "description": "Redaction-safe operator diagnostics"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse",
+            "description": "Bridge authentication required"
+          }
+        },
+        "security": [
+          {
+            "bridgeBearer": []
+          }
+        ],
+        "tags": [
+          "diagnostics"
         ]
       }
     },
@@ -4056,6 +4354,10 @@
     {
       "description": "Provider discovery and capability negotiation",
       "name": "providers"
+    },
+    {
+      "description": "Authenticated redaction-safe operator state",
+      "name": "diagnostics"
     },
     {
       "description": "Persistent session lifecycle",

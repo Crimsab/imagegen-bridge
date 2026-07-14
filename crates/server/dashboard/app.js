@@ -16,6 +16,7 @@ const state = {
 	pollTimer: null,
 	loadSequence: 0,
 	authenticationPrompted: false,
+	providers: [],
 };
 
 const elements = {
@@ -36,6 +37,21 @@ const elements = {
 	refresh: document.querySelector("#refresh-button"),
 	connectionStatus: document.querySelector("#connection-status"),
 	connectionButton: document.querySelector("#connection-button"),
+	operatorButton: document.querySelector("#operator-button"),
+	operatorDialog: document.querySelector("#operator-dialog"),
+	operatorMessage: document.querySelector("#operator-message"),
+	operatorSummary: document.querySelector("#operator-summary"),
+	capabilityTableBody: document.querySelector("#capability-table-body"),
+	provenanceList: document.querySelector("#provenance-list"),
+	refreshOperator: document.querySelector("#refresh-operator-button"),
+	closeOperator: document.querySelector("#close-operator-button"),
+	sessionForm: document.querySelector("#session-lookup-form"),
+	operatorSessionKey: document.querySelector("#operator-session-key"),
+	operatorSessionProvider: document.querySelector("#operator-session-provider"),
+	sessionResult: document.querySelector("#session-result"),
+	confirmDialog: document.querySelector("#confirm-dialog"),
+	confirmMessage: document.querySelector("#confirm-message"),
+	cancelConfirmation: document.querySelector("#cancel-confirmation-button"),
 	connectionDialog: document.querySelector("#connection-dialog"),
 	token: document.querySelector("#bearer-token"),
 	saveToken: document.querySelector("#save-token-button"),
@@ -99,7 +115,11 @@ async function loadProviders() {
 			new Option(`${provider.display_name}${suffix}`, provider.name),
 		);
 	}
+	state.providers = page.items || [];
 	elements.provider.replaceChildren(...options);
+	elements.operatorSessionProvider.replaceChildren(
+		...options.map((option) => option.cloneNode(true)),
+	);
 	elements.provider.value = current;
 	setConnection("Connected", "ready");
 	state.authenticationPrompted = false;
@@ -124,6 +144,200 @@ async function loadCapabilities() {
 	} catch (error) {
 		handleError(error, elements.formMessage);
 	}
+}
+
+async function loadOperator() {
+	setMessage(elements.operatorMessage, "Loading operator diagnostics");
+	elements.refreshOperator.disabled = true;
+	try {
+		const [diagnostics, providerPage] = await Promise.all([
+			api.diagnostics(),
+			api.providers(),
+		]);
+		state.providers = providerPage.items || [];
+		const capabilityRows = new Array(state.providers.length);
+		await mapLimit(state.providers, 4, async (provider) => {
+			const index = state.providers.indexOf(provider);
+			try {
+				capabilityRows[index] = {
+					provider,
+					capabilities: await api.capabilities(provider.name),
+				};
+			} catch (error) {
+				capabilityRows[index] = { provider, error };
+			}
+		});
+		renderOperatorSummary(diagnostics);
+		renderCapabilityMatrix(capabilityRows, diagnostics.providers || []);
+		renderProvenance(diagnostics.configuration?.provenance || []);
+		setMessage(elements.operatorMessage, "Diagnostics are current", "ready");
+		setConnection("Connected", "ready");
+	} catch (error) {
+		handleError(error, elements.operatorMessage);
+	} finally {
+		elements.refreshOperator.disabled = false;
+	}
+}
+
+function renderOperatorSummary(diagnostics) {
+	const config = diagnostics.configuration || {};
+	const jobs = diagnostics.jobs;
+	const ready = (diagnostics.providers || []).filter(
+		(provider) => provider.status === "ready",
+	).length;
+	const totalProviders = (diagnostics.providers || []).length;
+	const items = [
+		["Bridge", diagnostics.bridge_version || "unknown"],
+		[
+			"Providers",
+			`${ready}/${totalProviders} ready`,
+		],
+		[
+			"Listener",
+			config.listener_port == null
+				? config.listener_scope || "unknown"
+				: `${config.listener_scope || "unknown"} · ${config.listener_port}`,
+		],
+		["Bridge auth", config.authentication_required ? "required" : "not configured"],
+		["Runtime queued", String(diagnostics.runtime?.global_queued ?? 0)],
+		["Active workers", jobs ? `${jobs.active_workers}/${jobs.max_running}` : "disabled"],
+		["Retained jobs", jobs ? String(jobs.total) : "disabled"],
+		["Job database", jobs ? formatBytes(jobs.database_bytes) : "disabled"],
+		["Artifact storage", diagnostics.artifact_storage_enabled ? "enabled" : "disabled"],
+		["Metrics", config.metrics_enabled ? "enabled" : "disabled"],
+	];
+	const nodes = items.map(([term, value]) => {
+		const item = create("div");
+		item.append(create("dt", "", term), create("dd", "", value));
+		return item;
+	});
+	elements.operatorSummary.replaceChildren(...nodes);
+}
+
+function renderCapabilityMatrix(rows, readiness) {
+	const health = new Map(readiness.map((item) => [item.provider, item]));
+	const rendered = rows.map(({ provider, capabilities, error }) => {
+		const row = document.createElement("tr");
+		const providerHealth = health.get(provider.name);
+		const status = providerHealth?.status || "unknown";
+		const values = error
+			? [
+					provider.name,
+					status,
+					"Unavailable",
+					"—",
+					"—",
+					"—",
+					"—",
+					error instanceof Error ? error.message : "Capability error",
+				]
+			: [
+					provider.name,
+					status,
+					capabilities.model || "provider default",
+					capabilities.generation ? "Yes" : "No",
+					capabilities.edits ? "Yes" : "No",
+					`${capabilities.count?.min ?? "?"}–${capabilities.count?.max ?? "?"}`,
+					joinValues(capabilities.output_formats),
+					capabilities.persistent_sessions
+						? capabilities.explicit_threads
+							? "Keys + threads"
+							: "Keys"
+						: "No",
+				];
+		for (const [index, value] of values.entries()) {
+			const cell = create("td", index === 1 ? "readiness" : "", String(value));
+			if (index === 1) cell.dataset.state = status;
+			row.append(cell);
+		}
+		return row;
+	});
+	if (rendered.length === 0) {
+		const row = document.createElement("tr");
+		const cell = create("td", "", "No providers are registered.");
+		cell.colSpan = 8;
+		row.append(cell);
+		rendered.push(row);
+	}
+	elements.capabilityTableBody.replaceChildren(...rendered);
+}
+
+function renderProvenance(provenance) {
+	const rows = provenance.map((origin) => {
+		const row = create("div", "provenance-row");
+		row.append(
+			create("span", "", origin.field),
+			create(
+				"span",
+				"provenance-source",
+				origin.key === origin.field
+					? origin.source
+					: `${origin.source} · ${origin.key}`,
+			),
+		);
+		return row;
+	});
+	elements.provenanceList.replaceChildren(
+		...(rows.length > 0
+			? rows
+			: [create("div", "provenance-row", "Provenance unavailable for this embedded host.")]),
+	);
+}
+
+function joinValues(values) {
+	return Array.isArray(values) && values.length > 0 ? values.join(", ") : "None";
+}
+
+async function inspectSession(event) {
+	event.preventDefault();
+	const key = elements.operatorSessionKey.value.trim();
+	const provider = elements.operatorSessionProvider.value;
+	if (!key) return;
+	setMessage(elements.sessionResult, "Looking up session");
+	try {
+		const session = await api.getSession(key, provider);
+		renderSession(session, provider);
+	} catch (error) {
+		handleError(error, elements.sessionResult);
+	}
+}
+
+function renderSession(session, provider) {
+	const details = document.createElement("dl");
+	for (const [term, value] of [
+		["Key", session.key],
+		["Thread", session.thread_id],
+		["Reused", session.reused ? "yes" : "no"],
+	]) {
+		details.append(create("dt", "", term), create("dd", "", value || "—"));
+	}
+	const remove = makeButton("Delete binding", "danger", async () => {
+		const confirmed = await confirmSessionDeletion(session.key);
+		if (!confirmed) return;
+		remove.disabled = true;
+		try {
+			await api.deleteSession(session.key, provider);
+			setMessage(elements.sessionResult, "Session binding deleted", "ready");
+		} catch (error) {
+			handleError(error, elements.sessionResult);
+		} finally {
+			remove.disabled = false;
+		}
+	});
+	elements.sessionResult.replaceChildren(details, remove);
+}
+
+function confirmSessionDeletion(key) {
+	elements.confirmMessage.textContent = `Delete the local binding “${key}”? The upstream Codex thread is not deleted.`;
+	elements.confirmDialog.showModal();
+	elements.cancelConfirmation.focus();
+	return new Promise((resolve) => {
+		elements.confirmDialog.addEventListener(
+			"close",
+			() => resolve(elements.confirmDialog.returnValue === "confirm"),
+			{ once: true },
+		);
+	});
 }
 
 function showSkeletons() {
@@ -656,6 +870,19 @@ function bindEvents() {
 		);
 	});
 	elements.connectionButton.addEventListener("click", showAuthentication);
+	elements.operatorButton.addEventListener("click", () => {
+		elements.operatorDialog.showModal();
+		elements.closeOperator.focus();
+		loadOperator();
+	});
+	elements.refreshOperator.addEventListener("click", loadOperator);
+	elements.closeOperator.addEventListener("click", () =>
+		elements.operatorDialog.close(),
+	);
+	elements.operatorDialog.addEventListener("click", (event) => {
+		if (event.target === elements.operatorDialog) elements.operatorDialog.close();
+	});
+	elements.sessionForm.addEventListener("submit", inspectSession);
 	elements.clearToken.addEventListener("click", () => {
 		api.setToken("");
 		elements.token.value = "";

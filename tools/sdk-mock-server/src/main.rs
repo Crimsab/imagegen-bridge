@@ -44,6 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(get_job).delete(cancel_job).patch(update_job),
         )
         .route("/v1/providers", get(providers))
+        .route("/v1/diagnostics", get(diagnostics))
         .route("/v1/providers/{provider}/capabilities", get(capabilities))
         .route("/v1/sessions/{key}", get(session).delete(delete_session))
         .route("/v1/artifacts/{id}", get(artifact))
@@ -65,6 +66,53 @@ async fn liveness() -> Json<Value> {
 
 async fn readiness() -> Json<Value> {
     Json(json!({"status": "ready", "providers": []}))
+}
+
+async fn diagnostics(headers: HeaderMap) -> Response {
+    if let Some(response) = authenticate(&headers) {
+        return response;
+    }
+    Json(json!({
+        "bridge_version": "0.1.0-test",
+        "configuration": {
+            "version": 1,
+            "default_provider": "codex-app-server",
+            "listener_scope": "loopback",
+            "authentication_required": true,
+            "metrics_enabled": false,
+            "jobs_enabled": true,
+            "max_connections": 32,
+            "max_body_bytes": 83_886_080,
+            "read_timeout_ms": 30000,
+            "provenance": [
+                {"field":"default_provider","source":"file","key":"default_provider"},
+                {"field":"server.jobs.enabled","source":"default","key":"server.jobs.enabled"}
+            ]
+        },
+        "artifact_storage_enabled": true,
+        "runtime": {"global_queued": 0, "providers_queued": {"codex-app-server": 0}},
+        "jobs": {
+            "total": 1,
+            "queued": 0,
+            "running": 0,
+            "succeeded": 1,
+            "failed": 0,
+            "cancelled": 0,
+            "interrupted": 0,
+            "hidden": 0,
+            "database_bytes": 40960,
+            "active_workers": 0,
+            "max_pending": 1000,
+            "max_running": 4,
+            "retention_secs": 604_800,
+            "max_retained": 10000
+        },
+        "providers": [
+            {"provider":"codex-app-server","status":"ready"},
+            {"provider":"codex-responses","status":"ready"}
+        ]
+    }))
+    .into_response()
 }
 
 async fn images(headers: HeaderMap, Json(request): Json<Value>) -> Response {
@@ -284,10 +332,22 @@ async fn capabilities(headers: HeaderMap, Path(provider): Path<String>) -> Respo
     if let Some(response) = authenticate(&headers) {
         return response;
     }
-    if provider != "codex-app-server" {
+    if !matches!(provider.as_str(), "codex-app-server" | "codex-responses") {
         return error(StatusCode::NOT_FOUND, "provider was not found");
     }
-    fixture_response(StatusCode::OK, CAPABILITIES_RESPONSE, "application/json")
+    let Ok(mut capabilities) = serde_json::from_str::<Value>(CAPABILITIES_RESPONSE) else {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "capability fixture is invalid",
+        );
+    };
+    capabilities["provider"] = Value::String(provider.clone());
+    capabilities["experimental"] = Value::Bool(provider == "codex-responses");
+    fixture_response(
+        StatusCode::OK,
+        &capabilities.to_string(),
+        "application/json",
+    )
 }
 
 async fn session(headers: HeaderMap, Path(key): Path<String>) -> Response {

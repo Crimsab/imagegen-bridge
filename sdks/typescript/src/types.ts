@@ -262,6 +262,63 @@ export interface ProviderPage {
   next_cursor?: string | null;
 }
 
+export interface ConfigurationOrigin {
+  field: string;
+  source: "default" | "file" | "environment" | "override";
+  key: string;
+}
+
+export interface ConfigurationDiagnostics {
+  version?: number | null;
+  default_provider?: string | null;
+  listener_scope: "loopback" | "remote" | "embedded" | "unknown";
+  listener_port?: number | null;
+  authentication_required: boolean;
+  metrics_enabled: boolean;
+  jobs_enabled: boolean;
+  max_connections: number;
+  max_body_bytes: number;
+  read_timeout_ms: number;
+  provenance: ConfigurationOrigin[];
+}
+
+export interface RuntimeDiagnostics {
+  global_queued: number;
+  providers_queued: Record<string, number>;
+}
+
+export interface JobManagerDiagnostics {
+  total: number;
+  queued: number;
+  running: number;
+  succeeded: number;
+  failed: number;
+  cancelled: number;
+  interrupted: number;
+  hidden: number;
+  database_bytes: number;
+  active_workers: number;
+  max_pending: number;
+  max_running: number;
+  retention_secs: number;
+  max_retained: number;
+}
+
+export interface ProviderReadiness {
+  provider: string;
+  status: "ready" | "not_ready";
+  error?: BridgeErrorData | null;
+}
+
+export interface OperatorDiagnostics {
+  bridge_version: string;
+  configuration: ConfigurationDiagnostics;
+  artifact_storage_enabled: boolean;
+  runtime: RuntimeDiagnostics;
+  jobs?: JobManagerDiagnostics | null;
+  providers: ProviderReadiness[];
+}
+
 export interface U8Range {
   min: number;
   max: number;

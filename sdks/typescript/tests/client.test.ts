@@ -66,6 +66,10 @@ describe("ImagegenBridgeClient", () => {
     expect(capabilities.persistent_sessions).toBeTrue();
     expect(capabilities.input_fidelities).toEqual(["high"]);
     expect(capabilities.actions).toEqual(["auto"]);
+    const diagnostics = await client.diagnostics();
+    expect(diagnostics.configuration.listener_scope).toBe("loopback");
+    expect(diagnostics.jobs?.total).toBe(1);
+    expect(diagnostics.providers[1]?.provider).toBe("codex-responses");
     expect((await client.session("sdk-fixture")).thread_id).toBe("thread_fixture_01");
     await client.deleteSession("sdk-fixture");
     const queued = await client.jobs.create(generateFixture);

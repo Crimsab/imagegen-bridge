@@ -474,8 +474,7 @@ async fn serve_command(
     let local = listener
         .local_addr()
         .map_err(|_| internal("could not inspect HTTP listener"))?;
-    let state =
-        ServerState::from_settings(application.runtime().clone(), &resolved.config.server).await?;
+    let state = ServerState::from_resolved(application.runtime().clone(), &resolved).await?;
     let jobs = state.jobs.clone();
     output.status(&format!("listening on http://{local}"))?;
     if resolved.config.server.jobs.enabled {

@@ -12,6 +12,7 @@ network clients. Version 1 evolves additively; breaking wire changes use `/v2`.
 | `GET` | `/metrics` | Opt-in Prometheus exposition | `200` when enabled |
 | `GET` | `/v1/providers` | Cursor-paginated provider inventory | `200` |
 | `GET` | `/v1/providers/{name}/capabilities` | Dynamic model capabilities | `200` |
+| `GET` | `/v1/diagnostics` | Authenticated redaction-safe operator state | `200` |
 | `POST` | `/v1/images` | Lossless normalized generation/edit request | `200` |
 | `POST` | `/v1/images/stream` | Bounded native SSE lifecycle | `200` |
 | `POST` | `/v1/images/generations` | OpenAI-familiar generation compatibility | `200` |
@@ -32,6 +33,15 @@ returns an `x-request-id` response header for every request.
 The SSE handler emits `started`, bounded provider `progress`/`partial_image`
 events when available, then `completed` or `error`, with heartbeat comments,
 backpressure, and disconnect cancellation.
+
+`GET /v1/diagnostics` returns only aggregate operational facts: bridge version,
+listener scope, whether bridge authentication is required, configuration field
+origins without values, bounded runtime queue depths, provider readiness, job
+status counts and configured retention/admission limits. It never returns
+credential values, prompts, account IDs, input data, artifact/database paths, or
+job/session identifiers. SQLite storage is reported only as an aggregate byte
+count. The route follows the same bridge bearer policy as other `/v1/**`
+endpoints.
 
 ## Durable jobs and history
 

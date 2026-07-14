@@ -30,6 +30,7 @@ pub fn openapi_document() -> Value {
             {"name":"artifacts","description":"Authenticated verified image delivery"},
             {"name":"compatibility","description":"OpenAI-familiar Images API"},
             {"name":"providers","description":"Provider discovery and capability negotiation"},
+            {"name":"diagnostics","description":"Authenticated redaction-safe operator state"},
             {"name":"sessions","description":"Persistent session lifecycle"},
             {"name":"observability","description":"Opt-in low-cardinality operational metrics"}
         ],
@@ -79,6 +80,24 @@ pub fn openapi_document() -> Value {
                     "responses": {
                         "200": json_response("Provider capabilities", json!({"$ref":"#/components/schemas/ProviderCapabilities"}), json!({"provider":"codex-app-server","model":"gpt-image-2","generation":true,"edits":true})),
                         "400": error_response("Provider is unavailable or invalid"),
+                        "401": error_response("Bridge authentication required")
+                    }
+                }
+            },
+            "/v1/diagnostics": {
+                "get": {
+                    "operationId": "getOperatorDiagnostics",
+                    "tags": ["diagnostics"],
+                    "security": [{"bridgeBearer": []}],
+                    "responses": {
+                        "200": json_response("Redaction-safe operator diagnostics", json!({"$ref":"#/components/schemas/OperatorDiagnostics"}), json!({
+                            "bridge_version":"0.1.0",
+                            "configuration":{"version":1,"default_provider":"codex-app-server","listener_scope":"loopback","listener_port":8787,"authentication_required":true,"metrics_enabled":false,"jobs_enabled":true,"max_connections":256,"max_body_bytes":83_886_080,"read_timeout_ms":30000,"provenance":[]},
+                            "artifact_storage_enabled":true,
+                            "runtime":{"global_queued":0,"providers_queued":{"codex-app-server":0}},
+                            "jobs":{"total":12,"queued":0,"running":1,"succeeded":10,"failed":1,"cancelled":0,"interrupted":0,"hidden":0,"database_bytes":40960,"active_workers":1,"max_pending":1000,"max_running":4,"retention_secs":604_800,"max_retained":10000},
+                            "providers":[{"provider":"codex-app-server","status":"ready"}]
+                        })),
                         "401": error_response("Bridge authentication required")
                     }
                 }
@@ -466,10 +485,82 @@ fn add_compatibility_schemas(schemas: &mut Map<String, Value>) {
             }
         }),
     );
+    schemas.insert(
+        "ProviderReadiness".to_owned(),
+        json!({
+            "type":"object","required":["provider","status"],"properties":{
+                "provider":{"type":"string"},
+                "status":{"enum":["ready","not_ready"]},
+                "error":{"$ref":"#/components/schemas/BridgeError"}
+            }
+        }),
+    );
     schemas.insert("ReadinessResponse".to_owned(), json!({
         "type":"object","additionalProperties":false,"required":["status","providers"],"properties":{
             "status":{"enum":["ready","not_ready"]},
-            "providers":{"type":"array","items":{"type":"object","required":["provider","status"],"properties":{"provider":{"type":"string"},"status":{"enum":["ready","not_ready"]},"error":{"$ref":"#/components/schemas/BridgeError"}}}}
+            "providers":{"type":"array","items":{"$ref":"#/components/schemas/ProviderReadiness"}}
+        }
+    }));
+    schemas.insert("OperatorDiagnostics".to_owned(), json!({
+        "type":"object","additionalProperties":false,
+        "required":["bridge_version","configuration","artifact_storage_enabled","runtime","providers"],
+        "properties":{
+            "bridge_version":{"type":"string"},
+            "configuration":{"$ref":"#/components/schemas/ConfigurationDiagnostics"},
+            "artifact_storage_enabled":{"type":"boolean"},
+            "runtime":{"$ref":"#/components/schemas/RuntimeDiagnostics"},
+            "jobs":{"$ref":"#/components/schemas/JobManagerDiagnostics"},
+            "providers":{"type":"array","items":{"$ref":"#/components/schemas/ProviderReadiness"}}
+        }
+    }));
+    schemas.insert("ConfigurationDiagnostics".to_owned(), json!({
+        "type":"object","additionalProperties":false,
+        "required":["listener_scope","authentication_required","metrics_enabled","jobs_enabled","max_connections","max_body_bytes","read_timeout_ms","provenance"],
+        "properties":{
+            "version":{"type":"integer","minimum":1},
+            "default_provider":{"type":"string"},
+            "listener_scope":{"enum":["loopback","remote","embedded","unknown"]},
+            "listener_port":{"type":"integer","minimum":0,"maximum":65535},
+            "authentication_required":{"type":"boolean"},
+            "metrics_enabled":{"type":"boolean"},
+            "jobs_enabled":{"type":"boolean"},
+            "max_connections":{"type":"integer","minimum":0},
+            "max_body_bytes":{"type":"integer","minimum":0},
+            "read_timeout_ms":{"type":"integer","minimum":0},
+            "provenance":{"type":"array","items":{"$ref":"#/components/schemas/ConfigurationOrigin"}}
+        }
+    }));
+    schemas.insert("ConfigurationOrigin".to_owned(), json!({
+        "type":"object","additionalProperties":false,"required":["field","source","key"],"properties":{
+            "field":{"type":"string"},
+            "source":{"enum":["default","file","environment","override"]},
+            "key":{"type":"string"}
+        }
+    }));
+    schemas.insert("RuntimeDiagnostics".to_owned(), json!({
+        "type":"object","additionalProperties":false,"required":["global_queued","providers_queued"],"properties":{
+            "global_queued":{"type":"integer","minimum":0},
+            "providers_queued":{"type":"object","additionalProperties":{"type":"integer","minimum":0}}
+        }
+    }));
+    schemas.insert("JobManagerDiagnostics".to_owned(), json!({
+        "type":"object","additionalProperties":false,
+        "required":["total","queued","running","succeeded","failed","cancelled","interrupted","hidden","database_bytes","active_workers","max_pending","max_running","retention_secs","max_retained"],
+        "properties":{
+            "total":{"type":"integer","minimum":0},
+            "queued":{"type":"integer","minimum":0},
+            "running":{"type":"integer","minimum":0},
+            "succeeded":{"type":"integer","minimum":0},
+            "failed":{"type":"integer","minimum":0},
+            "cancelled":{"type":"integer","minimum":0},
+            "interrupted":{"type":"integer","minimum":0},
+            "hidden":{"type":"integer","minimum":0},
+            "database_bytes":{"type":"integer","minimum":0},
+            "active_workers":{"type":"integer","minimum":0},
+            "max_pending":{"type":"integer","minimum":1},
+            "max_running":{"type":"integer","minimum":1},
+            "retention_secs":{"type":"integer","minimum":1},
+            "max_retained":{"type":"integer","minimum":1}
         }
     }));
     schemas.insert(

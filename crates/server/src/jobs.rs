@@ -8,6 +8,7 @@ use imagegen_bridge_core::{
     ResponseFormat,
 };
 use imagegen_bridge_runtime::{ExecutionContext, ImagegenRuntime, SqliteImageJobStore};
+use serde::Serialize;
 use tokio::sync::{Mutex, Notify, Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -21,6 +22,24 @@ pub struct JobManager {
     shutdown: CancellationToken,
     active: Mutex<BTreeMap<String, CancellationToken>>,
     active_changed: Notify,
+}
+
+/// Redaction-safe durable queue diagnostics for operators.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct JobManagerDiagnostics {
+    /// Current aggregate durable job state.
+    #[serde(flatten)]
+    pub statistics: imagegen_bridge_runtime::SqliteJobStatistics,
+    /// Active worker tasks tracked by this process.
+    pub active_workers: usize,
+    /// Maximum retained queued work accepted by admission.
+    pub max_pending: usize,
+    /// Maximum simultaneous durable workers.
+    pub max_running: usize,
+    /// Completed job retention window in seconds.
+    pub retention_secs: u64,
+    /// Maximum terminal rows retained after pruning.
+    pub max_retained: usize,
 }
 
 impl std::fmt::Debug for JobManager {
@@ -132,6 +151,18 @@ impl JobManager {
         self.store
             .update_history(id, update.favorite, update.deleted, unix_timestamp())
             .await
+    }
+
+    /// Returns aggregate queue and storage state without user content or paths.
+    pub async fn diagnostics(&self) -> Result<JobManagerDiagnostics, BridgeError> {
+        Ok(JobManagerDiagnostics {
+            statistics: self.store.statistics().await?,
+            active_workers: self.active.lock().await.len(),
+            max_pending: self.settings.max_pending,
+            max_running: self.settings.max_running,
+            retention_secs: self.settings.retention_secs,
+            max_retained: self.settings.max_retained,
+        })
     }
 
     /// Stops queued dispatch and waits a bounded interval for active state to settle.

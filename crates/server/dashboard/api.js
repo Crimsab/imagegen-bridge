@@ -31,6 +31,10 @@ export class BridgeApi {
 		return this.request("/v1/providers?limit=100");
 	}
 
+	async diagnostics() {
+		return this.request("/v1/diagnostics");
+	}
+
 	async capabilities(provider, model = "") {
 		const modelQuery = model ? `?model=${encodeURIComponent(model)}` : "";
 		return this.request(
@@ -60,6 +64,22 @@ export class BridgeApi {
 
 	async getJob(id) {
 		return this.request(`/v1/jobs/${encodeURIComponent(id)}`);
+	}
+
+	async getSession(key, provider = "") {
+		const query = provider
+			? `?provider=${encodeURIComponent(provider)}`
+			: "";
+		return this.request(`/v1/sessions/${encodeURIComponent(key)}${query}`);
+	}
+
+	async deleteSession(key, provider = "") {
+		const query = provider
+			? `?provider=${encodeURIComponent(provider)}`
+			: "";
+		return this.request(`/v1/sessions/${encodeURIComponent(key)}${query}`, {
+			method: "DELETE",
+		});
 	}
 
 	async updateJob(id, update) {

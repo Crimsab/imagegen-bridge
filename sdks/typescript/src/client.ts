@@ -10,6 +10,7 @@ import type {
   ImageResponse,
   JobListOptions,
   JsonValue,
+  OperatorDiagnostics,
   ProviderCapabilities,
   ProviderPage,
   RequestOptions,
@@ -218,6 +219,23 @@ export class ImagegenBridgeClient {
       throw new BridgeProtocolError("invalid provider capabilities");
     }
     return value as ProviderCapabilities;
+  }
+
+  async diagnostics(options: { signal?: AbortSignal } = {}): Promise<OperatorDiagnostics> {
+    const value = await this.#json("GET", "v1/diagnostics", {
+      options: signalOptions(options.signal),
+    });
+    const diagnostics = record(value);
+    if (
+      !diagnostics ||
+      typeof diagnostics.bridge_version !== "string" ||
+      !record(diagnostics.configuration) ||
+      !record(diagnostics.runtime) ||
+      !Array.isArray(diagnostics.providers)
+    ) {
+      throw new BridgeProtocolError("invalid operator diagnostics");
+    }
+    return value as OperatorDiagnostics;
   }
 
   async session(

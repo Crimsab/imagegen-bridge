@@ -257,6 +257,7 @@ Important routes:
 | `GET /v1/artifacts/{id}/thumbnail` | Bounded PNG thumbnail for galleries |
 | `GET /v1/providers` | Provider inventory |
 | `GET /v1/providers/{provider}/capabilities` | Model-aware capabilities |
+| `GET /v1/diagnostics` | Authenticated redaction-safe operator state |
 | `GET /v1/sessions/{key}` | Persistent session lookup |
 | `GET /health/live` | Process liveness |
 | `GET /health/ready` | Provider readiness |

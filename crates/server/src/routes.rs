@@ -14,7 +14,7 @@ use axum::{
     routing::{get, post},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use imagegen_bridge_config::ServerSettings;
+use imagegen_bridge_config::{ResolvedConfig, ServerSettings};
 use imagegen_bridge_core::{
     BridgeError, ErrorCode, ImageJob, ImageJobPage, ImageJobStatus, ImageJobUpdate, ImageRequest,
     ProviderDescriptor, ProviderEvent,
@@ -34,6 +34,7 @@ use crate::{
     auth::{AuthPolicy, AuthScope, authorize},
     compat::{edit_compatible, generate_compatible},
     dashboard_router,
+    diagnostics::ConfigurationDiagnostics,
     metrics::ServerMetrics,
     openapi::openapi_document,
     streaming::stream_image,
@@ -53,6 +54,7 @@ pub struct ServerState {
     pub jobs: Option<Arc<JobManager>>,
     pub(crate) auth: Option<AuthPolicy>,
     pub(crate) metrics: Option<Arc<ServerMetrics>>,
+    pub(crate) diagnostics: Arc<ConfigurationDiagnostics>,
 }
 
 impl std::fmt::Debug for ServerState {
@@ -63,6 +65,7 @@ impl std::fmt::Debug for ServerState {
             .field("jobs", &self.jobs.is_some())
             .field("auth", &self.auth.is_some())
             .field("metrics", &self.metrics.is_some())
+            .field("diagnostics", &self.diagnostics)
             .finish()
     }
 }
@@ -106,7 +109,18 @@ impl ServerState {
             jobs,
             auth,
             metrics,
+            diagnostics: Arc::new(ConfigurationDiagnostics::from_settings(settings)),
         })
+    }
+
+    /// Builds server state with redaction-safe effective configuration provenance.
+    pub async fn from_resolved(
+        runtime: Arc<ImagegenRuntime>,
+        resolved: &ResolvedConfig,
+    ) -> Result<Self, BridgeError> {
+        let mut state = Self::from_settings(runtime, &resolved.config.server).await?;
+        state.diagnostics = Arc::new(ConfigurationDiagnostics::from_resolved(resolved));
+        Ok(state)
     }
 
     /// Builds state with an explicit secret for embedded/tests use.
@@ -122,6 +136,7 @@ impl ServerState {
         token: Option<SecretString>,
         metrics_enabled: bool,
     ) -> Self {
+        let authentication_required = token.is_some();
         let auth = token.and_then(|token| {
             use secrecy::ExposeSecret as _;
             AuthPolicy::new(token.expose_secret().to_owned())
@@ -132,6 +147,10 @@ impl ServerState {
             jobs: None,
             auth,
             metrics,
+            diagnostics: Arc::new(ConfigurationDiagnostics::embedded(
+                authentication_required,
+                metrics_enabled,
+            )),
         }
     }
 }
@@ -154,6 +173,7 @@ pub fn router(state: ServerState, settings: &ServerSettings) -> Router {
         .route("/v1/images/generations", post(generate_compatible))
         .route("/v1/images/edits", post(edit_compatible))
         .route("/v1/providers", get(list_providers))
+        .route("/v1/diagnostics", get(operator_diagnostics))
         .route(
             "/v1/providers/{provider}/capabilities",
             get(provider_capabilities),
@@ -283,6 +303,49 @@ async fn readiness(State(state): State<ServerState>) -> Response {
         }),
     )
         .into_response()
+}
+
+#[derive(Serialize)]
+struct RuntimeDiagnostics {
+    global_queued: usize,
+    providers_queued: std::collections::BTreeMap<String, usize>,
+}
+
+#[derive(Serialize)]
+struct OperatorDiagnostics {
+    bridge_version: &'static str,
+    configuration: ConfigurationDiagnostics,
+    artifact_storage_enabled: bool,
+    runtime: RuntimeDiagnostics,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    jobs: Option<crate::JobManagerDiagnostics>,
+    providers: Vec<imagegen_bridge_runtime::ProviderReadiness>,
+}
+
+async fn operator_diagnostics(
+    State(state): State<ServerState>,
+    Extension(request_id): Extension<RequestId>,
+) -> Result<Json<OperatorDiagnostics>, ApiError> {
+    let queue = state.runtime.queue_snapshot();
+    let jobs = match state.jobs.as_ref() {
+        Some(jobs) => Some(
+            jobs.diagnostics()
+                .await
+                .map_err(|error| ApiError::from_bridge(error, request_id))?,
+        ),
+        None => None,
+    };
+    Ok(Json(OperatorDiagnostics {
+        bridge_version: env!("CARGO_PKG_VERSION"),
+        configuration: state.diagnostics.as_ref().clone(),
+        artifact_storage_enabled: state.runtime.has_artifact_store(),
+        runtime: RuntimeDiagnostics {
+            global_queued: queue.global_queued,
+            providers_queued: queue.providers_queued,
+        },
+        jobs,
+        providers: state.runtime.registry().readiness().await,
+    }))
 }
 
 async fn prometheus_metrics(State(state): State<ServerState>) -> Response {
@@ -1352,6 +1415,38 @@ mod tests {
             .unwrap();
         assert_eq!(disabled.status(), StatusCode::NOT_FOUND);
         jobs.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn diagnostics_are_authenticated_aggregate_and_redaction_safe() {
+        let directory = tempfile::tempdir().unwrap();
+        let (app, jobs) = test_job_router(directory.path()).await;
+        let response = app
+            .oneshot(Request::get("/v1/diagnostics").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["bridge_version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(value["configuration"]["listener_scope"], "loopback");
+        assert_eq!(value["configuration"]["jobs_enabled"], true);
+        assert_eq!(value["artifact_storage_enabled"], true);
+        assert_eq!(value["jobs"]["total"], 0);
+        assert_eq!(value["jobs"]["active_workers"], 0);
+        assert!(value["jobs"]["database_bytes"].as_u64().unwrap() > 0);
+        assert_eq!(value["providers"][0]["provider"], "ready");
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(!body.contains(directory.path().to_str().unwrap()));
+        assert!(!body.contains("prompt"));
+        assert!(!body.contains("token"));
+        jobs.shutdown().await;
+
+        let protected = test_router(Some("bridge-secret"))
+            .oneshot(Request::get("/v1/diagnostics").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(protected.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

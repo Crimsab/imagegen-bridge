@@ -52,6 +52,10 @@ def test_sync_client_matches_shared_http_contract(
         assert capabilities.persistent_sessions
         assert capabilities.input_fidelities == ("high",)
         assert capabilities.actions == ("auto",)
+        diagnostics = client.diagnostics()
+        assert diagnostics.configuration.listener_scope == "loopback"
+        assert diagnostics.jobs is not None and diagnostics.jobs.total == 1
+        assert diagnostics.providers[1].provider == "codex-responses"
         assert client.session("sdk-fixture").thread_id == "thread_fixture_01"
         client.delete_session("sdk-fixture")
         queued = client.jobs.create(request)
@@ -100,6 +104,7 @@ def test_async_client_matches_shared_http_contract(
             ]
             assert (await client.providers()).items[1].experimental
             assert (await client.capabilities("codex-app-server")).generation
+            assert (await client.diagnostics()).artifact_storage_enabled
             assert (await client.session("sdk-fixture")).reused
             await client.delete_session("sdk-fixture")
             queued = await client.jobs.create(request)

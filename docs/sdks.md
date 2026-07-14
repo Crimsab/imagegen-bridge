@@ -48,6 +48,7 @@ async with AsyncImagegenBridgeClient(
     response = await client.images.generate(request)
     job = await client.jobs.create(request)
     completed = await client.jobs.get(job.id)
+    diagnostics = await client.diagnostics()
 ```
 
 Use `client.images.stream(request)` for typed lifecycle, progress, partial-image,
@@ -57,6 +58,8 @@ details, and request ID.
 `client.jobs` provides typed create/get/list/cancel operations for durable
 artifact-backed work plus `update` for favorite/delete/restore state; job pages
 never duplicate inline request image bodies.
+`diagnostics()` returns typed aggregate health, safe configuration provenance,
+queue/storage limits, and provider readiness without user content or host paths.
 
 ## TypeScript
 
@@ -78,6 +81,7 @@ const response = await client.images.generate({
 });
 const job = await client.jobs.create({ operation: "generate", prompt: "a paper fox" });
 const completed = await client.jobs.get(job.id);
+const diagnostics = await client.diagnostics();
 ```
 
 Pass `{ signal }` or `{ timeoutMs }` per request. Streaming is an

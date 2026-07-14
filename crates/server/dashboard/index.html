@@ -21,6 +21,7 @@
       </div>
       <div class="header-actions">
         <output id="connection-status" class="connection-status" aria-live="polite">Connecting</output>
+        <button id="operator-button" class="button secondary" type="button">Operations</button>
         <button id="connection-button" class="button secondary" type="button">Connection</button>
         <button id="refresh-button" class="button secondary" type="button">Refresh</button>
       </div>
@@ -325,6 +326,89 @@
         </div>
         <div id="job-detail"></div>
       </div>
+    </dialog>
+
+    <dialog id="operator-dialog" class="dialog operator-dialog" aria-labelledby="operator-title">
+      <div class="dialog-body operator-body">
+        <div class="dialog-heading">
+          <div>
+            <p class="kicker">Local operator view</p>
+            <h2 id="operator-title">Bridge operations</h2>
+          </div>
+          <div class="dialog-actions">
+            <button id="refresh-operator-button" class="button secondary compact" type="button">Refresh</button>
+            <button id="close-operator-button" class="button secondary compact" type="button">Close</button>
+          </div>
+        </div>
+        <div id="operator-message" class="library-message" role="status" aria-live="polite"></div>
+        <section aria-labelledby="health-title">
+          <h3 id="health-title">Runtime and storage</h3>
+          <dl id="operator-summary" class="operator-summary"></dl>
+        </section>
+        <section aria-labelledby="capabilities-title">
+          <div class="operator-section-heading">
+            <div>
+              <h3 id="capabilities-title">Provider capability matrix</h3>
+              <p class="quiet">Current default capabilities reported by each configured provider.</p>
+            </div>
+          </div>
+          <div class="table-scroll" tabindex="0" aria-label="Scrollable provider capability matrix">
+            <table class="capability-table">
+              <thead>
+                <tr>
+                  <th scope="col">Provider</th>
+                  <th scope="col">Health</th>
+                  <th scope="col">Model</th>
+                  <th scope="col">Generate</th>
+                  <th scope="col">Edit</th>
+                  <th scope="col">Count</th>
+                  <th scope="col">Formats</th>
+                  <th scope="col">Sessions</th>
+                </tr>
+              </thead>
+              <tbody id="capability-table-body"></tbody>
+            </table>
+          </div>
+        </section>
+        <section class="operator-columns" aria-label="Configuration and sessions">
+          <div class="operator-panel">
+            <h3>Configuration provenance</h3>
+            <p class="quiet">Only field names and source layers are shown. Effective values and paths are omitted.</p>
+            <div id="provenance-list" class="provenance-list"></div>
+          </div>
+          <div class="operator-panel">
+            <h3>Persistent session</h3>
+            <form id="session-lookup-form" class="session-form">
+              <label class="field">
+                <span>Session key</span>
+                <input id="operator-session-key" type="text" required maxlength="512" autocomplete="off">
+              </label>
+              <label class="field">
+                <span>Provider</span>
+                <select id="operator-session-provider">
+                  <option value="">Default</option>
+                </select>
+              </label>
+              <button class="button secondary" type="submit">Inspect session</button>
+            </form>
+            <div id="session-result" class="session-result" aria-live="polite"></div>
+          </div>
+        </section>
+      </div>
+    </dialog>
+
+    <dialog id="confirm-dialog" class="dialog confirmation-dialog" aria-labelledby="confirm-title">
+      <form method="dialog" class="dialog-body">
+        <div>
+          <p class="kicker">Confirmation required</p>
+          <h2 id="confirm-title">Delete persistent session?</h2>
+        </div>
+        <p id="confirm-message">This removes the local session binding. It does not delete an upstream Codex thread.</p>
+        <div class="dialog-actions">
+          <button id="cancel-confirmation-button" class="button secondary" value="cancel" type="submit">Cancel</button>
+          <button id="confirm-action-button" class="button danger" value="confirm" type="submit">Delete session</button>
+        </div>
+      </form>
     </dialog>
 
     <script type="module" src="/dashboard/app.js"></script>

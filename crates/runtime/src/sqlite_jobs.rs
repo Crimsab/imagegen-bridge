@@ -21,6 +21,29 @@ pub struct SqliteJobSchemaStatus {
     pub current_version: u32,
 }
 
+/// Redaction-safe aggregate state for the durable job database.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct SqliteJobStatistics {
+    /// Total retained job rows, including soft-deleted history.
+    pub total: u64,
+    /// Jobs accepted but not yet claimed.
+    pub queued: u64,
+    /// Jobs currently recorded as running.
+    pub running: u64,
+    /// Successfully completed jobs.
+    pub succeeded: u64,
+    /// Jobs completed with a structured failure.
+    pub failed: u64,
+    /// Jobs cancelled before or during execution.
+    pub cancelled: u64,
+    /// Jobs conservatively marked after uncertain shutdown completion.
+    pub interrupted: u64,
+    /// Soft-deleted history rows.
+    pub hidden: u64,
+    /// Main `SQLite` database pages multiplied by page size, excluding WAL files.
+    pub database_bytes: u64,
+}
+
 /// Inspects job storage without creating or migrating it.
 pub async fn inspect_sqlite_job_schema(path: &Path) -> Result<SqliteJobSchemaStatus, BridgeError> {
     let metadata = match tokio::fs::symlink_metadata(path).await {
@@ -182,6 +205,61 @@ impl SqliteImageJobStore {
                 BridgeError::new(ErrorCode::Overloaded, "durable job queue is full").retryable(true)
             })?;
         self.get(lookup_id.as_str()).await
+    }
+
+    /// Returns bounded aggregate counters without request, prompt, or path data.
+    pub async fn statistics(&self) -> Result<SqliteJobStatistics, BridgeError> {
+        self.connection
+            .call(|connection| {
+                let counts: (i64, i64, i64, i64, i64, i64, i64, i64) = connection.query_row(
+                    "SELECT COUNT(*),
+                            COALESCE(SUM(status='queued'),0),
+                            COALESCE(SUM(status='running'),0),
+                            COALESCE(SUM(status='succeeded'),0),
+                            COALESCE(SUM(status='failed'),0),
+                            COALESCE(SUM(status='cancelled'),0),
+                            COALESCE(SUM(status='interrupted'),0),
+                            COALESCE(SUM(deleted_at IS NOT NULL),0)
+                     FROM image_jobs",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                            row.get(5)?,
+                            row.get(6)?,
+                            row.get(7)?,
+                        ))
+                    },
+                )?;
+                let page_count: i64 =
+                    connection.query_row("PRAGMA page_count", [], |row| row.get(0))?;
+                let page_size: i64 =
+                    connection.query_row("PRAGMA page_size", [], |row| row.get(0))?;
+                Ok::<_, tokio_rusqlite::rusqlite::Error>((counts, page_count, page_size))
+            })
+            .await
+            .map_err(|_| job_error("could not inspect job database statistics"))
+            .and_then(|(counts, page_count, page_size)| {
+                let convert = |value: i64| {
+                    u64::try_from(value)
+                        .map_err(|_| job_error("job database returned invalid statistics"))
+                };
+                Ok(SqliteJobStatistics {
+                    total: convert(counts.0)?,
+                    queued: convert(counts.1)?,
+                    running: convert(counts.2)?,
+                    succeeded: convert(counts.3)?,
+                    failed: convert(counts.4)?,
+                    cancelled: convert(counts.5)?,
+                    interrupted: convert(counts.6)?,
+                    hidden: convert(counts.7)?,
+                    database_bytes: convert(page_count)?.saturating_mul(convert(page_size)?),
+                })
+            })
     }
 
     /// Marks previously running jobs interrupted without retrying paid work.
@@ -759,6 +837,14 @@ mod tests {
         assert_eq!(job.summary.status, ImageJobStatus::Cancelled);
         assert!(job.cancel_requested);
         assert!(!store.claim("019f-job", 12).await.unwrap());
+
+        let statistics = store.statistics().await.unwrap();
+        assert_eq!(statistics.total, 1);
+        assert_eq!(statistics.cancelled, 1);
+        assert_eq!(statistics.queued, 0);
+        assert_eq!(statistics.running, 0);
+        assert_eq!(statistics.hidden, 0);
+        assert!(statistics.database_bytes > 0);
     }
 
     #[tokio::test]

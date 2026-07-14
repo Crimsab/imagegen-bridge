@@ -19,6 +19,7 @@ from ._types import (
     ImageRequest,
     ImageResponse,
     JSONValue,
+    OperatorDiagnostics,
     ProviderCapabilities,
     ProviderPage,
     SessionMetadata,
@@ -368,6 +369,13 @@ class AsyncImagegenBridgeClient:
         except (KeyError, TypeError, ValueError) as error:
             raise BridgeProtocolError("bridge returned invalid provider capabilities") from error
 
+    async def diagnostics(self) -> OperatorDiagnostics:
+        response = await self._send("GET", "/v1/diagnostics")
+        try:
+            return OperatorDiagnostics.from_dict(_decode_json(response))
+        except (KeyError, TypeError, ValueError) as error:
+            raise BridgeProtocolError("bridge returned invalid operator diagnostics") from error
+
     async def session(self, key: str, *, provider: str | None = None) -> SessionMetadata:
         response = await self._send(
             "GET", f"/v1/sessions/{quote(key, safe='')}", params={"provider": provider}
@@ -531,6 +539,13 @@ class ImagegenBridgeClient:
             return ProviderCapabilities.from_dict(_decode_json(response))
         except (KeyError, TypeError, ValueError) as error:
             raise BridgeProtocolError("bridge returned invalid provider capabilities") from error
+
+    def diagnostics(self) -> OperatorDiagnostics:
+        response = self._send("GET", "/v1/diagnostics")
+        try:
+            return OperatorDiagnostics.from_dict(_decode_json(response))
+        except (KeyError, TypeError, ValueError) as error:
+            raise BridgeProtocolError("bridge returned invalid operator diagnostics") from error
 
     def session(self, key: str, *, provider: str | None = None) -> SessionMetadata:
         response = self._send(

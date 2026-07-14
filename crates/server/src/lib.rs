@@ -3,6 +3,7 @@
 mod auth;
 mod compat;
 mod dashboard;
+mod diagnostics;
 mod error;
 mod jobs;
 mod metrics;
