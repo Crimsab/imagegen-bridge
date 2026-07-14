@@ -4,8 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    BridgeError, ErrorCode, ImageAction, ImageOperation, ImageRequest, ImageSource,
-    NegativePromptMode, OutputFormat, ResponseFormat, SessionMode,
+    ArtifactCollisionPolicy, BridgeError, ErrorCode, ImageAction, ImageOperation, ImageRequest,
+    ImageSource, NegativePromptMode, OutputFormat, ResponseFormat, SessionMode,
 };
 
 /// Configurable limits applied before provider negotiation.
@@ -267,13 +267,65 @@ pub fn validation_issues(request: &ImageRequest, limits: RequestLimits) -> Vec<V
         );
     }
 
-    if request.output.response_format != ResponseFormat::Artifact
-        && request.output.filename_prefix.is_some()
-    {
+    let artifact_delivery = matches!(
+        request.output.response_format,
+        ResponseFormat::Artifact | ResponseFormat::Url
+    );
+    if !artifact_delivery && request.output.filename_prefix.is_some() {
         issue(
             "output.filename_prefix",
             "incompatible",
             "filename_prefix requires artifact response format",
+        );
+    }
+    if !artifact_delivery
+        && (request.output.directory.is_some() || request.output.filename.is_some())
+    {
+        issue(
+            "output",
+            "incompatible",
+            "artifact path controls require artifact or url response format",
+        );
+    }
+    if request.output.filename.is_some() && request.output.filename_prefix.is_some() {
+        issue(
+            "output.filename",
+            "incompatible",
+            "filename cannot be combined with filename_prefix",
+        );
+    }
+    if request.output.filename.is_some() && request.parameters.n != 1 {
+        issue(
+            "output.filename",
+            "incompatible",
+            "an exact filename requires a single output",
+        );
+    }
+    if request.output.filename.is_none()
+        && request.output.collision != ArtifactCollisionPolicy::Error
+    {
+        issue(
+            "output.collision",
+            "incompatible",
+            "collision policy applies only to an explicit filename",
+        );
+    }
+    if let Some(directory) = request.output.directory.as_deref()
+        && !valid_portable_directory(directory)
+    {
+        issue(
+            "output.directory",
+            "invalid",
+            "output directory must be a safe portable relative path",
+        );
+    }
+    if let Some(filename) = request.output.filename.as_deref()
+        && !valid_output_filename(filename, request.parameters.output_format)
+    {
+        issue(
+            "output.filename",
+            "invalid",
+            "output filename must be a safe component with a matching image extension",
         );
     }
 
@@ -347,6 +399,44 @@ pub fn validation_issues(request: &ImageRequest, limits: RequestLimits) -> Vec<V
             .then(left.code.cmp(&right.code))
     });
     issues
+}
+
+fn valid_portable_directory(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 512
+        && value.split('/').all(|component| {
+            !component.is_empty()
+                && component != "."
+                && component != ".."
+                && component.len() <= 128
+                && !component.starts_with('.')
+                && component
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        })
+}
+
+fn valid_output_filename(value: &str, format: OutputFormat) -> bool {
+    if value.is_empty()
+        || value.len() > 160
+        || value.starts_with('.')
+        || value.contains(['/', '\\'])
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return false;
+    }
+    let Some((_, extension)) = value.rsplit_once('.') else {
+        return true;
+    };
+    match format {
+        OutputFormat::Png => extension.eq_ignore_ascii_case("png"),
+        OutputFormat::Jpeg => {
+            extension.eq_ignore_ascii_case("jpg") || extension.eq_ignore_ascii_case("jpeg")
+        }
+        OutputFormat::Webp => extension.eq_ignore_ascii_case("webp"),
+    }
 }
 
 fn validate_identifier(
@@ -525,5 +615,38 @@ mod tests {
                 .any(|item| item.field == "parameters.input_fidelity")
         );
         assert!(issues.iter().any(|item| item.field == "parameters.action"));
+    }
+
+    #[test]
+    fn artifact_paths_are_portable_and_match_the_image_format() {
+        let mut request = ImageRequest::generate("test");
+        request.output.response_format = ResponseFormat::Artifact;
+        request.output.directory = Some("../outside".to_owned());
+        request.output.filename = Some("portrait.jpg".to_owned());
+        let issues = validation_issues(&request, RequestLimits::default());
+        assert!(issues.iter().any(|item| item.field == "output.directory"));
+        assert!(issues.iter().any(|item| item.field == "output.filename"));
+    }
+
+    #[test]
+    fn exact_filename_requires_one_image_and_controls_collision() {
+        let mut request = ImageRequest::generate("test");
+        request.output.response_format = ResponseFormat::Artifact;
+        request.output.filename = Some("portrait.png".to_owned());
+        request.parameters.n = 2;
+        assert!(
+            validation_issues(&request, RequestLimits::default())
+                .iter()
+                .any(|item| item.field == "output.filename" && item.code == "incompatible")
+        );
+
+        request.output.filename = None;
+        request.parameters.n = 1;
+        request.output.collision = ArtifactCollisionPolicy::Suffix;
+        assert!(
+            validation_issues(&request, RequestLimits::default())
+                .iter()
+                .any(|item| item.field == "output.collision")
+        );
     }
 }

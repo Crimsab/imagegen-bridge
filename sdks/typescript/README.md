@@ -12,6 +12,12 @@ const result = await bridge.images.generate({
   operation: "generate",
   prompt: "a paper fox",
   routing: { provider: "codex-app-server" },
+  output: {
+    response_format: "artifact",
+    directory: "illustrations",
+    filename: "fox.png",
+    collision: "suffix",
+  },
 });
 ```
 

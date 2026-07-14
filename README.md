@@ -83,9 +83,16 @@ Generate an artifact using the default app-server provider:
 ```sh
 imagegen-bridge generate \
   "A red paper fox on a charcoal background" \
-  --response-format artifact \
-  --filename-prefix paper-fox
+  --output portraits/paper-fox.png \
+  --collision suffix
 ```
+
+`--output` selects an exact filename for a single image and automatically uses
+artifact delivery. `--output-dir batches/july` keeps generated UUID filenames
+inside that directory. Paths are constrained below the configured artifact
+root; existing exact names fail atomically unless `--collision suffix` is
+selected. The native API and SDKs expose the same controls as
+`output.directory`, `output.filename`, and `output.collision`.
 
 Edit an image or add visual references:
 

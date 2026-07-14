@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use imagegen_bridge_artifacts::{
-    ArtifactStore, ImageLimits, ImageMetadata, RemoteImageFetcher, inspect_image,
+    ArtifactPublication, ArtifactStore, ImageLimits, ImageMetadata, RemoteImageFetcher,
+    inspect_image,
 };
 use imagegen_bridge_core::{
     BridgeError, CompatibilityMode, ErrorCode, GeneratedImage, GenerationParameters, ImagePayload,
@@ -293,10 +294,15 @@ impl OutputMaterializer {
                     .artifact_store
                     .as_ref()
                     .ok_or_else(|| configuration_error("artifact output is not configured"))?;
-                let stored = store.publish(
+                let stored = store.publish_with_options(
                     &image.bytes,
                     output.filename_prefix.as_deref(),
                     Some(image.metadata.format),
+                    ArtifactPublication {
+                        directory: output.directory.as_deref(),
+                        filename: output.filename.as_deref(),
+                        collision: output.collision,
+                    },
                 )?;
                 if output.response_format == ResponseFormat::Artifact {
                     ImagePayload::Artifact {
@@ -361,6 +367,8 @@ mod tests {
     use imagegen_bridge_core::{GenerationParameters, ImageFailure, Timings};
 
     use super::*;
+
+    const ONE_PIXEL_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
     fn image(index: u8) -> GeneratedImage {
         GeneratedImage {
@@ -434,5 +442,39 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn artifact_projection_honors_per_request_placement() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(ArtifactStore::new(root.path(), ImageLimits::default()).unwrap());
+        let materializer = OutputMaterializer::new(MaterializationConfig {
+            artifact_store: Some(store),
+            ..MaterializationConfig::default()
+        })
+        .unwrap();
+        let bytes = STANDARD.decode(ONE_PIXEL_PNG).unwrap();
+        let metadata = inspect_image(&bytes, ImageLimits::default()).unwrap();
+        let projected = materializer
+            .project(
+                VerifiedImage {
+                    index: 0,
+                    bytes,
+                    metadata,
+                    generation_ms: Some(1),
+                },
+                &OutputOptions {
+                    response_format: ResponseFormat::Artifact,
+                    directory: Some("portraits".to_owned()),
+                    filename: Some("woman.png".to_owned()),
+                    ..OutputOptions::default()
+                },
+            )
+            .unwrap();
+        assert!(matches!(
+            projected.payload,
+            ImagePayload::Artifact { name: Some(ref name), .. } if name == "portraits/woman.png"
+        ));
+        assert!(root.path().join("portraits/woman.png").is_file());
     }
 }

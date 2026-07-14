@@ -29,6 +29,21 @@
       }
     },
     "schemas": {
+      "ArtifactCollisionPolicy": {
+        "description": "Atomic behavior when an explicit artifact filename already exists.",
+        "oneOf": [
+          {
+            "const": "error",
+            "description": "Wire value `error`.",
+            "type": "string"
+          },
+          {
+            "const": "suffix",
+            "description": "Wire value `suffix`.",
+            "type": "string"
+          }
+        ]
+      },
       "AspectRatio": {
         "examples": [
           "1:1",
@@ -963,6 +978,7 @@
           "output": {
             "$ref": "#/components/schemas/OutputOptions",
             "default": {
+              "collision": "error",
               "response_format": "b64_json"
             },
             "description": "Output delivery and artifact controls."
@@ -1349,6 +1365,25 @@
         "additionalProperties": false,
         "description": "Output delivery controls.",
         "properties": {
+          "collision": {
+            "$ref": "#/components/schemas/ArtifactCollisionPolicy",
+            "default": "error",
+            "description": "Atomic behavior if an explicit filename already exists."
+          },
+          "directory": {
+            "description": "Optional portable relative directory below the configured artifact root.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "filename": {
+            "description": "Optional exact single-image filename, with or without a matching extension.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "filename_prefix": {
             "description": "Optional logical artifact filename prefix.",
             "type": [

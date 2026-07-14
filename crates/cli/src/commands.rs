@@ -108,7 +108,7 @@ async fn generate(
         request.operation = ImageOperation::Generate {
             reference_images: file_inputs(args.references),
         };
-        apply_image_args(&mut request, args.image);
+        apply_image_args(&mut request, args.image, &resolved.config.artifacts.root)?;
         request
     };
     execute_or_preview(request, args.dry_run, resolved, output).await
@@ -144,7 +144,7 @@ async fn edit(
             mask: args.mask.map(file_input).map(Box::new),
             reference_images: file_inputs(args.references),
         };
-        apply_image_args(&mut request, args.image);
+        apply_image_args(&mut request, args.image, &resolved.config.artifacts.root)?;
         request
     };
     execute_or_preview(request, args.dry_run, resolved, output).await
@@ -196,7 +196,11 @@ async fn execute_or_preview(
     }
 }
 
-fn apply_image_args(request: &mut ImageRequest, args: ImageArgs) {
+fn apply_image_args(
+    request: &mut ImageRequest,
+    args: ImageArgs,
+    artifact_root: &Path,
+) -> Result<(), BridgeError> {
     request.negative_prompt = args.negative_prompt;
     request.routing.provider = args.provider;
     request.routing.model = args.model;
@@ -235,6 +239,15 @@ fn apply_image_args(request: &mut ImageRequest, args: ImageArgs) {
         request.output.response_format = value;
     }
     request.output.filename_prefix = args.filename_prefix;
+    apply_output_location(
+        request,
+        artifact_root,
+        args.output_path.as_deref(),
+        args.output_dir.as_deref(),
+    )?;
+    if let Some(collision) = args.collision {
+        request.output.collision = collision;
+    }
     if let Some(value) = args.compatibility {
         request.policies.compatibility = value;
     }
@@ -258,6 +271,96 @@ fn apply_image_args(request: &mut ImageRequest, args: ImageArgs) {
     request.idempotency_key = args.idempotency_key;
     request.timeout_ms = args.timeout_ms;
     request.user = args.user;
+    Ok(())
+}
+
+fn apply_output_location(
+    request: &mut ImageRequest,
+    artifact_root: &Path,
+    output_path: Option<&Path>,
+    output_dir: Option<&Path>,
+) -> Result<(), BridgeError> {
+    let Some(requested) = output_path.or(output_dir) else {
+        return Ok(());
+    };
+    let root = lexical_absolute(artifact_root)?;
+    let requested = if requested.is_absolute() {
+        lexical_absolute(requested)?
+    } else {
+        lexical_absolute(&root.join(requested))?
+    };
+    let relative = requested
+        .strip_prefix(&root)
+        .map_err(|_| invalid("output path must remain below the configured artifact root"))?;
+    if output_path.is_some() {
+        let filename = relative
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| invalid("output path requires a portable UTF-8 filename"))?;
+        request.output.filename = Some(filename.to_owned());
+        request.output.directory = portable_parent(relative.parent())?;
+    } else {
+        request.output.directory = portable_path(relative)?;
+    }
+    if request.output.response_format == imagegen_bridge::core::ResponseFormat::B64Json {
+        request.output.response_format = imagegen_bridge::core::ResponseFormat::Artifact;
+    }
+    Ok(())
+}
+
+fn lexical_absolute(path: &Path) -> Result<PathBuf, BridgeError> {
+    let combined = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        let current =
+            std::env::current_dir().map_err(|_| invalid("could not resolve output path"))?;
+        current.join(path)
+    };
+    let mut output = PathBuf::new();
+    for component in combined.components() {
+        match component {
+            std::path::Component::Normal(value) => output.push(value),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !output.pop() {
+                    return Err(invalid("output path escapes its configured root"));
+                }
+            }
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+                output.push(component.as_os_str());
+            }
+        }
+    }
+    Ok(output)
+}
+
+fn portable_parent(path: Option<&Path>) -> Result<Option<String>, BridgeError> {
+    path.map(portable_relative).transpose()
+}
+
+fn portable_path(path: &Path) -> Result<Option<String>, BridgeError> {
+    if path.as_os_str().is_empty() {
+        Ok(None)
+    } else {
+        portable_relative(path).map(Some)
+    }
+}
+
+fn portable_relative(path: &Path) -> Result<String, BridgeError> {
+    let components = path
+        .components()
+        .map(|component| match component {
+            std::path::Component::Normal(value) => value
+                .to_str()
+                .map(str::to_owned)
+                .ok_or_else(|| invalid("output path must be portable UTF-8")),
+            _ => Err(invalid("output path must be relative and portable")),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if components.is_empty() {
+        return Err(invalid("output directory is empty"));
+    }
+    Ok(components.join("/"))
 }
 
 fn file_inputs(paths: Vec<PathBuf>) -> Vec<ImageInput> {

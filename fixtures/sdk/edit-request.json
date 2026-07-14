@@ -37,7 +37,10 @@
   },
   "output": {
     "response_format": "b64_json",
-    "filename_prefix": null
+    "filename_prefix": null,
+    "directory": null,
+    "filename": null,
+    "collision": "error"
   },
   "policies": {
     "compatibility": "strict",

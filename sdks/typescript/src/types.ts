@@ -14,6 +14,7 @@ export type InputFidelity = "low" | "high";
 export type ImageAction = "auto" | "generate" | "edit";
 export type Resolution = "1k" | "2k" | "4k";
 export type ResponseFormat = "b64_json" | "url" | "artifact" | "metadata";
+export type ArtifactCollisionPolicy = "error" | "suffix";
 export type CompatibilityMode = "strict" | "normalize" | "best_effort";
 export type NegativePromptMode = "auto" | "native" | "merge" | "reject";
 export type RevisedPromptPolicy = "include" | "omit" | "require";
@@ -61,6 +62,9 @@ export interface SessionOptions {
 export interface OutputOptions {
   response_format?: ResponseFormat;
   filename_prefix?: string | null;
+  directory?: string | null;
+  filename?: string | null;
+  collision?: ArtifactCollisionPolicy;
 }
 
 export interface RequestPolicies {

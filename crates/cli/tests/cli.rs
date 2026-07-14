@@ -117,6 +117,46 @@ fn generation_accepts_a_natural_positional_prompt() {
 }
 
 #[test]
+fn generation_maps_output_paths_below_the_artifact_root() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let output = cargo_bin_cmd!("imagegen-bridge")
+        .current_dir(directory.path())
+        .args([
+            "generate",
+            "red-haired woman",
+            "--output",
+            "portraits/woman.png",
+            "--collision",
+            "suffix",
+            "--dry-run",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output).expect("JSON output");
+    assert_eq!(value["output"]["response_format"], "artifact");
+    assert_eq!(value["output"]["directory"], "portraits");
+    assert_eq!(value["output"]["filename"], "woman.png");
+    assert_eq!(value["output"]["collision"], "suffix");
+}
+
+#[test]
+fn generation_rejects_output_paths_outside_the_artifact_root() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    cargo_bin_cmd!("imagegen-bridge")
+        .current_dir(directory.path())
+        .args(["generate", "test", "--output", "/outside.png", "--dry-run"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "output path must remain below the configured artifact root",
+        ));
+}
+
+#[test]
 fn request_file_is_lossless_and_exclusive() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let request = directory.path().join("request.json");

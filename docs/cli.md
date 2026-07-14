@@ -63,8 +63,8 @@ imagegen-bridge generate \
   "A red origami fox on warm gray" \
   --quality auto \
   --size auto \
-  --response-format artifact \
-  --filename-prefix fox
+  --output illustrations/fox.png \
+  --collision suffix
 
 imagegen-bridge edit \
   "Change the jacket to blue" \
@@ -82,10 +82,22 @@ imagegen-bridge generate "a red-haired woman" --dry-run --json
 or parameter flags. `--dry-run` validates and prints the normalized request
 without opening artifact/session storage or starting Codex.
 
+`-o, --output FILE` selects an exact filename and is valid only when `n=1`.
+`--output-dir DIR` retains generated UUID filenames inside a per-call directory.
+Relative paths are interpreted below `artifacts.root`; an absolute CLI path is
+accepted only when it resolves lexically below that root. Directories and
+filenames use a portable ASCII contract and cannot contain hidden components,
+backslashes, traversal, or an extension that disagrees with `--format`.
+Publication never overwrites: `--collision error` is the default, while
+`--collision suffix` atomically selects `name-2.png`, `name-3.png`, and so on.
+Supplying either path option changes the default `b64_json` response to
+`artifact`; an explicitly incompatible response mode fails validation.
+
 Advanced flags include `--negative-prompt`, `--negative-prompt-mode`,
 `--revised-prompt`, `--aspect-ratio`, `--resolution`, `--compression`,
 `--background`, `--moderation`, `--partial-images`, `--failure-policy`,
-`--input-fidelity`, `--action`, `--compatibility`,
+`--input-fidelity`, `--action`, `--compatibility`, `--output`, `--output-dir`,
+`--collision`,
 `--session`, `--session-key`, `--thread-id`, `--idempotency-key`, and
 `--timeout-ms`. Availability is provider/model-specific; inspect it before
 requesting strict parameters:

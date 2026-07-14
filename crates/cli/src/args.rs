@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 use imagegen_bridge::core::{
-    AspectRatio, Background, CompatibilityMode, ImageAction, ImageSize, InputFidelity, Moderation,
-    MultiImageFailurePolicy, NegativePromptMode, OutputFormat, Quality, Resolution, ResponseFormat,
-    RevisedPromptPolicy, SessionMode,
+    ArtifactCollisionPolicy, AspectRatio, Background, CompatibilityMode, ImageAction, ImageSize,
+    InputFidelity, Moderation, MultiImageFailurePolicy, NegativePromptMode, OutputFormat, Quality,
+    Resolution, ResponseFormat, RevisedPromptPolicy, SessionMode,
 };
 
 #[derive(Debug, Parser)]
@@ -265,6 +265,20 @@ pub(crate) struct ImageArgs {
     /// Safe logical artifact filename prefix.
     #[arg(long)]
     pub filename_prefix: Option<String>,
+    /// Exact single-image path below the configured artifact root.
+    #[arg(
+        long = "output",
+        short = 'o',
+        value_name = "FILE",
+        conflicts_with = "output_dir"
+    )]
+    pub output_path: Option<PathBuf>,
+    /// Per-call directory below the configured artifact root.
+    #[arg(long, value_name = "DIR", conflicts_with = "output_path")]
+    pub output_dir: Option<PathBuf>,
+    /// Atomic behavior when an explicit output filename already exists.
+    #[arg(long, value_parser = parse_collision)]
+    pub collision: Option<ArtifactCollisionPolicy>,
     /// Provider compatibility behavior.
     #[arg(long, value_parser = parse_compatibility)]
     pub compatibility: Option<CompatibilityMode>,
@@ -314,6 +328,9 @@ impl ImageArgs {
             && self.action.is_none()
             && self.response_format.is_none()
             && self.filename_prefix.is_none()
+            && self.output_path.is_none()
+            && self.output_dir.is_none()
+            && self.collision.is_none()
             && self.compatibility.is_none()
             && self.negative_prompt_mode.is_none()
             && self.revised_prompt.is_none()
@@ -474,6 +491,7 @@ enum_parser!(parse_moderation, Moderation);
 enum_parser!(parse_failure_policy, MultiImageFailurePolicy);
 enum_parser!(parse_input_fidelity, InputFidelity);
 enum_parser!(parse_image_action, ImageAction);
+enum_parser!(parse_collision, ArtifactCollisionPolicy);
 enum_parser!(parse_response_format, ResponseFormat);
 enum_parser!(parse_compatibility, CompatibilityMode);
 enum_parser!(parse_negative_prompt_mode, NegativePromptMode);

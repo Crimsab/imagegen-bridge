@@ -15,6 +15,7 @@ InputFidelity: TypeAlias = Literal["low", "high"]
 ImageAction: TypeAlias = Literal["auto", "generate", "edit"]
 Resolution: TypeAlias = Literal["1k", "2k", "4k"]
 ResponseFormat: TypeAlias = Literal["b64_json", "url", "artifact", "metadata"]
+ArtifactCollisionPolicy: TypeAlias = Literal["error", "suffix"]
 CompatibilityMode: TypeAlias = Literal["strict", "normalize", "best_effort"]
 NegativePromptMode: TypeAlias = Literal["auto", "native", "merge", "reject"]
 RevisedPromptPolicy: TypeAlias = Literal["include", "omit", "require"]
@@ -125,6 +126,9 @@ class SessionOptions:
 class OutputOptions:
     response_format: ResponseFormat = "b64_json"
     filename_prefix: str | None = None
+    directory: str | None = None
+    filename: str | None = None
+    collision: ArtifactCollisionPolicy = "error"
 
 
 @dataclass(frozen=True, slots=True)

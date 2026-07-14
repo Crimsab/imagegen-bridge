@@ -32,6 +32,15 @@ or `best_effort`. Results retain the requested `index` and optional
 the `partial_output_failure` warning. If every output fails, the request still
 returns an error rather than an empty success.
 
+Artifact and URL delivery accept portable `output.directory` and
+`output.filename` controls below the server's configured artifact root. An
+exact filename requires `parameters.n=1`; its extension may be omitted or must
+match `parameters.output_format`. Publication is atomic and never overwrites.
+`output.collision` defaults to `error` and may be `suffix` to allocate a
+deterministic `-2`, `-3`, … name. The suffix policy is valid only with an exact
+filename. Filesystem paths are never accepted by the HTTP contract and absolute
+server paths are never returned to clients.
+
 `parameters.input_fidelity` is optional and accepts `low` or `high` only when
 the selected model advertises it. `parameters.action` is `auto`, `generate`, or
 `edit`; intrinsic operation conflicts fail before provider work. Provider

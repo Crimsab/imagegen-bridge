@@ -148,6 +148,20 @@ impl Default for ResponseFormat {
 }
 
 string_enum! {
+    /// Atomic behavior when an explicit artifact filename already exists.
+    pub enum ArtifactCollisionPolicy {
+        Error => "error",
+        Suffix => "suffix",
+    }
+}
+
+impl Default for ArtifactCollisionPolicy {
+    fn default() -> Self {
+        Self::Error
+    }
+}
+
+string_enum! {
     /// Compatibility policy used during provider negotiation.
     pub enum CompatibilityMode {
         Strict => "strict",

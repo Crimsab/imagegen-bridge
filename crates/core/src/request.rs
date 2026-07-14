@@ -6,9 +6,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, de};
 
 use crate::{
-    AspectRatio, Background, CompatibilityMode, ImageAction, ImageSize, InputFidelity, Moderation,
-    MultiImageFailurePolicy, NegativePromptMode, OutputFormat, Quality, Resolution, ResponseFormat,
-    RevisedPromptPolicy, SessionMode,
+    ArtifactCollisionPolicy, AspectRatio, Background, CompatibilityMode, ImageAction, ImageSize,
+    InputFidelity, Moderation, MultiImageFailurePolicy, NegativePromptMode, OutputFormat, Quality,
+    Resolution, ResponseFormat, RevisedPromptPolicy, SessionMode,
 };
 
 const COMMON_REQUEST_FIELDS: &[&str] = &[
@@ -477,6 +477,14 @@ pub struct OutputOptions {
     /// Optional logical artifact filename prefix.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub filename_prefix: Option<String>,
+    /// Optional portable relative directory below the configured artifact root.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub directory: Option<String>,
+    /// Optional exact single-image filename, with or without a matching extension.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+    /// Atomic behavior if an explicit filename already exists.
+    pub collision: ArtifactCollisionPolicy,
 }
 
 /// Explicit fallback and visibility controls.

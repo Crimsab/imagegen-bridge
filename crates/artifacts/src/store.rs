@@ -7,7 +7,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use imagegen_bridge_core::{BridgeError, ErrorCode, OutputFormat};
+use imagegen_bridge_core::{ArtifactCollisionPolicy, BridgeError, ErrorCode, OutputFormat};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
@@ -29,6 +29,17 @@ pub struct StoredArtifact {
     pub path: PathBuf,
     /// Verified image metadata.
     pub metadata: ImageMetadata,
+}
+
+/// Per-request artifact placement below the configured owned root.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ArtifactPublication<'a> {
+    /// Portable relative directory, or the root when absent.
+    pub directory: Option<&'a str>,
+    /// Exact single-image filename, or a generated UUID name when absent.
+    pub filename: Option<&'a str>,
+    /// Behavior when the explicit filename exists.
+    pub collision: ArtifactCollisionPolicy,
 }
 
 /// Publishes verified images beneath one owned output root.
@@ -144,6 +155,22 @@ impl ArtifactStore {
         filename_prefix: Option<&str>,
         expected_format: Option<OutputFormat>,
     ) -> Result<StoredArtifact, BridgeError> {
+        self.publish_with_options(
+            bytes,
+            filename_prefix,
+            expected_format,
+            ArtifactPublication::default(),
+        )
+    }
+
+    /// Verifies and atomically publishes one image at a constrained relative location.
+    pub fn publish_with_options(
+        &self,
+        bytes: &[u8],
+        filename_prefix: Option<&str>,
+        expected_format: Option<OutputFormat>,
+        publication: ArtifactPublication<'_>,
+    ) -> Result<StoredArtifact, BridgeError> {
         let metadata = inspect_image(bytes, self.limits).map_err(|error| BridgeError {
             code: ErrorCode::Artifact,
             ..error
@@ -154,26 +181,38 @@ impl ArtifactStore {
             ));
         }
 
-        let prefix = sanitize_prefix(filename_prefix.unwrap_or("image"));
         let id = Uuid::now_v7().to_string();
-        let name = format!("{prefix}-{id}.{}", extension(metadata.format));
-        let destination = self.root.join(&name);
-        let mut temporary = NamedTempFile::new_in(&self.root).map_err(|error| {
-            artifact_error(format!("could not create temporary artifact: {error}"))
-        })?;
-        temporary
-            .write_all(bytes)
-            .and_then(|()| temporary.as_file().sync_all())
-            .map_err(|error| artifact_error(format!("could not write artifact: {error}")))?;
-        temporary.persist_noclobber(&destination).map_err(|error| {
-            artifact_error(format!(
-                "could not publish artifact without overwrite: {error}"
-            ))
-        })?;
-        if let Err(error) = sync_directory(&self.root) {
+        let (directory, portable_directory) = self.publication_directory(publication.directory)?;
+        if let Some(filename) = publication.filename
+            && !safe_filename(filename, metadata.format)
+        {
+            return Err(artifact_error(
+                "output filename must be a safe component with a matching image extension",
+            ));
+        }
+        let requested_name = publication.filename.map_or_else(
+            || {
+                let prefix = sanitize_prefix(filename_prefix.unwrap_or("image"));
+                format!("{prefix}-{id}.{}", extension(metadata.format))
+            },
+            |filename| filename_with_extension(filename, metadata.format),
+        );
+        let (destination, filename) = publish_noclobber(
+            &directory,
+            &requested_name,
+            bytes,
+            publication.collision,
+            publication.filename.is_some(),
+        )?;
+        if let Err(error) = sync_directory(&directory) {
             let _ = fs::remove_file(&destination);
             return Err(error);
         }
+
+        let name = portable_directory.map_or_else(
+            || filename.clone(),
+            |directory| format!("{directory}/{filename}"),
+        );
 
         let record = OwnershipRecord {
             version: 1,
@@ -194,6 +233,44 @@ impl ArtifactStore {
             path: destination,
             metadata,
         })
+    }
+
+    fn publication_directory(
+        &self,
+        relative: Option<&str>,
+    ) -> Result<(PathBuf, Option<String>), BridgeError> {
+        let Some(relative) = relative else {
+            return Ok((self.root.clone(), None));
+        };
+        if !safe_relative(relative) {
+            return Err(artifact_error(
+                "output directory is not a safe relative path",
+            ));
+        }
+        let mut directory = self.root.clone();
+        for component in relative.split('/') {
+            directory.push(component);
+            match fs::symlink_metadata(&directory) {
+                Ok(metadata) if metadata.file_type().is_dir() => {}
+                Ok(_) => {
+                    return Err(artifact_error(
+                        "output directory component must not be a file or symlink",
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    fs::create_dir(&directory).map_err(|_| {
+                        artifact_error("could not create output directory component")
+                    })?;
+                }
+                Err(_) => return Err(artifact_error("could not inspect output directory")),
+            }
+        }
+        let canonical = fs::canonicalize(&directory)
+            .map_err(|_| artifact_error("could not open output directory"))?;
+        if !canonical.starts_with(&self.root) || canonical == self.ownership_root {
+            return Err(artifact_error("output directory escapes the artifact root"));
+        }
+        Ok((canonical, Some(relative.to_owned())))
     }
 
     /// Returns the private artifact root for trusted runtime code.
@@ -295,7 +372,7 @@ impl ArtifactStore {
         if record.version != 1
             || marker_name != format!("{}.json", record.id)
             || Uuid::parse_str(&record.id).is_err()
-            || !safe_component(&record.name)
+            || !safe_relative(&record.name)
             || record.sha256.len() != 64
             || !record.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
         {
@@ -330,14 +407,104 @@ impl ArtifactStore {
     }
 }
 
-fn safe_component(value: &str) -> bool {
+fn safe_relative(value: &str) -> bool {
     !value.is_empty()
-        && value.len() <= 160
-        && Path::new(value).components().count() == 1
-        && !matches!(value, "." | "..")
-        && value
+        && value.len() <= 512
+        && value.split('/').all(|component| {
+            !component.is_empty()
+                && component != "."
+                && component != ".."
+                && component.len() <= 160
+                && !component.starts_with('.')
+                && component
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        })
+}
+
+fn safe_filename(value: &str, format: OutputFormat) -> bool {
+    if value.is_empty()
+        || value.len() > 160
+        || value.starts_with('.')
+        || value.contains(['/', '\\'])
+        || !value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return false;
+    }
+    let Some((_, extension)) = value.rsplit_once('.') else {
+        return true;
+    };
+    match format {
+        OutputFormat::Png => extension.eq_ignore_ascii_case("png"),
+        OutputFormat::Jpeg => {
+            extension.eq_ignore_ascii_case("jpg") || extension.eq_ignore_ascii_case("jpeg")
+        }
+        OutputFormat::Webp => extension.eq_ignore_ascii_case("webp"),
+    }
+}
+
+fn filename_with_extension(filename: &str, format: OutputFormat) -> String {
+    if Path::new(filename).extension().is_some() {
+        filename.to_owned()
+    } else {
+        format!("{filename}.{}", extension(format))
+    }
+}
+
+fn publish_noclobber(
+    directory: &Path,
+    requested_name: &str,
+    bytes: &[u8],
+    collision: ArtifactCollisionPolicy,
+    explicit_filename: bool,
+) -> Result<(PathBuf, String), BridgeError> {
+    let attempts = if explicit_filename && collision == ArtifactCollisionPolicy::Suffix {
+        10_000
+    } else {
+        1
+    };
+    for attempt in 0..attempts {
+        let name = if attempt == 0 {
+            requested_name.to_owned()
+        } else {
+            suffixed_filename(requested_name, attempt + 1)
+        };
+        let destination = directory.join(&name);
+        let mut temporary = NamedTempFile::new_in(directory)
+            .map_err(|_| artifact_error("could not create temporary artifact"))?;
+        temporary
+            .write_all(bytes)
+            .and_then(|()| temporary.as_file().sync_all())
+            .map_err(|_| artifact_error("could not write artifact"))?;
+        match temporary.persist_noclobber(&destination) {
+            Ok(_) => return Ok((destination, name)),
+            Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(_) => {
+                return Err(artifact_error(
+                    "could not publish artifact without overwrite",
+                ));
+            }
+        }
+    }
+    Err(artifact_error(
+        "artifact collision suffix limit was reached",
+    ))
+}
+
+fn suffixed_filename(filename: &str, suffix: usize) -> String {
+    let path = Path::new(filename);
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("image");
+    path.extension()
+        .and_then(|value| value.to_str())
+        .map_or_else(
+            || format!("{stem}-{suffix}"),
+            |extension| format!("{stem}-{suffix}.{extension}"),
+        )
 }
 
 fn unix_timestamp(time: SystemTime) -> Result<u64, BridgeError> {
@@ -503,5 +670,107 @@ mod tests {
         assert_eq!(report.scanned, 2);
         assert_eq!(report.skipped, 2);
         assert!(report.scan_limit_reached);
+    }
+
+    #[test]
+    fn publishes_nested_exact_names_and_cleans_them_up() {
+        let root = tempfile::tempdir().unwrap();
+        let store = ArtifactStore::new(root.path(), ImageLimits::default()).unwrap();
+        let bytes = test_png(2, 2);
+        let owned = store
+            .publish_with_options(
+                &bytes,
+                None,
+                Some(OutputFormat::Png),
+                ArtifactPublication {
+                    directory: Some("portraits/people"),
+                    filename: Some("alice"),
+                    collision: ArtifactCollisionPolicy::Error,
+                },
+            )
+            .unwrap();
+        assert_eq!(owned.name, "portraits/people/alice.png");
+        assert_eq!(fs::read(&owned.path).unwrap(), bytes);
+
+        let report = store
+            .cleanup(
+                RetentionPolicy {
+                    max_age: Duration::ZERO,
+                    ..RetentionPolicy::default()
+                },
+                SystemTime::now() + Duration::from_secs(1),
+            )
+            .unwrap();
+        assert_eq!(report.deleted, 1);
+        assert!(!owned.path.exists());
+    }
+
+    #[test]
+    fn explicit_collision_can_error_or_select_a_suffix() {
+        let root = tempfile::tempdir().unwrap();
+        let store = ArtifactStore::new(root.path(), ImageLimits::default()).unwrap();
+        let bytes = test_png(2, 2);
+        let exact = ArtifactPublication {
+            filename: Some("portrait.png"),
+            ..ArtifactPublication::default()
+        };
+        store
+            .publish_with_options(&bytes, None, Some(OutputFormat::Png), exact)
+            .unwrap();
+        assert!(
+            store
+                .publish_with_options(&bytes, None, Some(OutputFormat::Png), exact)
+                .is_err()
+        );
+        let suffixed = store
+            .publish_with_options(
+                &bytes,
+                None,
+                Some(OutputFormat::Png),
+                ArtifactPublication {
+                    collision: ArtifactCollisionPolicy::Suffix,
+                    ..exact
+                },
+            )
+            .unwrap();
+        assert_eq!(suffixed.name, "portrait-2.png");
+    }
+
+    #[test]
+    fn direct_store_calls_reject_filename_traversal_and_symlink_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let store = ArtifactStore::new(root.path(), ImageLimits::default()).unwrap();
+        let bytes = test_png(2, 2);
+        assert!(
+            store
+                .publish_with_options(
+                    &bytes,
+                    None,
+                    Some(OutputFormat::Png),
+                    ArtifactPublication {
+                        filename: Some("../escape.png"),
+                        ..ArtifactPublication::default()
+                    },
+                )
+                .is_err()
+        );
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(outside.path(), root.path().join("linked")).unwrap();
+            assert!(
+                store
+                    .publish_with_options(
+                        &bytes,
+                        None,
+                        Some(OutputFormat::Png),
+                        ArtifactPublication {
+                            directory: Some("linked"),
+                            ..ArtifactPublication::default()
+                        },
+                    )
+                    .is_err()
+            );
+        }
     }
 }
