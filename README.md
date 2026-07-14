@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="crates/server/dashboard/icon.png" alt="Imagegen Bridge logo" width="144">
+  <img src="https://github.com/Crimsab/imagegen-bridge/raw/refs/heads/main/crates/server/dashboard/icon.png" alt="Imagegen Bridge logo" width="144">
 
 # Imagegen Bridge
 
@@ -13,13 +13,13 @@
 
 </div>
 
-<!-- Hero artwork slot: add docs/assets/hero.webp here when the final artwork is ready. -->
+![Imagegen Bridge connects Codex OAuth to a CLI, API, dashboard, and typed SDKs](https://github.com/Crimsab/imagegen-bridge/raw/refs/heads/main/docs/assets/hero.png)
 
 Imagegen Bridge turns an existing Codex OAuth login into a command-line tool,
 local HTTP service, embedded dashboard, and typed Rust, Python, and TypeScript
 clients. Codex-backed usage does not require an `OPENAI_API_KEY`.
 
-### Choose a Codex transport
+## Choose a Codex transport
 
 | Transport | Status | Best for | Main constraint |
 | --- | --- | --- | --- |
