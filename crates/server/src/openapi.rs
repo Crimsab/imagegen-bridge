@@ -47,8 +47,8 @@ pub fn openapi_document() -> Value {
                     "operationId": "getReadiness",
                     "tags": ["health"],
                     "responses": {
-                        "200": readiness_response("Cached provider readiness is fresh and ready"),
-                        "503": readiness_response("Cached provider readiness is unavailable, stale, or not ready")
+                        "200": readiness_response("Cached provider readiness is fresh and ready", "ready"),
+                        "503": readiness_response("Cached provider readiness is unavailable, stale, or not ready", "not_ready")
                     }
                 }
             },
@@ -418,11 +418,11 @@ fn error_response_component() -> Value {
     )
 }
 
-fn readiness_response(description: &str) -> Value {
+fn readiness_response(description: &str, status: &str) -> Value {
     json_response(
         description,
         json!({"$ref":"#/components/schemas/ReadinessResponse"}),
-        json!({"status":"ready"}),
+        json!({"status":status}),
     )
 }
 

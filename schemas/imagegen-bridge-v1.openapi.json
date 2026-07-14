@@ -2369,15 +2369,6 @@
       "ReadinessResponse": {
         "additionalProperties": false,
         "properties": {
-          "events": {
-            "$ref": "#/components/schemas/OperatorEventHistory"
-          },
-          "providers": {
-            "items": {
-              "$ref": "#/components/schemas/ProviderReadiness"
-            },
-            "type": "array"
-          },
           "status": {
             "enum": [
               "ready",
@@ -2386,8 +2377,7 @@
           }
         },
         "required": [
-          "status",
-          "providers"
+          "status"
         ],
         "type": "object"
       },
@@ -2883,12 +2873,6 @@
             "content": {
               "application/json": {
                 "example": {
-                  "providers": [
-                    {
-                      "provider": "codex-app-server",
-                      "status": "ready"
-                    }
-                  ],
                   "status": "ready"
                 },
                 "schema": {
@@ -2896,26 +2880,20 @@
                 }
               }
             },
-            "description": "Providers are ready"
+            "description": "Cached provider readiness is fresh and ready"
           },
           "503": {
             "content": {
               "application/json": {
                 "example": {
-                  "providers": [
-                    {
-                      "provider": "codex-app-server",
-                      "status": "ready"
-                    }
-                  ],
-                  "status": "ready"
+                  "status": "not_ready"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ReadinessResponse"
                 }
               }
             },
-            "description": "One or more providers are not ready"
+            "description": "Cached provider readiness is unavailable, stale, or not ready"
           }
         },
         "tags": [
