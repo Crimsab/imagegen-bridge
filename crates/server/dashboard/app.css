@@ -294,6 +294,48 @@
 		overflow-wrap: anywhere;
 	}
 
+	.provider-note {
+		align-items: center;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.22rem;
+		inline-size: 100%;
+		position: relative;
+	}
+
+	.capability-hint {
+		border-block-end: 1px dotted currentColor;
+		border-radius: 0.15rem;
+		cursor: help;
+		line-height: 1.35;
+	}
+
+	.capability-hint:focus-visible {
+		outline-width: 2px;
+	}
+
+	.capability-separator {
+		user-select: none;
+	}
+
+	.capability-tooltip {
+		background: var(--text);
+		border: 1px solid color-mix(in oklab, var(--text) 80%, var(--canvas));
+		border-radius: var(--radius-small);
+		box-shadow: var(--shadow);
+		color: var(--canvas);
+		font-family: var(--font-sans);
+		font-size: 0.78rem;
+		font-weight: 500;
+		inset-block-start: calc(100% + 0.45rem);
+		inset-inline: 0;
+		line-height: 1.45;
+		max-inline-size: 24rem;
+		padding: 0.65rem 0.75rem;
+		position: absolute;
+		z-index: 20;
+	}
+
 	.section-heading h2,
 	.dialog-heading h2 {
 		font-size: clamp(1.25rem, 2vw, 1.65rem);

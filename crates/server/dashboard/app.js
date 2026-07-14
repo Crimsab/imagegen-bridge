@@ -102,6 +102,65 @@ function makeButton(label, className, action) {
 	return button;
 }
 
+function capabilityHint(label, explanation, tooltip) {
+	const hint = create("span", "capability-hint", label);
+	hint.tabIndex = 0;
+	hint.setAttribute("aria-label", `${label}. ${explanation}`);
+	const show = () => {
+		tooltip.textContent = explanation;
+		tooltip.hidden = false;
+	};
+	const hide = () => {
+		tooltip.hidden = true;
+	};
+	hint.addEventListener("mouseenter", show);
+	hint.addEventListener("mouseleave", hide);
+	hint.addEventListener("focus", show);
+	hint.addEventListener("blur", hide);
+	hint.addEventListener("keydown", (event) => {
+		if (event.key === "Escape") hide();
+	});
+	return hint;
+}
+
+function renderProviderNote(capabilities, selectedProvider) {
+	const isDefault = !selectedProvider;
+	const providerLabel = `${capabilities.provider}${isDefault ? " (default)" : ""}`;
+	const modelLabel = capabilities.model || "provider default";
+	const batchingLabel = formatBatching(capabilities);
+	const native = capabilities.batching?.native_count?.max ?? 1;
+	const parallel = capabilities.batching?.max_parallel_outputs ?? 1;
+	const tooltip = create("span", "capability-tooltip");
+	tooltip.id = "provider-capability-tooltip";
+	tooltip.setAttribute("role", "tooltip");
+	tooltip.hidden = true;
+
+	elements.providerNote.replaceChildren(
+		capabilityHint(
+			providerLabel,
+			isDefault
+				? `${capabilities.provider} is the configured default provider. Change default_provider in the bridge configuration, or choose another provider in this form.`
+				: `${capabilities.provider} is explicitly selected for this request. Choose Default or another registered provider to change it.`,
+			tooltip,
+		),
+		create("span", "capability-separator", "·"),
+		capabilityHint(
+			modelLabel,
+			`${modelLabel} is the effective image model reported by this provider. A supported model can be entered under Advanced controls, Model.`,
+			tooltip,
+		),
+		create("span", "capability-separator", "·"),
+		capabilityHint(
+			batchingLabel,
+			capabilities.batching?.mode === "fan_out"
+				? `Fan-out splits a multi-image request into upstream calls. This route returns up to ${native} image${native === 1 ? "" : "s"} per call and permits up to ${parallel} calls at once. Batch execution can force sequential or bounded-parallel processing.`
+				: "This provider returns the requested image batch in one native upstream call.",
+			tooltip,
+		),
+		tooltip,
+	);
+}
+
 function setConnection(label, status) {
 	elements.connectionStatus.textContent = label;
 	elements.connectionStatus.dataset.state = status;
@@ -171,10 +230,7 @@ async function loadCapabilities() {
 			elements.model.value.trim(),
 		);
 		applyCapabilities(elements.form, capabilities);
-		const model = capabilities.model ? ` · ${capabilities.model}` : "";
-		const batching = formatBatching(capabilities);
-		const defaultLabel = selectedProvider ? "" : " (default)";
-		elements.providerNote.textContent = `${capabilities.provider}${defaultLabel}${model} · ${batching}`;
+		renderProviderNote(capabilities, selectedProvider);
 	} catch (error) {
 		handleError(error, elements.formMessage);
 	}
