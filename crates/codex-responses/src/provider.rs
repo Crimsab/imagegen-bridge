@@ -764,6 +764,7 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use std::{
+        io::ErrorKind,
         path::PathBuf,
         sync::atomic::{AtomicUsize, Ordering},
         time::Duration,
@@ -921,11 +922,10 @@ mod tests {
                         request.extend_from_slice(&buffer[..read]);
                     }
                     tokio::time::sleep(delay).await;
-                    if failed_accept == Some(call_index) {
+                    let write_result = if failed_accept == Some(call_index) {
                         connection
                             .write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
                             .await
-                            .unwrap();
                     } else {
                         let events = format!(
                             "data: {{\"type\":\"response.output_item.done\",\"item\":{{\"type\":\"image_generation_call\",\"result\":\"{ONE_PIXEL_PNG}\",\"revised_prompt\":\"parallel fixture\"}}}}\n\ndata: {{\"type\":\"response.completed\",\"response\":{{\"usage\":{{\"total_tokens\":5}}}}}}\n\ndata: [DONE]\n\n"
@@ -934,10 +934,23 @@ mod tests {
                             "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                             events.len()
                         );
-                        connection.write_all(headers.as_bytes()).await.unwrap();
-                        connection.write_all(events.as_bytes()).await.unwrap();
-                    }
+                        match connection.write_all(headers.as_bytes()).await {
+                            Ok(()) => connection.write_all(events.as_bytes()).await,
+                            Err(error) => Err(error),
+                        }
+                    };
                     active.fetch_sub(1, Ordering::AcqRel);
+                    if let Err(error) = write_result {
+                        assert!(
+                            matches!(
+                                error.kind(),
+                                ErrorKind::BrokenPipe
+                                    | ErrorKind::ConnectionAborted
+                                    | ErrorKind::ConnectionReset
+                            ),
+                            "mock response write failed unexpectedly: {error}"
+                        );
+                    }
                 });
             }
             while let Some(result) = handlers.join_next().await {
