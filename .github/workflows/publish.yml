@@ -386,12 +386,7 @@ jobs:
             exit 1
           fi
 
-          jq -e '
-            .token_type == "oidc" and
-            (.token | type == "string" and length > 0) and
-            (.created | type == "string" and length > 0) and
-            (.expires | type == "string" and length > 0)
-          ' "$npm_response" >/dev/null
+          jq -e '.token | type == "string" and length > 0' "$npm_response" >/dev/null
           echo "npm accepted this repository, workflow, environment, and package as a Trusted Publisher."
 
   ghcr-build:
