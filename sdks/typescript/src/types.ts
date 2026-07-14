@@ -280,6 +280,45 @@ export interface ImageJobUpdate {
   deleted?: boolean;
 }
 
+export type PresetOperation = "generate" | "edit";
+
+export interface ImagePresetTemplate {
+  prompt?: string | null;
+  negative_prompt?: string | null;
+  operation?: PresetOperation;
+  parameters?: GenerationParameters;
+  routing?: RoutingOptions;
+  session?: SessionOptions;
+  output?: OutputOptions;
+  policies?: RequestPolicies;
+  timeout_ms?: number | null;
+  user?: string | null;
+}
+
+export interface ImagePresetWrite {
+  description?: string | null;
+  template: ImagePresetTemplate;
+}
+
+export interface ImagePresetCreate extends ImagePresetWrite {
+  name: string;
+}
+
+export interface ImagePreset extends ImagePresetCreate {
+  created: number;
+  updated: number;
+}
+
+export interface ImagePresetPage {
+  items: ImagePreset[];
+  next_cursor?: string | null;
+}
+
+export interface PresetListOptions extends RequestOptions {
+  limit?: number;
+  cursor?: string;
+}
+
 export interface ProviderDescriptor {
   name: string;
   display_name: string;

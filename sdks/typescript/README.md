@@ -33,6 +33,10 @@ const page = await bridge.jobs.list({
   search: "paper fox",
 });
 const diagnostics = await bridge.diagnostics();
+const preset = await bridge.presets.create({
+  name: "paper-fox",
+  template: { prompt: "a paper fox" },
+});
 console.log(diagnostics.configuration.listener_scope, diagnostics.providers);
 ```
 
@@ -50,6 +54,8 @@ latest verified in-memory preview and normally returns 404 before the first
 partial event or after the job becomes terminal.
 List filters include stable cursor pagination, status, active/hidden/all
 visibility, favorite state, and literal prompt search.
+`bridge.presets` exposes typed `list`, `get`, `create`, `update`, and `delete`
+operations for reusable input-free request configurations.
 `diagnostics()` exposes the typed, redaction-safe operator snapshot used by the
 embedded dashboard without credential values, prompts, or host paths.
 

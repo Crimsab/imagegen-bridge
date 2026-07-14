@@ -6,11 +6,16 @@ import type {
   ImageJob,
   ImageJobPage,
   ImageJobUpdate,
+  ImagePreset,
+  ImagePresetCreate,
+  ImagePresetPage,
+  ImagePresetWrite,
   ImageRequest,
   ImageResponse,
   JobListOptions,
   JsonValue,
   OperatorDiagnostics,
+  PresetListOptions,
   ProviderCapabilities,
   ProviderPage,
   RequestOptions,
@@ -93,9 +98,42 @@ export class JobsResource {
   }
 }
 
+export class PresetsResource {
+  readonly #client: ImagegenBridgeClient;
+
+  constructor(client: ImagegenBridgeClient) {
+    this.#client = client;
+  }
+
+  list(options: PresetListOptions = {}): Promise<ImagePresetPage> {
+    return this.#client.listPresets(options);
+  }
+
+  get(name: string, options: RequestOptions = {}): Promise<ImagePreset> {
+    return this.#client.getPreset(name, options);
+  }
+
+  create(preset: ImagePresetCreate, options: RequestOptions = {}): Promise<ImagePreset> {
+    return this.#client.createPreset(preset, options);
+  }
+
+  update(
+    name: string,
+    preset: ImagePresetWrite,
+    options: RequestOptions = {},
+  ): Promise<ImagePreset> {
+    return this.#client.replacePreset(name, preset, options);
+  }
+
+  delete(name: string, options: RequestOptions = {}): Promise<void> {
+    return this.#client.deletePreset(name, options);
+  }
+}
+
 export class ImagegenBridgeClient {
   readonly images: ImagesResource;
   readonly jobs: JobsResource;
+  readonly presets: PresetsResource;
   readonly #baseUrl: URL;
   readonly #fetch: typeof globalThis.fetch;
   readonly #headers: Record<string, string>;
@@ -135,6 +173,7 @@ export class ImagegenBridgeClient {
     };
     this.images = new ImagesResource(this);
     this.jobs = new JobsResource(this);
+    this.presets = new PresetsResource(this);
   }
 
   async executeImage(request: ImageRequest, options: RequestOptions): Promise<ImageResponse> {
@@ -260,6 +299,52 @@ export class ImagegenBridgeClient {
         options,
       }),
     );
+  }
+
+  async listPresets(options: PresetListOptions): Promise<ImagePresetPage> {
+    const value = await this.#json("GET", "v1/presets", {
+      query: { limit: options.limit ?? 20, cursor: options.cursor },
+      options,
+    });
+    const page = record(value);
+    if (!page || !Array.isArray(page.items))
+      throw new BridgeProtocolError("bridge returned an invalid preset page");
+    return value as ImagePresetPage;
+  }
+
+  async getPreset(name: string, options: RequestOptions): Promise<ImagePreset> {
+    return imagePreset(
+      await this.#json("GET", `v1/presets/${encodeURIComponent(name)}`, { options }),
+    );
+  }
+
+  async createPreset(preset: ImagePresetCreate, options: RequestOptions): Promise<ImagePreset> {
+    return imagePreset(
+      await this.#json("POST", "v1/presets", {
+        body: preset as unknown as JsonValue,
+        options,
+      }),
+    );
+  }
+
+  async replacePreset(
+    name: string,
+    preset: ImagePresetWrite,
+    options: RequestOptions,
+  ): Promise<ImagePreset> {
+    return imagePreset(
+      await this.#json("PUT", `v1/presets/${encodeURIComponent(name)}`, {
+        body: preset as unknown as JsonValue,
+        options,
+      }),
+    );
+  }
+
+  async deletePreset(name: string, options: RequestOptions): Promise<void> {
+    await this.#json("DELETE", `v1/presets/${encodeURIComponent(name)}`, {
+      options,
+      allowEmpty: true,
+    });
   }
 
   async providers(
@@ -552,6 +637,19 @@ function imageJob(value: unknown): ImageJob {
   )
     throw new BridgeProtocolError("bridge returned an invalid durable job");
   return value as ImageJob;
+}
+
+function imagePreset(value: unknown): ImagePreset {
+  const preset = record(value);
+  if (
+    !preset ||
+    typeof preset.name !== "string" ||
+    typeof preset.created !== "number" ||
+    typeof preset.updated !== "number" ||
+    !record(preset.template)
+  )
+    throw new BridgeProtocolError("bridge returned an invalid preset");
+  return value as ImagePreset;
 }
 
 function positiveInteger(value: number, name: string): number {

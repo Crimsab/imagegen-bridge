@@ -6,6 +6,8 @@ package is not published yet; build it from this repository.
 ```python
 from imagegen_bridge import (
     AsyncImagegenBridgeClient,
+    ImagePresetCreate,
+    ImagePresetTemplate,
     ImageRequest,
     OutputOptions,
     ProviderRoute,
@@ -32,6 +34,10 @@ async with AsyncImagegenBridgeClient("http://127.0.0.1:8787") as client:
     queued = await client.jobs.create(ImageRequest.generate("a second paper fox"))
     partial = await client.jobs.partial(queued.id)  # transient while the job runs
     completed = await client.jobs.get(queued.id)
+    preset = await client.presets.create(ImagePresetCreate(
+        name="paper-fox",
+        template=ImagePresetTemplate(prompt="a paper fox"),
+    ))
     page = await client.jobs.list(
         status="succeeded", visibility="active", favorite=True, search="paper fox"
     )
@@ -53,6 +59,8 @@ models. `partial` returns the latest verified in-memory preview and normally
 returns 404 before the first partial event or after the job becomes terminal.
 List filters include stable cursor pagination, status, active/hidden/all
 visibility, favorite state, and literal prompt search.
+`client.presets` exposes typed `list`, `get`, `create`, `update`, and `delete`
+operations for reusable input-free request configurations.
 `diagnostics()` returns the same typed, redaction-safe operator snapshot used by
 the embedded dashboard; it never includes credential values, prompts, or host
 paths.

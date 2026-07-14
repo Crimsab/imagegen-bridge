@@ -194,6 +194,24 @@ describe("ImagegenBridgeClient", () => {
       true,
     );
     expect((await client.jobs.cancel(queued.id)).status).toBe("cancelled");
+    const presets = await client.presets.list();
+    expect(presets.items[0]?.name).toBe("portrait-high");
+    const preset = await client.presets.create({
+      name: "sdk-preset",
+      description: "SDK preset",
+      template: { operation: "generate", parameters: { quality: "high" } },
+    });
+    expect(preset.template.parameters?.quality).toBe("high");
+    expect((await client.presets.get("sdk-preset")).name).toBe("sdk-preset");
+    expect(
+      (
+        await client.presets.update("sdk-preset", {
+          description: "Updated",
+          template: { operation: "generate" },
+        })
+      ).description,
+    ).toBe("Updated");
+    await client.presets.delete("sdk-preset");
     expect((await client.health()).status).toBe("live");
     expect((await client.health({ ready: true })).status).toBe("ready");
   });

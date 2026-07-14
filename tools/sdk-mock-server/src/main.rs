@@ -44,6 +44,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(get_job).delete(cancel_job).patch(update_job),
         )
         .route("/v1/jobs/{id}/partial", get(job_partial))
+        .route("/v1/presets", get(list_presets).post(create_preset))
+        .route(
+            "/v1/presets/{name}",
+            get(get_preset).put(replace_preset).delete(delete_preset),
+        )
         .route("/v1/providers", get(providers))
         .route("/v1/diagnostics", get(diagnostics))
         .route("/v1/providers/{provider}/capabilities", get(capabilities))
@@ -67,6 +72,76 @@ async fn liveness() -> Json<Value> {
 
 async fn readiness() -> Json<Value> {
     Json(json!({"status": "ready", "providers": []}))
+}
+
+fn preset_value(name: &str, description: Option<&Value>, template: Option<&Value>) -> Value {
+    json!({
+        "name": name,
+        "description": description,
+        "template": template.cloned().unwrap_or_else(|| json!({})),
+        "created": 1_784_000_000_u64,
+        "updated": 1_784_000_001_u64
+    })
+}
+
+async fn list_presets(headers: HeaderMap) -> Response {
+    if let Some(response) = authenticate(&headers) {
+        return response;
+    }
+    Json(json!({"items":[preset_value("portrait-high", Some(&json!("Editorial portrait")), Some(&json!({"operation":"generate"})))]})).into_response()
+}
+
+async fn create_preset(headers: HeaderMap, Json(payload): Json<Value>) -> Response {
+    if let Some(response) = authenticate(&headers) {
+        return response;
+    }
+    let Some(name) = payload.get("name").and_then(Value::as_str) else {
+        return error(StatusCode::UNPROCESSABLE_ENTITY, "preset name is required");
+    };
+    (
+        StatusCode::CREATED,
+        Json(preset_value(
+            name,
+            payload.get("description"),
+            payload.get("template"),
+        )),
+    )
+        .into_response()
+}
+
+async fn get_preset(headers: HeaderMap, Path(name): Path<String>) -> Response {
+    if let Some(response) = authenticate(&headers) {
+        return response;
+    }
+    Json(preset_value(
+        &name,
+        Some(&json!("Editorial portrait")),
+        Some(&json!({"operation":"generate"})),
+    ))
+    .into_response()
+}
+
+async fn replace_preset(
+    headers: HeaderMap,
+    Path(name): Path<String>,
+    Json(payload): Json<Value>,
+) -> Response {
+    if let Some(response) = authenticate(&headers) {
+        return response;
+    }
+    Json(preset_value(
+        &name,
+        payload.get("description"),
+        payload.get("template"),
+    ))
+    .into_response()
+}
+
+async fn delete_preset(headers: HeaderMap, Path(_name): Path<String>) -> Response {
+    if let Some(response) = authenticate(&headers) {
+        return response;
+    }
+    StatusCode::NO_CONTENT.into_response()
 }
 
 async fn diagnostics(headers: HeaderMap) -> Response {

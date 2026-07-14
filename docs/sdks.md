@@ -37,6 +37,8 @@ wheel/sdist metadata.
 ```python
 from imagegen_bridge import (
     AsyncImagegenBridgeClient,
+    ImagePresetCreate,
+    ImagePresetTemplate,
     ImageRequest,
     ProviderRoute,
     RoutingOptions,
@@ -60,6 +62,11 @@ async with AsyncImagegenBridgeClient(
         visibility="active", favorite=True, search="paper fox"
     )
     diagnostics = await client.diagnostics()
+    preset = await client.presets.create(ImagePresetCreate(
+        name="portrait-high",
+        template=ImagePresetTemplate(prompt="a studio portrait"),
+    ))
+    presets = await client.presets.list()
 ```
 
 Use `client.images.stream(request)` for typed lifecycle, progress, partial-image,
@@ -69,6 +76,8 @@ details, and request ID.
 `client.jobs` provides typed create/get/list/cancel operations for durable
 artifact-backed work plus `update` for favorite/delete/restore state; job pages
 never duplicate inline request image bodies.
+`client.presets` exposes typed `list`, `get`, `create`, `update`, and `delete`
+operations over the same reusable configurations as the CLI and dashboard.
 `diagnostics()` returns typed aggregate health, safe configuration provenance,
 queue/storage limits, provider readiness, and bounded redacted API events
 without user content, identifiers, headers, queries, payloads, or host paths.
@@ -106,6 +115,11 @@ const favorites = await client.jobs.list({
   search: "paper fox",
 });
 const diagnostics = await client.diagnostics();
+const preset = await client.presets.create({
+  name: "portrait-high",
+  template: { prompt: "a studio portrait", parameters: { quality: "high" } },
+});
+const presets = await client.presets.list();
 ```
 
 Pass `{ signal }` or `{ timeoutMs }` per request. Streaming is an
@@ -121,6 +135,8 @@ The request and capability types also expose input fidelity, image action, and
 the provider-specific accepted value sets instead of assuming every model can
 honor every edit control. Provider descriptors expose their declared image
 models so clients can build model pickers without hardcoded inventories.
+Both SDKs also expose complete preset CRUD; preset templates intentionally
+exclude one-shot image inputs and idempotency state.
 
 ## Contract verification and packaging
 

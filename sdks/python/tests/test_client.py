@@ -11,6 +11,9 @@ from imagegen_bridge import (
     BridgeProtocolError,
     CompletedEvent,
     ImagegenBridgeClient,
+    ImagePresetCreate,
+    ImagePresetTemplate,
+    ImagePresetWrite,
     ImageRequest,
     PartialImageEvent,
     ProgressEvent,
@@ -170,6 +173,25 @@ def test_sync_client_matches_shared_http_contract(
         assert page.next_cursor == "sdk-next"
         assert client.jobs.update(queued.id, favorite=True, deleted=False).favorite
         assert client.jobs.cancel(queued.id).status == "cancelled"
+        preset = client.presets.create(
+            ImagePresetCreate(
+                name="portrait-high",
+                description="Editorial portrait",
+                template=ImagePresetTemplate(prompt="Studio portrait"),
+            )
+        )
+        assert preset.name == "portrait-high"
+        assert client.presets.get(preset.name).template.operation == "generate"
+        assert client.presets.list(limit=5).items[0].name == preset.name
+        updated = client.presets.update(
+            preset.name,
+            ImagePresetWrite(
+                description="Updated portrait",
+                template=ImagePresetTemplate(prompt="Updated studio portrait"),
+            ),
+        )
+        assert updated.description == "Updated portrait"
+        client.presets.delete(preset.name)
         assert client.health()["status"] == "live"
 
 
@@ -228,6 +250,20 @@ def test_async_client_matches_shared_http_contract(
             assert (await client.jobs.list()).items[0].status == "succeeded"
             assert (await client.jobs.update(queued.id, favorite=True, deleted=False)).favorite
             assert (await client.jobs.cancel(queued.id)).cancel_requested
+            preset = await client.presets.create(
+                ImagePresetCreate(
+                    name="portrait-high",
+                    template=ImagePresetTemplate(prompt="Studio portrait"),
+                )
+            )
+            assert (await client.presets.get(preset.name)).name == preset.name
+            assert (await client.presets.list()).items[0].name == preset.name
+            replaced = await client.presets.update(
+                preset.name,
+                ImagePresetWrite(template=ImagePresetTemplate(prompt="Updated portrait")),
+            )
+            assert replaced.template.prompt == "Updated portrait"
+            await client.presets.delete(preset.name)
             assert (await client.health(ready=True))["status"] == "ready"
 
     asyncio.run(scenario())

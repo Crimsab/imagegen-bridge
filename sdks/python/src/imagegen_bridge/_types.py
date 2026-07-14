@@ -31,6 +31,7 @@ ImageJobStatus: TypeAlias = Literal[
     "queued", "running", "succeeded", "failed", "cancelled", "interrupted"
 ]
 ImageJobVisibility: TypeAlias = Literal["active", "hidden", "all"]
+PresetOperation: TypeAlias = Literal["generate", "edit"]
 
 
 def _wire(value: Any) -> JSONValue:
@@ -285,6 +286,113 @@ class ImageRequest:
             idempotency_key=value.get("idempotency_key"),
             timeout_ms=value.get("timeout_ms"),
             user=value.get("user"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ImagePresetTemplate:
+    """Reusable request configuration without image inputs or idempotency state."""
+
+    prompt: str | None = None
+    negative_prompt: str | None = None
+    operation: PresetOperation = "generate"
+    parameters: GenerationParameters = field(default_factory=GenerationParameters)
+    routing: RoutingOptions = field(default_factory=RoutingOptions)
+    session: SessionOptions = field(default_factory=SessionOptions)
+    output: OutputOptions = field(default_factory=OutputOptions)
+    policies: RequestPolicies = field(default_factory=RequestPolicies)
+    timeout_ms: int | None = None
+    user: str | None = None
+
+    def to_dict(self) -> dict[str, JSONValue]:
+        value: dict[str, JSONValue] = {
+            "operation": self.operation,
+            "parameters": _wire(self.parameters),
+            "routing": _wire(self.routing),
+            "session": _wire(asdict(self.session)),
+            "output": _wire(self.output),
+            "policies": _wire(self.policies),
+        }
+        for key, item in (
+            ("prompt", self.prompt),
+            ("negative_prompt", self.negative_prompt),
+            ("timeout_ms", self.timeout_ms),
+            ("user", self.user),
+        ):
+            if item is not None:
+                value[key] = item
+        return value
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> ImagePresetTemplate:
+        return cls(
+            prompt=value.get("prompt"),
+            negative_prompt=value.get("negative_prompt"),
+            operation=value.get("operation", "generate"),
+            parameters=GenerationParameters.from_dict(value.get("parameters", {})),
+            routing=RoutingOptions.from_dict(value.get("routing", {})),
+            session=SessionOptions(**value.get("session", {})),
+            output=OutputOptions.from_dict(value.get("output", {})),
+            policies=RequestPolicies(**value.get("policies", {})),
+            timeout_ms=value.get("timeout_ms"),
+            user=value.get("user"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ImagePresetWrite:
+    template: ImagePresetTemplate
+    description: str | None = None
+
+    def to_dict(self) -> dict[str, JSONValue]:
+        value: dict[str, JSONValue] = {"template": _wire(self.template)}
+        if self.description is not None:
+            value["description"] = self.description
+        return value
+
+
+@dataclass(frozen=True, slots=True)
+class ImagePresetCreate:
+    name: str
+    template: ImagePresetTemplate
+    description: str | None = None
+
+    def to_dict(self) -> dict[str, JSONValue]:
+        value: dict[str, JSONValue] = {"name": self.name, "template": _wire(self.template)}
+        if self.description is not None:
+            value["description"] = self.description
+        return value
+
+
+@dataclass(frozen=True, slots=True)
+class ImagePreset:
+    name: str
+    template: ImagePresetTemplate
+    created: int
+    updated: int
+    description: str | None = None
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> ImagePreset:
+        return cls(
+            name=value["name"],
+            template=ImagePresetTemplate.from_dict(value["template"]),
+            created=value["created"],
+            updated=value["updated"],
+            description=value.get("description"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ImagePresetPage:
+    items: tuple[ImagePreset, ...]
+    next_cursor: str | None = None
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> ImagePresetPage:
+        return cls(
+            items=tuple(ImagePreset.from_dict(item) for item in value["items"]),
+            next_cursor=value.get("next_cursor"),
         )
 
 

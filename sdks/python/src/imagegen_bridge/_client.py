@@ -18,6 +18,10 @@ from ._types import (
     ImageJobPage,
     ImageJobStatus,
     ImageJobVisibility,
+    ImagePreset,
+    ImagePresetCreate,
+    ImagePresetPage,
+    ImagePresetWrite,
     ImageRequest,
     ImageResponse,
     JSONValue,
@@ -75,6 +79,20 @@ def _decode_job_page(response: httpx.Response) -> ImageJobPage:
         return ImageJobPage.from_dict(_decode_json(response))
     except (KeyError, TypeError, ValueError) as error:
         raise BridgeProtocolError("bridge returned an invalid durable job page") from error
+
+
+def _decode_preset(response: httpx.Response) -> ImagePreset:
+    try:
+        return ImagePreset.from_dict(_decode_json(response))
+    except (KeyError, TypeError, ValueError) as error:
+        raise BridgeProtocolError("bridge returned an invalid image preset") from error
+
+
+def _decode_preset_page(response: httpx.Response) -> ImagePresetPage:
+    try:
+        return ImagePresetPage.from_dict(_decode_json(response))
+    except (KeyError, TypeError, ValueError) as error:
+        raise BridgeProtocolError("bridge returned an invalid image preset page") from error
 
 
 def _decode_partial_preview(response: httpx.Response) -> bytes:
@@ -370,6 +388,74 @@ class JobsResource:
         return self._client._update_job(job_id, favorite, deleted, timeout)
 
 
+class AsyncPresetsResource:
+    def __init__(self, client: AsyncImagegenBridgeClient) -> None:
+        self._client = client
+
+    async def list(
+        self,
+        *,
+        limit: int = 20,
+        cursor: str | None = None,
+        timeout: TimeoutArg = _USE_CLIENT_TIMEOUT,
+    ) -> ImagePresetPage:
+        return await self._client._list_presets(limit, cursor, timeout)
+
+    async def get(self, name: str, *, timeout: TimeoutArg = _USE_CLIENT_TIMEOUT) -> ImagePreset:
+        return await self._client._get_preset(name, timeout)
+
+    async def create(
+        self, preset: ImagePresetCreate, *, timeout: TimeoutArg = _USE_CLIENT_TIMEOUT
+    ) -> ImagePreset:
+        return await self._client._create_preset(preset, timeout)
+
+    async def update(
+        self,
+        name: str,
+        preset: ImagePresetWrite,
+        *,
+        timeout: TimeoutArg = _USE_CLIENT_TIMEOUT,
+    ) -> ImagePreset:
+        return await self._client._replace_preset(name, preset, timeout)
+
+    async def delete(self, name: str, *, timeout: TimeoutArg = _USE_CLIENT_TIMEOUT) -> None:
+        await self._client._delete_preset(name, timeout)
+
+
+class PresetsResource:
+    def __init__(self, client: ImagegenBridgeClient) -> None:
+        self._client = client
+
+    def list(
+        self,
+        *,
+        limit: int = 20,
+        cursor: str | None = None,
+        timeout: TimeoutArg = _USE_CLIENT_TIMEOUT,
+    ) -> ImagePresetPage:
+        return self._client._list_presets(limit, cursor, timeout)
+
+    def get(self, name: str, *, timeout: TimeoutArg = _USE_CLIENT_TIMEOUT) -> ImagePreset:
+        return self._client._get_preset(name, timeout)
+
+    def create(
+        self, preset: ImagePresetCreate, *, timeout: TimeoutArg = _USE_CLIENT_TIMEOUT
+    ) -> ImagePreset:
+        return self._client._create_preset(preset, timeout)
+
+    def update(
+        self,
+        name: str,
+        preset: ImagePresetWrite,
+        *,
+        timeout: TimeoutArg = _USE_CLIENT_TIMEOUT,
+    ) -> ImagePreset:
+        return self._client._replace_preset(name, preset, timeout)
+
+    def delete(self, name: str, *, timeout: TimeoutArg = _USE_CLIENT_TIMEOUT) -> None:
+        self._client._delete_preset(name, timeout)
+
+
 class AsyncImagegenBridgeClient:
     """Reusable async client. Close it or use it as an async context manager."""
 
@@ -410,6 +496,7 @@ class AsyncImagegenBridgeClient:
         self._max_error_body_bytes = max_error_body_bytes
         self.images = AsyncImagesResource(self)
         self.jobs = AsyncJobsResource(self)
+        self.presets = AsyncPresetsResource(self)
 
     async def __aenter__(self) -> AsyncImagegenBridgeClient:
         return self
@@ -545,6 +632,45 @@ class AsyncImagegenBridgeClient:
         )
         return _decode_job(response)
 
+    async def _list_presets(
+        self, limit: int, cursor: str | None, timeout: TimeoutArg
+    ) -> ImagePresetPage:
+        response = await self._send(
+            "GET",
+            "/v1/presets",
+            params={"limit": limit, "cursor": cursor},
+            **_timeout_kwargs(timeout),
+        )
+        return _decode_preset_page(response)
+
+    async def _get_preset(self, name: str, timeout: TimeoutArg) -> ImagePreset:
+        response = await self._send(
+            "GET", f"/v1/presets/{quote(name, safe='')}", **_timeout_kwargs(timeout)
+        )
+        return _decode_preset(response)
+
+    async def _create_preset(self, preset: ImagePresetCreate, timeout: TimeoutArg) -> ImagePreset:
+        response = await self._send(
+            "POST", "/v1/presets", json=preset.to_dict(), **_timeout_kwargs(timeout)
+        )
+        return _decode_preset(response)
+
+    async def _replace_preset(
+        self, name: str, preset: ImagePresetWrite, timeout: TimeoutArg
+    ) -> ImagePreset:
+        response = await self._send(
+            "PUT",
+            f"/v1/presets/{quote(name, safe='')}",
+            json=preset.to_dict(),
+            **_timeout_kwargs(timeout),
+        )
+        return _decode_preset(response)
+
+    async def _delete_preset(self, name: str, timeout: TimeoutArg) -> None:
+        await self._send(
+            "DELETE", f"/v1/presets/{quote(name, safe='')}", **_timeout_kwargs(timeout)
+        )
+
     async def providers(self, *, limit: int = 20, cursor: str | None = None) -> ProviderPage:
         response = await self._send(
             "GET", "/v1/providers", params={"limit": limit, "cursor": cursor}
@@ -656,6 +782,7 @@ class ImagegenBridgeClient:
         self._max_error_body_bytes = max_error_body_bytes
         self.images = ImagesResource(self)
         self.jobs = JobsResource(self)
+        self.presets = PresetsResource(self)
 
     def __enter__(self) -> ImagegenBridgeClient:
         return self
@@ -789,6 +916,41 @@ class ImagegenBridgeClient:
             **_timeout_kwargs(timeout),
         )
         return _decode_job(response)
+
+    def _list_presets(self, limit: int, cursor: str | None, timeout: TimeoutArg) -> ImagePresetPage:
+        response = self._send(
+            "GET",
+            "/v1/presets",
+            params={"limit": limit, "cursor": cursor},
+            **_timeout_kwargs(timeout),
+        )
+        return _decode_preset_page(response)
+
+    def _get_preset(self, name: str, timeout: TimeoutArg) -> ImagePreset:
+        response = self._send(
+            "GET", f"/v1/presets/{quote(name, safe='')}", **_timeout_kwargs(timeout)
+        )
+        return _decode_preset(response)
+
+    def _create_preset(self, preset: ImagePresetCreate, timeout: TimeoutArg) -> ImagePreset:
+        response = self._send(
+            "POST", "/v1/presets", json=preset.to_dict(), **_timeout_kwargs(timeout)
+        )
+        return _decode_preset(response)
+
+    def _replace_preset(
+        self, name: str, preset: ImagePresetWrite, timeout: TimeoutArg
+    ) -> ImagePreset:
+        response = self._send(
+            "PUT",
+            f"/v1/presets/{quote(name, safe='')}",
+            json=preset.to_dict(),
+            **_timeout_kwargs(timeout),
+        )
+        return _decode_preset(response)
+
+    def _delete_preset(self, name: str, timeout: TimeoutArg) -> None:
+        self._send("DELETE", f"/v1/presets/{quote(name, safe='')}", **_timeout_kwargs(timeout))
 
     def providers(self, *, limit: int = 20, cursor: str | None = None) -> ProviderPage:
         response = self._send("GET", "/v1/providers", params={"limit": limit, "cursor": cursor})
