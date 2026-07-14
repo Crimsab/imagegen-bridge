@@ -549,14 +549,17 @@ async fn execute_image(
 async fn create_job(
     State(state): State<ServerState>,
     Extension(request_id): Extension<RequestId>,
+    Extension(scope): Extension<AuthScope>,
+    headers: HeaderMap,
     payload: Result<Json<ImageRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<ImageJob>), ApiError> {
-    let Json(request) = payload.map_err(|_| {
+    let Json(mut request) = payload.map_err(|_| {
         ApiError::bad_request(
             "request body must be valid ImageRequest JSON",
             request_id.clone(),
         )
     })?;
+    apply_idempotency_header(&headers, &mut request, &request_id)?;
     let manager = state.jobs.as_ref().ok_or_else(|| {
         ApiError::from_bridge(
             BridgeError::new(ErrorCode::Configuration, "durable jobs are disabled"),
@@ -564,9 +567,9 @@ async fn create_job(
         )
     })?;
     manager
-        .submit(request)
+        .submit(&scope.0, request)
         .await
-        .map(|job| (StatusCode::ACCEPTED, Json(job)))
+        .map(|submission| (StatusCode::ACCEPTED, Json(submission.job)))
         .map_err(|error| ApiError::from_bridge(error, request_id))
 }
 
@@ -618,6 +621,7 @@ impl Default for JobQuery {
 async fn list_jobs(
     State(state): State<ServerState>,
     Extension(request_id): Extension<RequestId>,
+    Extension(scope): Extension<AuthScope>,
     query: Result<Query<JobQuery>, QueryRejection>,
 ) -> Result<Json<ImageJobPage>, ApiError> {
     let Query(query) = query.map_err(|_| {
@@ -660,23 +664,26 @@ async fn list_jobs(
         )
     })?;
     let mut items = manager
-        .list(ImageJobListFilter {
-            before,
-            limit: query.limit.saturating_add(1),
-            visibility: query.visibility.map_or_else(
-                || {
-                    if query.include_deleted {
-                        ImageJobVisibility::All
-                    } else {
-                        ImageJobVisibility::Active
-                    }
-                },
-                Into::into,
-            ),
-            status: query.status,
-            favorite: query.favorite,
-            search,
-        })
+        .list(
+            &scope.0,
+            ImageJobListFilter {
+                before,
+                limit: query.limit.saturating_add(1),
+                visibility: query.visibility.map_or_else(
+                    || {
+                        if query.include_deleted {
+                            ImageJobVisibility::All
+                        } else {
+                            ImageJobVisibility::Active
+                        }
+                    },
+                    Into::into,
+                ),
+                status: query.status,
+                favorite: query.favorite,
+                search,
+            },
+        )
         .await
         .map_err(|error| ApiError::from_bridge(error, request_id.clone()))?;
     let has_more = items.len() > query.limit;
@@ -694,6 +701,7 @@ async fn list_jobs(
 async fn get_job(
     State(state): State<ServerState>,
     Extension(request_id): Extension<RequestId>,
+    Extension(scope): Extension<AuthScope>,
     Path(id): Path<String>,
 ) -> Result<Json<ImageJob>, ApiError> {
     let manager = state.jobs.as_ref().ok_or_else(|| {
@@ -703,7 +711,7 @@ async fn get_job(
         )
     })?;
     manager
-        .get(&id)
+        .get(&scope.0, &id)
         .await
         .map(Json)
         .map_err(|error| job_api_error(error, request_id))
@@ -712,6 +720,7 @@ async fn get_job(
 async fn get_job_partial(
     State(state): State<ServerState>,
     Extension(request_id): Extension<RequestId>,
+    Extension(scope): Extension<AuthScope>,
     Path(id): Path<String>,
 ) -> Result<Response, ApiError> {
     let manager = state.jobs.as_ref().ok_or_else(|| {
@@ -720,10 +729,13 @@ async fn get_job_partial(
             request_id.clone(),
         )
     })?;
-    let preview = manager.partial_preview(&id).await.ok_or_else(|| {
-        ApiError::bad_request("partial preview is not available", request_id)
-            .with_status(StatusCode::NOT_FOUND)
-    })?;
+    let preview = manager
+        .partial_preview(&scope.0, &id)
+        .await
+        .ok_or_else(|| {
+            ApiError::bad_request("partial preview is not available", request_id)
+                .with_status(StatusCode::NOT_FOUND)
+        })?;
     let mut response = Response::new(axum::body::Body::from(preview.bytes));
     response.headers_mut().insert(
         header::CONTENT_TYPE,
@@ -753,6 +765,7 @@ async fn get_job_partial(
 async fn cancel_job(
     State(state): State<ServerState>,
     Extension(request_id): Extension<RequestId>,
+    Extension(scope): Extension<AuthScope>,
     Path(id): Path<String>,
 ) -> Result<Json<ImageJob>, ApiError> {
     let manager = state.jobs.as_ref().ok_or_else(|| {
@@ -762,7 +775,7 @@ async fn cancel_job(
         )
     })?;
     manager
-        .cancel(&id)
+        .cancel(&scope.0, &id)
         .await
         .map(Json)
         .map_err(|error| job_api_error(error, request_id))
@@ -771,6 +784,7 @@ async fn cancel_job(
 async fn update_job(
     State(state): State<ServerState>,
     Extension(request_id): Extension<RequestId>,
+    Extension(scope): Extension<AuthScope>,
     Path(id): Path<String>,
     payload: Result<Json<ImageJobUpdate>, JsonRejection>,
 ) -> Result<Json<ImageJob>, ApiError> {
@@ -787,7 +801,7 @@ async fn update_job(
         )
     })?;
     manager
-        .update_history(&id, update)
+        .update_history(&scope.0, &id, update)
         .await
         .map(Json)
         .map_err(|error| job_api_error(error, request_id))
@@ -996,28 +1010,7 @@ async fn run_request_internal(
     cancellation: CancellationToken,
     events: Option<mpsc::Sender<ProviderEvent>>,
 ) -> Result<imagegen_bridge_core::ImageResponse, ApiError> {
-    if let Some(value) = headers.get("idempotency-key") {
-        let key = value.to_str().map_err(|_| {
-            ApiError::bad_request("Idempotency-Key must be visible ASCII", request_id.clone())
-        })?;
-        if key.is_empty() || key.len() > MAX_IDEMPOTENCY_KEY_BYTES {
-            return Err(ApiError::bad_request(
-                "Idempotency-Key length is invalid",
-                request_id,
-            ));
-        }
-        if request
-            .idempotency_key
-            .as_deref()
-            .is_some_and(|body| body != key)
-        {
-            return Err(ApiError::bad_request(
-                "Idempotency-Key conflicts with the request body",
-                request_id,
-            ));
-        }
-        request.idempotency_key = Some(key.to_owned());
-    }
+    apply_idempotency_header(headers, &mut request, &request_id)?;
     let guard = CancelOnDrop(cancellation.clone());
     let provider = state
         .runtime
@@ -1063,6 +1056,36 @@ async fn run_request_internal(
         }
     }
     result.map_err(|error| ApiError::from_bridge(error, request_id))
+}
+
+fn apply_idempotency_header(
+    headers: &HeaderMap,
+    request: &mut ImageRequest,
+    request_id: &RequestId,
+) -> Result<(), ApiError> {
+    if let Some(value) = headers.get("idempotency-key") {
+        let key = value.to_str().map_err(|_| {
+            ApiError::bad_request("Idempotency-Key must be visible ASCII", request_id.clone())
+        })?;
+        if key.is_empty() || key.len() > MAX_IDEMPOTENCY_KEY_BYTES {
+            return Err(ApiError::bad_request(
+                "Idempotency-Key length is invalid",
+                request_id.clone(),
+            ));
+        }
+        if request
+            .idempotency_key
+            .as_deref()
+            .is_some_and(|body| body != key)
+        {
+            return Err(ApiError::bad_request(
+                "Idempotency-Key conflicts with the request body",
+                request_id.clone(),
+            ));
+        }
+        request.idempotency_key = Some(key.to_owned());
+    }
+    Ok(())
 }
 
 struct CancelOnDrop(CancellationToken);
@@ -1285,12 +1308,23 @@ mod tests {
     }
 
     async fn test_job_router(directory: &std::path::Path) -> (Router, Arc<JobManager>) {
+        let jobs = imagegen_bridge_config::JobSettings {
+            database: directory.join("jobs.sqlite3"),
+            ..imagegen_bridge_config::JobSettings::default()
+        };
+        test_job_router_with_settings(directory, jobs).await
+    }
+
+    async fn test_job_router_with_settings(
+        directory: &std::path::Path,
+        jobs_settings: imagegen_bridge_config::JobSettings,
+    ) -> (Router, Arc<JobManager>) {
         let registry =
             ProviderRegistry::new([Arc::new(ReadyProvider) as Arc<dyn ImageProvider>], "ready")
                 .unwrap();
         let mut config = imagegen_bridge_config::BridgeConfig::default();
         config.artifacts.root = directory.join("artifacts");
-        config.server.jobs.database = directory.join("jobs.sqlite3");
+        config.server.jobs = jobs_settings;
         let mut runtime_config = config.runtime_config().unwrap();
         runtime_config.materialization.artifact_store = Some(config.artifact_store().unwrap());
         let runtime = Arc::new(ImagegenRuntime::new(registry, runtime_config).unwrap());
@@ -1583,6 +1617,111 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        jobs.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn durable_job_submission_replays_and_conflicts_over_http() {
+        let directory = tempfile::tempdir().unwrap();
+        let (app, jobs) = test_job_router(directory.path()).await;
+        let request = ImageRequest::generate("idempotent durable request");
+        let body = serde_json::to_vec(&request).unwrap();
+
+        let first = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/jobs")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header("idempotency-key", "durable-http-key")
+                    .body(Body::from(body.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::ACCEPTED);
+        let first: ImageJob =
+            serde_json::from_slice(&first.into_body().collect().await.unwrap().to_bytes()).unwrap();
+
+        let replay = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/jobs")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header("idempotency-key", "durable-http-key")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(replay.status(), StatusCode::ACCEPTED);
+        let replay: ImageJob =
+            serde_json::from_slice(&replay.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(replay.summary.id, first.summary.id);
+        assert_eq!(jobs.diagnostics().await.unwrap().statistics.total, 1);
+
+        let conflict = app
+            .oneshot(
+                Request::post("/v1/jobs")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header("idempotency-key", "durable-http-key")
+                    .body(Body::from(
+                        serde_json::to_vec(&ImageRequest::generate("different request")).unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(conflict.status(), StatusCode::CONFLICT);
+        jobs.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn durable_retention_expires_terminal_jobs_while_idle() {
+        let directory = tempfile::tempdir().unwrap();
+        let settings = imagegen_bridge_config::JobSettings {
+            database: directory.path().join("jobs.sqlite3"),
+            retention_secs: 1,
+            ..imagegen_bridge_config::JobSettings::default()
+        };
+        let (app, jobs) = test_job_router_with_settings(directory.path(), settings).await;
+        let created = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/jobs")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&ImageRequest::generate("expire while idle")).unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let created: ImageJob =
+            serde_json::from_slice(&created.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        let id = created.summary.id;
+
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        Request::get(format!("/v1/jobs/{id}"))
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                if response.status() == StatusCode::NOT_FOUND {
+                    break;
+                }
+                assert_eq!(response.status(), StatusCode::OK);
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .unwrap();
         jobs.shutdown().await;
     }
 

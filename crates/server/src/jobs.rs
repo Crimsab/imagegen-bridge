@@ -1,6 +1,13 @@
 //! Durable asynchronous job execution over the shared runtime.
 
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use bytes::Bytes;
@@ -11,7 +18,7 @@ use imagegen_bridge_core::{
     ProviderEvent, ResponseFormat,
 };
 use imagegen_bridge_runtime::{
-    ExecutionContext, ImageJobListFilter, ImagegenRuntime, SqliteImageJobStore,
+    ExecutionContext, ImageJobListFilter, ImagegenRuntime, SqliteImageJobStore, SqliteJobSubmission,
 };
 use serde::Serialize;
 use tokio::sync::{Mutex, Notify, Semaphore, mpsc};
@@ -39,9 +46,10 @@ pub struct JobManager {
     settings: JobSettings,
     permits: Arc<Semaphore>,
     shutdown: CancellationToken,
-    active: Mutex<BTreeMap<String, CancellationToken>>,
-    partials: Mutex<BTreeMap<String, PartialPreview>>,
+    active: Mutex<BTreeMap<(String, String), CancellationToken>>,
+    partials: Mutex<BTreeMap<(String, String), PartialPreview>>,
     active_changed: Notify,
+    retention_healthy: AtomicBool,
 }
 
 /// Redaction-safe durable queue diagnostics for operators.
@@ -96,31 +104,36 @@ impl JobManager {
             active: Mutex::new(BTreeMap::new()),
             partials: Mutex::new(BTreeMap::new()),
             active_changed: Notify::new(),
+            retention_healthy: AtomicBool::new(true),
         });
-        let mut queued = manager
+        let queued = manager
             .store
-            .list(ImageJobListFilter {
-                limit: manager.settings.max_pending,
-                status: Some(ImageJobStatus::Queued),
-                ..ImageJobListFilter::default()
-            })
+            .queued_identities(manager.settings.max_pending)
             .await?;
-        queued.reverse();
-        for job in queued {
-            manager.schedule(job.id);
+        for (scope, id) in queued {
+            manager.schedule(scope, id);
         }
+        manager.spawn_retention_loop();
         Ok(manager)
     }
 
     /// Validates, normalizes for durable artifact delivery, persists, and schedules a request.
     pub async fn submit(
         self: &Arc<Self>,
+        auth_scope: &str,
         mut request: ImageRequest,
-    ) -> Result<ImageJob, BridgeError> {
+    ) -> Result<SqliteJobSubmission, BridgeError> {
         if self.shutdown.is_cancelled() {
             return Err(BridgeError::new(
                 ErrorCode::Overloaded,
                 "durable job manager is shutting down",
+            )
+            .retryable(true));
+        }
+        if !self.retention_healthy.load(Ordering::Acquire) {
+            return Err(BridgeError::new(
+                ErrorCode::Overloaded,
+                "durable job retention is temporarily unavailable",
             )
             .retryable(true));
         }
@@ -129,34 +142,60 @@ impl JobManager {
         let id = Uuid::now_v7().to_string();
         let job = self
             .store
-            .create(&id, &request, unix_timestamp(), self.settings.max_pending)
+            .create(
+                auth_scope,
+                &id,
+                &request,
+                unix_timestamp(),
+                self.settings.max_pending,
+            )
             .await?;
-        self.schedule(id);
+        if job.created {
+            self.schedule(auth_scope.to_owned(), id);
+        }
         Ok(job)
     }
 
     /// Returns a complete durable job.
-    pub async fn get(&self, id: &str) -> Result<ImageJob, BridgeError> {
-        self.store.get(id).await
+    pub async fn get(&self, auth_scope: &str, id: &str) -> Result<ImageJob, BridgeError> {
+        self.store.get(auth_scope, id).await
     }
 
     /// Returns the latest verified preview retained only while a job is active.
-    pub(crate) async fn partial_preview(&self, id: &str) -> Option<PartialPreview> {
-        self.partials.lock().await.get(id).cloned()
+    pub(crate) async fn partial_preview(
+        &self,
+        auth_scope: &str,
+        id: &str,
+    ) -> Option<PartialPreview> {
+        self.partials
+            .lock()
+            .await
+            .get(&(auth_scope.to_owned(), id.to_owned()))
+            .cloned()
     }
 
     /// Returns newest-first durable job summaries.
     pub async fn list(
         &self,
+        auth_scope: &str,
         filter: ImageJobListFilter,
     ) -> Result<Vec<ImageJobSummary>, BridgeError> {
-        self.store.list(filter).await
+        self.store.list(auth_scope, filter).await
     }
 
     /// Requests durable cancellation and signals active provider work.
-    pub async fn cancel(&self, id: &str) -> Result<ImageJob, BridgeError> {
-        let job = self.store.request_cancel(id, unix_timestamp()).await?;
-        if let Some(cancellation) = self.active.lock().await.get(id).cloned() {
+    pub async fn cancel(&self, auth_scope: &str, id: &str) -> Result<ImageJob, BridgeError> {
+        let job = self
+            .store
+            .request_cancel(auth_scope, id, unix_timestamp())
+            .await?;
+        if let Some(cancellation) = self
+            .active
+            .lock()
+            .await
+            .get(&(auth_scope.to_owned(), id.to_owned()))
+            .cloned()
+        {
             cancellation.cancel();
         }
         Ok(job)
@@ -165,11 +204,18 @@ impl JobManager {
     /// Updates favorite and reversible history visibility fields.
     pub async fn update_history(
         &self,
+        auth_scope: &str,
         id: &str,
         update: imagegen_bridge_core::ImageJobUpdate,
     ) -> Result<ImageJob, BridgeError> {
         self.store
-            .update_history(id, update.favorite, update.deleted, unix_timestamp())
+            .update_history(
+                auth_scope,
+                id,
+                update.favorite,
+                update.deleted,
+                unix_timestamp(),
+            )
             .await
     }
 
@@ -200,40 +246,89 @@ impl JobManager {
         let _ = tokio::time::timeout(Duration::from_secs(15), wait).await;
     }
 
-    fn schedule(self: &Arc<Self>, id: String) {
+    fn spawn_retention_loop(self: &Arc<Self>) {
+        let manager = Arc::clone(self);
+        let interval_secs = self.settings.retention_secs.saturating_div(2).clamp(1, 60);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            interval.tick().await;
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        if let Err(error) = manager.enforce_retention().await {
+                            tracing::error!(error_code = ?error.code, "durable job retention failed");
+                        }
+                    }
+                    () = manager.shutdown.cancelled() => break,
+                }
+            }
+        });
+    }
+
+    async fn enforce_retention(&self) -> Result<(), BridgeError> {
+        match self
+            .store
+            .prune(
+                unix_timestamp(),
+                self.settings.retention_secs,
+                self.settings.max_retained,
+            )
+            .await
+        {
+            Ok(_) => {
+                self.retention_healthy.store(true, Ordering::Release);
+                Ok(())
+            }
+            Err(error) => {
+                self.retention_healthy.store(false, Ordering::Release);
+                Err(error)
+            }
+        }
+    }
+
+    fn schedule(self: &Arc<Self>, auth_scope: String, id: String) {
         let manager = Arc::clone(self);
         tokio::spawn(async move {
-            if let Err(error) = manager.run(id.clone()).await {
+            if let Err(error) = manager.run(auth_scope, id.clone()).await {
                 tracing::warn!(job_id = %id, error_code = ?error.code, "durable job worker failed");
             }
         });
     }
 
-    async fn run(self: &Arc<Self>, id: String) -> Result<(), BridgeError> {
+    async fn run(self: &Arc<Self>, auth_scope: String, id: String) -> Result<(), BridgeError> {
         let permit = tokio::select! {
             permit = Arc::clone(&self.permits).acquire_owned() => permit.map_err(|_| {
                 BridgeError::new(ErrorCode::Internal, "durable job worker pool closed")
             })?,
             () = self.shutdown.cancelled() => return Ok(()),
         };
-        if !self.store.claim(&id, unix_timestamp()).await? {
+        if !self.store.claim(&auth_scope, &id, unix_timestamp()).await? {
             return Ok(());
         }
 
         let cancellation = self.shutdown.child_token();
+        let key = (auth_scope.clone(), id.clone());
         self.active
             .lock()
             .await
-            .insert(id.clone(), cancellation.clone());
+            .insert(key.clone(), cancellation.clone());
         self.active_changed.notify_waiters();
-        let result = self.execute_claimed(&id, cancellation.clone()).await;
-        self.active.lock().await.remove(&id);
-        self.partials.lock().await.remove(&id);
+        let result = self
+            .execute_claimed(&auth_scope, &id, cancellation.clone())
+            .await;
+        self.active.lock().await.remove(&key);
+        self.partials.lock().await.remove(&key);
         self.active_changed.notify_waiters();
         drop(permit);
 
         match result {
-            Ok(response) => self.store.succeed(&id, &response, unix_timestamp()).await,
+            Ok(response) => {
+                self.store
+                    .succeed(&auth_scope, &id, &response, unix_timestamp())
+                    .await?;
+                self.enforce_retention().await
+            }
             Err(error) => {
                 let status = if self.shutdown.is_cancelled() {
                     ImageJobStatus::Interrupted
@@ -242,17 +337,21 @@ impl JobManager {
                 } else {
                     ImageJobStatus::Failed
                 };
-                self.store.fail(&id, status, &error, unix_timestamp()).await
+                self.store
+                    .fail(&auth_scope, &id, status, &error, unix_timestamp())
+                    .await?;
+                self.enforce_retention().await
             }
         }
     }
 
     async fn execute_claimed(
         &self,
+        auth_scope: &str,
         id: &str,
         cancellation: CancellationToken,
     ) -> Result<imagegen_bridge_core::ImageResponse, BridgeError> {
-        let job = self.store.get(id).await?;
+        let job = self.store.get(auth_scope, id).await?;
         if job.cancel_requested {
             cancellation.cancel();
         }
@@ -271,12 +370,12 @@ impl JobManager {
             tokio::select! {
                 biased;
                 event = receiver.recv() => match event {
-                    Some(event) => self.handle_job_event(id, event, &mut partial_images).await,
+                    Some(event) => self.handle_job_event(auth_scope, id, event, &mut partial_images).await,
                     None => return execution.await,
                 },
                 result = &mut execution => {
                     while let Ok(event) = receiver.try_recv() {
-                        self.handle_job_event(id, event, &mut partial_images).await;
+                        self.handle_job_event(auth_scope, id, event, &mut partial_images).await;
                     }
                     return result;
                 },
@@ -284,11 +383,20 @@ impl JobManager {
         }
     }
 
-    async fn handle_job_event(&self, id: &str, event: ProviderEvent, partial_images: &mut u32) {
+    async fn handle_job_event(
+        &self,
+        auth_scope: &str,
+        id: &str,
+        event: ProviderEvent,
+        partial_images: &mut u32,
+    ) {
         match event {
-            ProviderEvent::Started => self.progress(id, "provider", *partial_images).await,
+            ProviderEvent::Started => {
+                self.progress(auth_scope, id, "provider", *partial_images)
+                    .await;
+            }
             ProviderEvent::Progress { .. } => {
-                self.progress(id, "provider_progress", *partial_images)
+                self.progress(auth_scope, id, "provider_progress", *partial_images)
                     .await;
             }
             ProviderEvent::PartialImage {
@@ -297,21 +405,26 @@ impl JobManager {
                 b64_json,
             } => {
                 *partial_images = partial_images.saturating_add(1);
-                if let Err(error) = self.cache_partial(id, index, partial_index, b64_json).await {
+                if let Err(error) = self
+                    .cache_partial(auth_scope, id, index, partial_index, b64_json)
+                    .await
+                {
                     tracing::warn!(job_id = %id, error_code = ?error.code, "ignored invalid partial preview");
                 }
-                self.progress(id, "partial_image", *partial_images).await;
+                self.progress(auth_scope, id, "partial_image", *partial_images)
+                    .await;
             }
             ProviderEvent::Completed { .. } => {
-                self.progress(id, "materializing", *partial_images).await;
+                self.progress(auth_scope, id, "materializing", *partial_images)
+                    .await;
             }
         }
     }
 
-    async fn progress(&self, id: &str, stage: &str, partial_images: u32) {
+    async fn progress(&self, auth_scope: &str, id: &str, stage: &str, partial_images: u32) {
         if let Err(error) = self
             .store
-            .progress(id, stage, partial_images, unix_timestamp())
+            .progress(auth_scope, id, stage, partial_images, unix_timestamp())
             .await
         {
             tracing::warn!(job_id = %id, error_code = ?error.code, "could not persist job progress");
@@ -320,6 +433,7 @@ impl JobManager {
 
     async fn cache_partial(
         &self,
+        auth_scope: &str,
         id: &str,
         output_index: u8,
         partial_index: u8,
@@ -361,7 +475,10 @@ impl JobManager {
                 "partial preview validation task failed",
             )
         })??;
-        self.partials.lock().await.insert(id.to_owned(), preview);
+        self.partials
+            .lock()
+            .await
+            .insert((auth_scope.to_owned(), id.to_owned()), preview);
         Ok(())
     }
 }

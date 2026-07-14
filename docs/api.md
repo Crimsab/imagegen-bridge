@@ -55,6 +55,17 @@ request plus a verified result or structured terminal error. List responses
 contain only `ImageJobSummary` records, so inline request images are not copied
 into history pages.
 
+`Idempotency-Key` on job creation is durable rather than process-local. For the
+retention lifetime, the same authorization scope, key, and generation request
+returns the original job ID without scheduling another provider call. Reusing
+that key with a different generation request returns `409`. The key is hashed
+before persistence and omitted from the stored request. Job ownership is
+enforced in SQLite for detail, list, cancellation, history updates, and partial
+previews; another scope receives the same `404` as an unknown ID. Bearer token
+rotation intentionally creates a new history scope. Rows created by older
+schema versions are quarantined as `legacy-unowned` instead of being assigned
+silently to a newly configured bearer.
+
 The queue is bounded by `server.jobs.max_pending`; workers are independently
 bounded by `server.jobs.max_running`. Cancellation is persisted before an
 active provider token is signaled. Queued jobs are immediately terminal;

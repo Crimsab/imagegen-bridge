@@ -144,12 +144,14 @@ pub fn openapi_document() -> Value {
                     "operationId":"createImageJob",
                     "tags":["jobs"],
                     "security":[{"bridgeBearer":[]}],
-                    "description":"Persists and schedules an image operation. Durable jobs always use artifact delivery.",
+                    "description":"Persists and schedules an image operation. Durable jobs always use artifact delivery. Replaying the same Idempotency-Key in the same authorization scope with an identical request returns the original job without scheduling duplicate provider work.",
+                    "parameters":[{"name":"Idempotency-Key","in":"header","schema":{"type":"string","minLength":1,"maxLength":512}}],
                     "requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ImageRequest"},"example":native_request_example()}}},
                     "responses": {
                         "202": json_response("Job accepted", json!({"$ref":"#/components/schemas/ImageJob"}), job_example("queued")),
                         "400": error_response("Invalid input or unsupported capability"),
                         "401": error_response("Bridge authentication required"),
+                        "409": error_response("Idempotency key conflicts with a different request"),
                         "422": error_response("Request validation failed"),
                         "503": error_response("Durable queue is full")
                     }

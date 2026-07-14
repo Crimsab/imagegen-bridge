@@ -6,12 +6,24 @@ use imagegen_bridge_core::{
     BridgeError, ErrorCode, ImageJob, ImageJobProgress, ImageJobStatus, ImageJobSummary,
     ImageRequest, ImageResponse,
 };
+use sha2::{Digest as _, Sha256};
 use tokio_rusqlite::{
     Connection, params,
-    rusqlite::{OptionalExtension as _, params_from_iter, types::Value as SqlValue},
+    rusqlite::{
+        OptionalExtension as _, TransactionBehavior, params_from_iter, types::Value as SqlValue,
+    },
 };
 
-const CURRENT_MIGRATION: u32 = 2;
+const CURRENT_MIGRATION: u32 = 3;
+
+/// Result of atomically submitting a durable job.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SqliteJobSubmission {
+    /// Canonical durable job selected by the submission identity.
+    pub job: ImageJob,
+    /// Whether this call inserted and must schedule the job.
+    pub created: bool,
+}
 
 /// Visibility constraint applied before durable history pagination.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -130,6 +142,13 @@ pub struct SqliteImageJobStore {
     connection: Connection,
 }
 
+enum CreateOutcome {
+    Created(String),
+    Replay(String),
+    Conflict,
+    Full,
+}
+
 impl std::fmt::Debug for SqliteImageJobStore {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -220,6 +239,35 @@ impl SqliteImageJobStore {
                      INSERT OR IGNORE INTO job_schema_migrations(version, applied_at)
                        VALUES (2, unixepoch());",
                 )?;
+                let columns = transaction
+                    .prepare("PRAGMA table_info(image_jobs)")?
+                    .query_map([], |row| row.get::<_, String>(1))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                if !columns.iter().any(|name| name == "auth_scope") {
+                    transaction.execute_batch(
+                        "ALTER TABLE image_jobs ADD COLUMN auth_scope TEXT NOT NULL
+                           DEFAULT 'legacy-unowned';",
+                    )?;
+                }
+                if !columns.iter().any(|name| name == "submission_key_hash") {
+                    transaction.execute_batch(
+                        "ALTER TABLE image_jobs ADD COLUMN submission_key_hash TEXT;",
+                    )?;
+                }
+                if !columns.iter().any(|name| name == "request_fingerprint") {
+                    transaction.execute_batch(
+                        "ALTER TABLE image_jobs ADD COLUMN request_fingerprint TEXT;",
+                    )?;
+                }
+                transaction.execute_batch(
+                    "CREATE INDEX IF NOT EXISTS image_jobs_scope_history_idx
+                       ON image_jobs(auth_scope, deleted_at, favorite, created_at DESC, id DESC);
+                     CREATE UNIQUE INDEX IF NOT EXISTS image_jobs_submission_idx
+                       ON image_jobs(auth_scope, submission_key_hash)
+                       WHERE submission_key_hash IS NOT NULL;
+                     INSERT OR IGNORE INTO job_schema_migrations(version, applied_at)
+                       VALUES (3, unixepoch());",
+                )?;
                 transaction.commit()?;
                 Ok::<(), tokio_rusqlite::rusqlite::Error>(())
             })
@@ -239,42 +287,107 @@ impl SqliteImageJobStore {
     /// Inserts a queued request if bounded pending capacity remains.
     pub async fn create(
         &self,
+        auth_scope: &str,
         id: &str,
         request: &ImageRequest,
         now: u64,
         max_pending: usize,
-    ) -> Result<ImageJob, BridgeError> {
-        let request_json = serde_json::to_string(request)
+    ) -> Result<SqliteJobSubmission, BridgeError> {
+        validate_auth_scope(auth_scope)?;
+        let mut persisted_request = request.clone();
+        persisted_request.idempotency_key = None;
+        let request_json = serde_json::to_string(&persisted_request)
             .map_err(|_| job_error("could not encode job request"))?;
         let prompt_search = request.prompt.to_lowercase();
+        if let Some(key) = request.idempotency_key.as_deref() {
+            validate_submission_key(key)?;
+        }
+        let submission_key_hash = request
+            .idempotency_key
+            .as_deref()
+            .map(|key| format!("{:x}", Sha256::digest(key.as_bytes())));
+        let request_fingerprint = submission_key_hash
+            .as_ref()
+            .map(|_| durable_request_fingerprint(request))
+            .transpose()?;
+        let auth_scope = auth_scope.to_owned();
+        let lookup_scope = auth_scope.clone();
         let id = id.to_owned();
-        let lookup_id = id.clone();
         let now = to_i64(now)?;
         let max_pending = i64::try_from(max_pending).unwrap_or(i64::MAX);
-        self.connection
+        let outcome = self
+            .connection
             .call(move |connection| {
-                let transaction = connection.transaction()?;
+                let transaction =
+                    connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                if let Some(key_hash) = submission_key_hash.as_deref() {
+                    let existing: Option<(String, String)> = transaction
+                        .query_row(
+                            "SELECT id,request_fingerprint FROM image_jobs
+                             WHERE auth_scope=?1 AND submission_key_hash=?2",
+                            params![auth_scope, key_hash],
+                            |row| Ok((row.get(0)?, row.get(1)?)),
+                        )
+                        .optional()?;
+                    if let Some((existing_id, existing_fingerprint)) = existing {
+                        return Ok(
+                            if request_fingerprint.as_deref() == Some(existing_fingerprint.as_str())
+                            {
+                                CreateOutcome::Replay(existing_id)
+                            } else {
+                                CreateOutcome::Conflict
+                            },
+                        );
+                    }
+                }
                 let pending: i64 = transaction.query_row(
                     "SELECT COUNT(*) FROM image_jobs WHERE status = 'queued'",
                     [],
                     |row| row.get(0),
                 )?;
                 if pending >= max_pending {
-                    return Err(tokio_rusqlite::rusqlite::Error::ExecuteReturnedResults);
+                    return Ok(CreateOutcome::Full);
                 }
                 transaction.execute(
-                    "INSERT INTO image_jobs(id,status,created_at,updated_at,request_json,prompt_search)
-                     VALUES (?1,'queued',?2,?2,?3,?4)",
-                    params![id, now, request_json, prompt_search],
+                    "INSERT INTO image_jobs(
+                       id,status,created_at,updated_at,request_json,prompt_search,auth_scope,
+                       submission_key_hash,request_fingerprint
+                     ) VALUES (?1,'queued',?2,?2,?3,?4,?5,?6,?7)",
+                    params![
+                        id,
+                        now,
+                        request_json,
+                        prompt_search,
+                        auth_scope,
+                        submission_key_hash,
+                        request_fingerprint
+                    ],
                 )?;
                 transaction.commit()?;
-                Ok::<(), tokio_rusqlite::rusqlite::Error>(())
+                Ok::<_, tokio_rusqlite::rusqlite::Error>(CreateOutcome::Created(id))
             })
             .await
-            .map_err(|_| {
-                BridgeError::new(ErrorCode::Overloaded, "durable job queue is full").retryable(true)
-            })?;
-        self.get(lookup_id.as_str()).await
+            .map_err(|_| job_error("could not submit durable job"))?;
+        let (lookup_id, created) = match outcome {
+            CreateOutcome::Created(id) => (id, true),
+            CreateOutcome::Replay(id) => (id, false),
+            CreateOutcome::Conflict => {
+                return Err(BridgeError::new(
+                    ErrorCode::IdempotencyConflict,
+                    "idempotency key was already used for a different request",
+                ));
+            }
+            CreateOutcome::Full => {
+                return Err(
+                    BridgeError::new(ErrorCode::Overloaded, "durable job queue is full")
+                        .retryable(true),
+                );
+            }
+        };
+        Ok(SqliteJobSubmission {
+            job: self.get(lookup_scope.as_str(), lookup_id.as_str()).await?,
+            created,
+        })
     }
 
     /// Returns bounded aggregate counters without request, prompt, or path data.
@@ -356,8 +469,31 @@ impl SqliteImageJobStore {
             .map_err(|_| job_error("could not recover interrupted jobs"))
     }
 
+    /// Returns oldest-first queued identities across ownership scopes for crash recovery.
+    pub async fn queued_identities(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(String, String)>, BridgeError> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        self.connection
+            .call(move |connection| {
+                let mut statement = connection.prepare(
+                    "SELECT auth_scope,id FROM image_jobs
+                     WHERE status='queued'
+                     ORDER BY created_at ASC,id ASC LIMIT ?1",
+                )?;
+                statement
+                    .query_map([limit], |row| Ok((row.get(0)?, row.get(1)?)))?
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .await
+            .map_err(|_| job_error("could not list queued durable jobs"))
+    }
+
     /// Atomically claims one queued job for execution.
-    pub async fn claim(&self, id: &str, now: u64) -> Result<bool, BridgeError> {
+    pub async fn claim(&self, auth_scope: &str, id: &str, now: u64) -> Result<bool, BridgeError> {
+        validate_auth_scope(auth_scope)?;
+        let auth_scope = auth_scope.to_owned();
         let id = id.to_owned();
         let now = to_i64(now)?;
         self.connection
@@ -365,8 +501,8 @@ impl SqliteImageJobStore {
                 connection.execute(
                     "UPDATE image_jobs
                      SET status='running', started_at=?2, updated_at=?2, progress_stage='starting'
-                     WHERE id=?1 AND status='queued' AND cancel_requested=0",
-                    params![id, now],
+                     WHERE id=?1 AND auth_scope=?3 AND status='queued' AND cancel_requested=0",
+                    params![id, now, auth_scope],
                 )
             })
             .await
@@ -377,11 +513,13 @@ impl SqliteImageJobStore {
     /// Stores only the latest safe progress label and partial count.
     pub async fn progress(
         &self,
+        auth_scope: &str,
         id: &str,
         stage: &str,
         partial_images: u32,
         now: u64,
     ) -> Result<(), BridgeError> {
+        validate_auth_scope(auth_scope)?;
         if stage.is_empty()
             || stage.len() > 64
             || !stage
@@ -391,6 +529,7 @@ impl SqliteImageJobStore {
             return Err(job_error("job progress stage is invalid"));
         }
         let id = id.to_owned();
+        let auth_scope = auth_scope.to_owned();
         let stage = stage.to_owned();
         let partial_images = i64::from(partial_images);
         let now = to_i64(now)?;
@@ -399,8 +538,8 @@ impl SqliteImageJobStore {
                 connection.execute(
                     "UPDATE image_jobs
                      SET progress_stage=?2, partial_images=?3, updated_at=?4
-                     WHERE id=?1 AND status='running'",
-                    params![id, stage, partial_images, now],
+                     WHERE id=?1 AND auth_scope=?5 AND status='running'",
+                    params![id, stage, partial_images, now, auth_scope],
                 )?;
                 Ok::<(), tokio_rusqlite::rusqlite::Error>(())
             })
@@ -411,19 +550,28 @@ impl SqliteImageJobStore {
     /// Stores a verified terminal result.
     pub async fn succeed(
         &self,
+        auth_scope: &str,
         id: &str,
         response: &ImageResponse,
         now: u64,
     ) -> Result<(), BridgeError> {
         let encoded = serde_json::to_string(response)
             .map_err(|_| job_error("could not encode job result"))?;
-        self.finish(id, ImageJobStatus::Succeeded, Some(encoded), None, now)
-            .await
+        self.finish(
+            auth_scope,
+            id,
+            ImageJobStatus::Succeeded,
+            Some(encoded),
+            None,
+            now,
+        )
+        .await
     }
 
     /// Stores a structured terminal error or cancellation.
     pub async fn fail(
         &self,
+        auth_scope: &str,
         id: &str,
         status: ImageJobStatus,
         error: &BridgeError,
@@ -437,17 +585,21 @@ impl SqliteImageJobStore {
         }
         let encoded =
             serde_json::to_string(error).map_err(|_| job_error("could not encode job error"))?;
-        self.finish(id, status, None, Some(encoded), now).await
+        self.finish(auth_scope, id, status, None, Some(encoded), now)
+            .await
     }
 
     async fn finish(
         &self,
+        auth_scope: &str,
         id: &str,
         status: ImageJobStatus,
         response: Option<String>,
         error: Option<String>,
         now: u64,
     ) -> Result<(), BridgeError> {
+        validate_auth_scope(auth_scope)?;
+        let auth_scope = auth_scope.to_owned();
         let id = id.to_owned();
         let status = status_name(status).to_owned();
         let now = to_i64(now)?;
@@ -457,8 +609,8 @@ impl SqliteImageJobStore {
                     "UPDATE image_jobs
                      SET status=?2, updated_at=?3, completed_at=?3, progress_stage='completed',
                          response_json=?4, error_json=?5
-                     WHERE id=?1 AND status='running'",
-                    params![id, status, now, response, error],
+                     WHERE id=?1 AND auth_scope=?6 AND status='running'",
+                    params![id, status, now, response, error, auth_scope],
                 )?;
                 if changed != 1 {
                     return Err(tokio_rusqlite::rusqlite::Error::QueryReturnedNoRows);
@@ -470,7 +622,15 @@ impl SqliteImageJobStore {
     }
 
     /// Durably requests cancellation and immediately cancels queued work.
-    pub async fn request_cancel(&self, id: &str, now: u64) -> Result<ImageJob, BridgeError> {
+    pub async fn request_cancel(
+        &self,
+        auth_scope: &str,
+        id: &str,
+        now: u64,
+    ) -> Result<ImageJob, BridgeError> {
+        validate_auth_scope(auth_scope)?;
+        let auth_scope = auth_scope.to_owned();
+        let lookup_scope = auth_scope.clone();
         let id = id.to_owned();
         let lookup_id = id.clone();
         let now = to_i64(now)?;
@@ -478,23 +638,26 @@ impl SqliteImageJobStore {
             .call(move |connection| {
                 let transaction = connection.transaction()?;
                 let status: Option<String> = transaction
-                    .query_row("SELECT status FROM image_jobs WHERE id=?1", [&id], |row| {
-                        row.get(0)
-                    })
+                    .query_row(
+                        "SELECT status FROM image_jobs WHERE id=?1 AND auth_scope=?2",
+                        params![id, auth_scope],
+                        |row| row.get(0),
+                    )
                     .optional()?;
                 match status.as_deref() {
                     Some("queued") => {
                         transaction.execute(
                             "UPDATE image_jobs SET status='cancelled', cancel_requested=1,
                              updated_at=?2, completed_at=?2, progress_stage='completed'
-                             WHERE id=?1",
-                            params![id, now],
+                             WHERE id=?1 AND auth_scope=?3",
+                            params![id, now, auth_scope],
                         )?;
                     }
                     Some("running") => {
                         transaction.execute(
-                            "UPDATE image_jobs SET cancel_requested=1, updated_at=?2 WHERE id=?1",
-                            params![id, now],
+                            "UPDATE image_jobs SET cancel_requested=1, updated_at=?2
+                             WHERE id=?1 AND auth_scope=?3",
+                            params![id, now, auth_scope],
                         )?;
                     }
                     Some(_) => {}
@@ -505,11 +668,13 @@ impl SqliteImageJobStore {
             })
             .await
             .map_err(|_| not_found())?;
-        self.get(lookup_id.as_str()).await
+        self.get(lookup_scope.as_str(), lookup_id.as_str()).await
     }
 
     /// Returns one complete job record.
-    pub async fn get(&self, id: &str) -> Result<ImageJob, BridgeError> {
+    pub async fn get(&self, auth_scope: &str, id: &str) -> Result<ImageJob, BridgeError> {
+        validate_auth_scope(auth_scope)?;
+        let auth_scope = auth_scope.to_owned();
         let id = id.to_owned();
         let row = self
             .connection
@@ -519,8 +684,8 @@ impl SqliteImageJobStore {
                         "SELECT id,status,created_at,updated_at,started_at,completed_at,
                                 request_json,progress_stage,partial_images,response_json,error_json,
                                 cancel_requested,favorite,deleted_at
-                         FROM image_jobs WHERE id=?1",
-                        [id],
+                         FROM image_jobs WHERE id=?1 AND auth_scope=?2",
+                        params![id, auth_scope],
                         read_job_row,
                     )
                     .optional()
@@ -534,8 +699,11 @@ impl SqliteImageJobStore {
     /// Lists newest-first summaries using a stable `(created,id)` cursor.
     pub async fn list(
         &self,
+        auth_scope: &str,
         filter: ImageJobListFilter,
     ) -> Result<Vec<ImageJobSummary>, BridgeError> {
+        validate_auth_scope(auth_scope)?;
+        let auth_scope = auth_scope.to_owned();
         let before_created = filter
             .before
             .as_ref()
@@ -552,8 +720,8 @@ impl SqliteImageJobStore {
         let rows = self
             .connection
             .call(move |connection| {
-                let mut predicates = Vec::new();
-                let mut parameters = Vec::new();
+                let mut predicates = vec!["auth_scope=?"];
+                let mut parameters = vec![SqlValue::Text(auth_scope)];
                 match visibility {
                     ImageJobVisibility::Active => predicates.push("deleted_at IS NULL"),
                     ImageJobVisibility::Hidden => predicates.push("deleted_at IS NOT NULL"),
@@ -602,18 +770,20 @@ impl SqliteImageJobStore {
     /// Updates favorite and soft-delete gallery state without removing job evidence.
     pub async fn update_history(
         &self,
+        auth_scope: &str,
         id: &str,
         favorite: Option<bool>,
         deleted: Option<bool>,
         now: u64,
     ) -> Result<ImageJob, BridgeError> {
+        validate_auth_scope(auth_scope)?;
         if favorite.is_none() && deleted.is_none() {
             return Err(BridgeError::new(
                 ErrorCode::InvalidRequest,
                 "history update must change favorite or deleted state",
             ));
         }
-        let existing = self.get(id).await?;
+        let existing = self.get(auth_scope, id).await?;
         if deleted.is_some() && !existing.summary.status.terminal() {
             return Err(BridgeError::new(
                 ErrorCode::InvalidRequest,
@@ -622,6 +792,8 @@ impl SqliteImageJobStore {
             .with_detail("field", "deleted"));
         }
         let id = id.to_owned();
+        let auth_scope = auth_scope.to_owned();
+        let lookup_scope = auth_scope.clone();
         let lookup_id = id.clone();
         let now = to_i64(now)?;
         self.connection
@@ -632,8 +804,8 @@ impl SqliteImageJobStore {
                          deleted_at=CASE WHEN ?3 IS NULL THEN deleted_at
                                          WHEN ?3 THEN ?4 ELSE NULL END,
                          updated_at=?4
-                     WHERE id=?1",
-                    params![id, favorite, deleted, now],
+                     WHERE id=?1 AND auth_scope=?5",
+                    params![id, favorite, deleted, now, auth_scope],
                 )?;
                 if changed != 1 {
                     return Err(tokio_rusqlite::rusqlite::Error::QueryReturnedNoRows);
@@ -642,7 +814,7 @@ impl SqliteImageJobStore {
             })
             .await
             .map_err(|_| job_error("could not update durable job history"))?;
-        self.get(&lookup_id).await
+        self.get(&lookup_scope, &lookup_id).await
     }
 
     /// Removes terminal records outside time/count retention bounds.
@@ -843,6 +1015,37 @@ fn literal_like_pattern(value: &str) -> String {
     pattern
 }
 
+fn durable_request_fingerprint(request: &ImageRequest) -> Result<String, BridgeError> {
+    let mut canonical = request.clone();
+    canonical.idempotency_key = None;
+    canonical.timeout_ms = None;
+    let encoded = serde_json::to_vec(&canonical)
+        .map_err(|_| job_error("could not fingerprint durable job request"))?;
+    Ok(format!("{:x}", Sha256::digest(encoded)))
+}
+
+fn validate_auth_scope(scope: &str) -> Result<(), BridgeError> {
+    if scope.is_empty() || scope.len() > 256 || scope.chars().any(char::is_control) {
+        Err(BridgeError::new(
+            ErrorCode::InvalidRequest,
+            "durable job authorization scope is invalid",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_submission_key(key: &str) -> Result<(), BridgeError> {
+    if key.trim().is_empty() || key.len() > 512 || key.chars().any(char::is_control) {
+        Err(BridgeError::new(
+            ErrorCode::InvalidRequest,
+            "durable job idempotency key is invalid",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 fn not_found() -> BridgeError {
     BridgeError::new(ErrorCode::InvalidRequest, "durable job was not found")
         .with_detail("resource", "job")
@@ -856,7 +1059,11 @@ fn job_error(message: impl Into<String>) -> BridgeError {
 mod tests {
     #![allow(clippy::unwrap_used)]
 
+    use std::sync::Arc;
+
     use super::*;
+
+    const SCOPE: &str = "test-scope";
 
     fn fixture_response(id: &str) -> ImageResponse {
         ImageResponse {
@@ -883,41 +1090,62 @@ mod tests {
         let path = directory.path().join("jobs.sqlite3");
         let store = SqliteImageJobStore::open(&path).await.unwrap();
         store
-            .create("019f-job-a", &ImageRequest::generate("first"), 10, 10)
+            .create(
+                SCOPE,
+                "019f-job-a",
+                &ImageRequest::generate("first"),
+                10,
+                10,
+            )
             .await
             .unwrap();
         store
-            .create("019f-job-b", &ImageRequest::generate("second"), 11, 10)
+            .create(
+                SCOPE,
+                "019f-job-b",
+                &ImageRequest::generate("second"),
+                11,
+                10,
+            )
             .await
             .unwrap();
-        assert!(store.claim("019f-job-a", 12).await.unwrap());
+        assert!(store.claim(SCOPE, "019f-job-a", 12).await.unwrap());
         store
-            .progress("019f-job-a", "provider", 2, 13)
+            .progress(SCOPE, "019f-job-a", "provider", 2, 13)
             .await
             .unwrap();
         let response = fixture_response("019f-job-a");
-        store.succeed("019f-job-a", &response, 14).await.unwrap();
+        store
+            .succeed(SCOPE, "019f-job-a", &response, 14)
+            .await
+            .unwrap();
         let first = store
-            .list(ImageJobListFilter {
-                limit: 1,
-                ..ImageJobListFilter::default()
-            })
+            .list(
+                SCOPE,
+                ImageJobListFilter {
+                    limit: 1,
+                    ..ImageJobListFilter::default()
+                },
+            )
             .await
             .unwrap();
         assert_eq!(first[0].id, "019f-job-b");
         let second = store
-            .list(ImageJobListFilter {
-                before: Some((first[0].created, first[0].id.clone())),
-                limit: 2,
-                ..ImageJobListFilter::default()
-            })
+            .list(
+                SCOPE,
+                ImageJobListFilter {
+                    before: Some((first[0].created, first[0].id.clone())),
+                    limit: 2,
+                    ..ImageJobListFilter::default()
+                },
+            )
             .await
             .unwrap();
         assert_eq!(second[0].id, "019f-job-a");
         store.close().await.unwrap();
 
         let reopened = SqliteImageJobStore::open(&path).await.unwrap();
-        let job = reopened.get("019f-job-a").await.unwrap();
+        let job = reopened.get(SCOPE, "019f-job-a").await.unwrap();
         assert_eq!(job.summary.status, ImageJobStatus::Succeeded);
         assert_eq!(job.summary.progress.unwrap().partial_images, 2);
         assert_eq!(job.result.unwrap().id, "019f-job-a");
@@ -930,12 +1158,12 @@ mod tests {
             .await
             .unwrap();
         store
-            .create("019f-job", &ImageRequest::generate("test"), 10, 10)
+            .create(SCOPE, "019f-job", &ImageRequest::generate("test"), 10, 10)
             .await
             .unwrap();
-        store.claim("019f-job", 11).await.unwrap();
+        store.claim(SCOPE, "019f-job", 11).await.unwrap();
         assert_eq!(store.recover_interrupted(12).await.unwrap(), 1);
-        let job = store.get("019f-job").await.unwrap();
+        let job = store.get(SCOPE, "019f-job").await.unwrap();
         assert_eq!(job.summary.status, ImageJobStatus::Interrupted);
         assert!(!job.error.unwrap().retryable);
     }
@@ -947,13 +1175,13 @@ mod tests {
             .await
             .unwrap();
         store
-            .create("019f-job", &ImageRequest::generate("test"), 10, 10)
+            .create(SCOPE, "019f-job", &ImageRequest::generate("test"), 10, 10)
             .await
             .unwrap();
-        let job = store.request_cancel("019f-job", 11).await.unwrap();
+        let job = store.request_cancel(SCOPE, "019f-job", 11).await.unwrap();
         assert_eq!(job.summary.status, ImageJobStatus::Cancelled);
         assert!(job.cancel_requested);
-        assert!(!store.claim("019f-job", 12).await.unwrap());
+        assert!(!store.claim(SCOPE, "019f-job", 12).await.unwrap());
 
         let statistics = store.statistics().await.unwrap();
         assert_eq!(statistics.total, 1);
@@ -971,16 +1199,144 @@ mod tests {
             .await
             .unwrap();
         store
-            .create("019f-job-a", &ImageRequest::generate("first"), 10, 1)
+            .create(SCOPE, "019f-job-a", &ImageRequest::generate("first"), 10, 1)
             .await
             .unwrap();
         let error = store
-            .create("019f-job-b", &ImageRequest::generate("second"), 11, 1)
+            .create(
+                SCOPE,
+                "019f-job-b",
+                &ImageRequest::generate("second"),
+                11,
+                1,
+            )
             .await
             .unwrap_err();
         assert_eq!(error.code, ErrorCode::Overloaded);
         assert!(error.retryable);
-        assert!(store.get("019f-job-b").await.is_err());
+        assert!(store.get(SCOPE, "019f-job-b").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn submission_idempotency_is_atomic_scoped_and_persistent() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("jobs.sqlite3");
+        let store = SqliteImageJobStore::open(&path).await.unwrap();
+        let mut request = ImageRequest::generate("same request");
+        request.idempotency_key = Some("durable-key".to_owned());
+
+        let first = store
+            .create("scope-a", "019f-job-a", &request, 10, 1)
+            .await
+            .unwrap();
+        assert!(first.created);
+        assert_eq!(first.job.summary.id, "019f-job-a");
+        assert_eq!(first.job.request.idempotency_key, None);
+
+        let replay = store
+            .create("scope-a", "019f-job-b", &request, 11, 1)
+            .await
+            .unwrap();
+        assert!(!replay.created);
+        assert_eq!(replay.job.summary.id, "019f-job-a");
+
+        let other_scope = store
+            .create("scope-b", "019f-job-c", &request, 12, 2)
+            .await
+            .unwrap();
+        assert!(other_scope.created);
+        assert_eq!(other_scope.job.summary.id, "019f-job-c");
+
+        let mut conflict = request.clone();
+        conflict.prompt = "different request".to_owned();
+        let error = store
+            .create("scope-a", "019f-job-d", &conflict, 13, 2)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::IdempotencyConflict);
+        store.close().await.unwrap();
+
+        let reopened = SqliteImageJobStore::open(&path).await.unwrap();
+        let replay = reopened
+            .create("scope-a", "019f-job-e", &request, 14, 1)
+            .await
+            .unwrap();
+        assert!(!replay.created);
+        assert_eq!(replay.job.summary.id, "019f-job-a");
+    }
+
+    #[tokio::test]
+    async fn caller_operations_never_cross_authorization_scopes() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SqliteImageJobStore::open(&directory.path().join("jobs.sqlite3"))
+            .await
+            .unwrap();
+        store
+            .create(
+                "scope-a",
+                "019f-owned",
+                &ImageRequest::generate("private"),
+                10,
+                10,
+            )
+            .await
+            .unwrap();
+
+        assert!(store.get("scope-b", "019f-owned").await.is_err());
+        assert!(
+            store
+                .list(
+                    "scope-b",
+                    ImageJobListFilter {
+                        limit: 10,
+                        ..ImageJobListFilter::default()
+                    },
+                )
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            store
+                .request_cancel("scope-b", "019f-owned", 11)
+                .await
+                .is_err()
+        );
+        assert!(
+            store
+                .update_history("scope-b", "019f-owned", Some(true), None, 11)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            store
+                .get("scope-a", "019f-owned")
+                .await
+                .unwrap()
+                .request
+                .prompt,
+            "private"
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_identical_submissions_converge_on_one_job() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            SqliteImageJobStore::open(&directory.path().join("jobs.sqlite3"))
+                .await
+                .unwrap(),
+        );
+        let mut request = ImageRequest::generate("concurrent request");
+        request.idempotency_key = Some("concurrent-key".to_owned());
+        let first = store.create("scope-a", "019f-first", &request, 10, 10);
+        let second = store.create("scope-a", "019f-second", &request, 10, 10);
+        let (first, second) = tokio::join!(first, second);
+        let first = first.unwrap();
+        let second = second.unwrap();
+        assert_ne!(first.created, second.created);
+        assert_eq!(first.job.summary.id, second.job.summary.id);
+        assert_eq!(store.statistics().await.unwrap().total, 1);
     }
 
     #[cfg(unix)]
@@ -1004,43 +1360,46 @@ mod tests {
             .await
             .unwrap();
         store
-            .create("019f-job", &ImageRequest::generate("test"), 10, 10)
+            .create(SCOPE, "019f-job", &ImageRequest::generate("test"), 10, 10)
             .await
             .unwrap();
         let error = store
-            .update_history("019f-job", None, Some(true), 11)
+            .update_history(SCOPE, "019f-job", None, Some(true), 11)
             .await
             .unwrap_err();
         assert_eq!(error.code, ErrorCode::InvalidRequest);
-        assert!(store.claim("019f-job", 12).await.unwrap());
+        assert!(store.claim(SCOPE, "019f-job", 12).await.unwrap());
         store
-            .succeed("019f-job", &fixture_response("019f-job"), 13)
+            .succeed(SCOPE, "019f-job", &fixture_response("019f-job"), 13)
             .await
             .unwrap();
         let deleted = store
-            .update_history("019f-job", Some(true), Some(true), 14)
+            .update_history(SCOPE, "019f-job", Some(true), Some(true), 14)
             .await
             .unwrap();
         assert!(deleted.summary.favorite);
         assert_eq!(deleted.summary.deleted, Some(14));
         assert!(
             store
-                .list(ImageJobListFilter {
-                    limit: 10,
-                    ..ImageJobListFilter::default()
-                })
+                .list(
+                    SCOPE,
+                    ImageJobListFilter {
+                        limit: 10,
+                        ..ImageJobListFilter::default()
+                    }
+                )
                 .await
                 .unwrap()
                 .is_empty()
         );
         let restored = store
-            .update_history("019f-job", None, Some(false), 15)
+            .update_history(SCOPE, "019f-job", None, Some(false), 15)
             .await
             .unwrap();
         assert_eq!(restored.summary.deleted, None);
         assert_eq!(store.prune(100, 1, 1).await.unwrap(), 0);
         store
-            .update_history("019f-job", Some(false), None, 101)
+            .update_history(SCOPE, "019f-job", Some(false), None, 101)
             .await
             .unwrap();
         assert_eq!(store.prune(102, 1, 1).await.unwrap(), 1);
@@ -1058,88 +1417,106 @@ mod tests {
             ("019f-job-c", "ČERVENÁ liška", 12),
         ] {
             store
-                .create(id, &ImageRequest::generate(prompt), created, 10)
+                .create(SCOPE, id, &ImageRequest::generate(prompt), created, 10)
                 .await
                 .unwrap();
-            assert!(store.claim(id, created + 1).await.unwrap());
+            assert!(store.claim(SCOPE, id, created + 1).await.unwrap());
             store
-                .succeed(id, &fixture_response(id), created + 2)
+                .succeed(SCOPE, id, &fixture_response(id), created + 2)
                 .await
                 .unwrap();
         }
         store
-            .update_history("019f-job-a", Some(true), None, 20)
+            .update_history(SCOPE, "019f-job-a", Some(true), None, 20)
             .await
             .unwrap();
         store
-            .update_history("019f-job-b", None, Some(true), 21)
+            .update_history(SCOPE, "019f-job-b", None, Some(true), 21)
             .await
             .unwrap();
 
         let percent = store
-            .list(ImageJobListFilter {
-                limit: 10,
-                search: Some("100%".to_owned()),
-                favorite: Some(true),
-                ..ImageJobListFilter::default()
-            })
+            .list(
+                SCOPE,
+                ImageJobListFilter {
+                    limit: 10,
+                    search: Some("100%".to_owned()),
+                    favorite: Some(true),
+                    ..ImageJobListFilter::default()
+                },
+            )
             .await
             .unwrap();
         assert_eq!(percent.len(), 1);
         assert_eq!(percent[0].id, "019f-job-a");
 
         let underscore = store
-            .list(ImageJobListFilter {
-                limit: 10,
-                visibility: ImageJobVisibility::Hidden,
-                search: Some("blue_".to_owned()),
-                ..ImageJobListFilter::default()
-            })
+            .list(
+                SCOPE,
+                ImageJobListFilter {
+                    limit: 10,
+                    visibility: ImageJobVisibility::Hidden,
+                    search: Some("blue_".to_owned()),
+                    ..ImageJobListFilter::default()
+                },
+            )
             .await
             .unwrap();
         assert_eq!(underscore.len(), 1);
         assert_eq!(underscore[0].id, "019f-job-b");
 
         let unicode_case = store
-            .list(ImageJobListFilter {
-                limit: 10,
-                search: Some("červená".to_owned()),
-                ..ImageJobListFilter::default()
-            })
+            .list(
+                SCOPE,
+                ImageJobListFilter {
+                    limit: 10,
+                    search: Some("červená".to_owned()),
+                    ..ImageJobListFilter::default()
+                },
+            )
             .await
             .unwrap();
         assert_eq!(unicode_case.len(), 1);
         assert_eq!(unicode_case[0].id, "019f-job-c");
 
         let injection = store
-            .list(ImageJobListFilter {
-                limit: 10,
-                visibility: ImageJobVisibility::All,
-                search: Some("' OR 1=1 --".to_owned()),
-                ..ImageJobListFilter::default()
-            })
+            .list(
+                SCOPE,
+                ImageJobListFilter {
+                    limit: 10,
+                    visibility: ImageJobVisibility::All,
+                    search: Some("' OR 1=1 --".to_owned()),
+                    ..ImageJobListFilter::default()
+                },
+            )
             .await
             .unwrap();
         assert!(injection.is_empty());
 
         let newest_favorite = store
-            .list(ImageJobListFilter {
-                limit: 1,
-                visibility: ImageJobVisibility::All,
-                favorite: Some(true),
-                ..ImageJobListFilter::default()
-            })
+            .list(
+                SCOPE,
+                ImageJobListFilter {
+                    limit: 1,
+                    visibility: ImageJobVisibility::All,
+                    favorite: Some(true),
+                    ..ImageJobListFilter::default()
+                },
+            )
             .await
             .unwrap();
         assert_eq!(newest_favorite[0].id, "019f-job-a");
         let after_favorite = store
-            .list(ImageJobListFilter {
-                before: Some((newest_favorite[0].created, newest_favorite[0].id.clone())),
-                limit: 1,
-                visibility: ImageJobVisibility::All,
-                favorite: Some(true),
-                ..ImageJobListFilter::default()
-            })
+            .list(
+                SCOPE,
+                ImageJobListFilter {
+                    before: Some((newest_favorite[0].created, newest_favorite[0].id.clone())),
+                    limit: 1,
+                    visibility: ImageJobVisibility::All,
+                    favorite: Some(true),
+                    ..ImageJobListFilter::default()
+                },
+            )
             .await
             .unwrap();
         assert!(after_favorite.is_empty());
@@ -1189,18 +1566,21 @@ mod tests {
 
         let store = SqliteImageJobStore::open(&path).await.unwrap();
         let results = store
-            .list(ImageJobListFilter {
-                limit: 10,
-                search: Some("COPPER".to_owned()),
-                ..ImageJobListFilter::default()
-            })
+            .list(
+                "legacy-unowned",
+                ImageJobListFilter {
+                    limit: 10,
+                    search: Some("COPPER".to_owned()),
+                    ..ImageJobListFilter::default()
+                },
+            )
             .await
             .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, "019f-legacy");
         let status = inspect_sqlite_job_schema(&path).await.unwrap();
-        assert_eq!(status.version, Some(2));
-        assert_eq!(status.current_version, 2);
+        assert_eq!(status.version, Some(3));
+        assert_eq!(status.current_version, 3);
         store.close().await.unwrap();
 
         let connection = Connection::open(&path).await.unwrap();
@@ -1216,11 +1596,14 @@ mod tests {
         let repaired = SqliteImageJobStore::open(&path).await.unwrap();
         assert_eq!(
             repaired
-                .list(ImageJobListFilter {
-                    limit: 10,
-                    search: Some("legacy copper".to_owned()),
-                    ..ImageJobListFilter::default()
-                })
+                .list(
+                    "legacy-unowned",
+                    ImageJobListFilter {
+                        limit: 10,
+                        search: Some("legacy copper".to_owned()),
+                        ..ImageJobListFilter::default()
+                    }
+                )
                 .await
                 .unwrap()
                 .len(),
