@@ -22,6 +22,11 @@ on:
         required: false
         default: true
         type: boolean
+      verify_npm_trust:
+        description: Verify npm Trusted Publishing without publishing
+        required: false
+        default: false
+        type: boolean
       publish_container:
         description: Publish the GHCR image
         required: false
@@ -324,6 +329,70 @@ jobs:
             echo "::error::Unexpected registry response: HTTP $package_status"
             exit 1
           fi
+
+  npm-trust:
+    name: Verify npm Trusted Publisher
+    needs: verify
+    if: ${{ inputs.verify_npm_trust }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Exchange the GitHub OIDC token with npm
+        shell: bash
+        run: |
+          set -euo pipefail
+          oidc_response="$(mktemp)"
+          npm_response="$(mktemp)"
+          trap 'rm -f "$oidc_response" "$npm_response"' EXIT
+
+          oidc_status="$(
+            curl --silent --show-error \
+              --output "$oidc_response" \
+              --write-out '%{http_code}' \
+              --max-time 15 \
+              --retry 3 \
+              --retry-connrefused \
+              --header "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=npm:registry.npmjs.org"
+          )"
+          if [[ "$oidc_status" != "200" ]]; then
+            echo "::error::GitHub OIDC token request failed with HTTP $oidc_status."
+            exit 1
+          fi
+
+          id_token="$(jq -er '.value' "$oidc_response")"
+          echo "::add-mask::$id_token"
+
+          npm_status="$(
+            curl --silent --show-error \
+              --request POST \
+              --output "$npm_response" \
+              --write-out '%{http_code}' \
+              --max-time 15 \
+              --retry 3 \
+              --retry-connrefused \
+              --header "Authorization: Bearer $id_token" \
+              "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/imagegen-bridge"
+          )"
+          unset id_token
+
+          if [[ "$npm_status" != "201" ]]; then
+            detail="$(jq -r 'if type == "object" then (.error // .message // "no details") else "no details" end' "$npm_response" 2>/dev/null || echo "no details")"
+            echo "::error::npm rejected the Trusted Publisher exchange with HTTP $npm_status: $detail"
+            exit 1
+          fi
+
+          jq -e '
+            .token_type == "oidc" and
+            (.token | type == "string" and length > 0) and
+            (.created | type == "string" and length > 0) and
+            (.expires | type == "string" and length > 0)
+          ' "$npm_response" >/dev/null
+          echo "npm accepted this repository, workflow, environment, and package as a Trusted Publisher."
 
   ghcr-build:
     name: GHCR build (${{ matrix.platform }})
