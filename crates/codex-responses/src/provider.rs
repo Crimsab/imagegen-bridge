@@ -208,10 +208,22 @@ impl CodexResponsesProvider {
             if request.parameters.failure_policy == MultiImageFailurePolicy::FailFast
                 && let Err(error) = &output.result
             {
-                return Err(error
+                let mut aggregate = error
                     .clone()
                     .with_detail("output_index", output.index)
-                    .with_detail("generation_ms", output.generation_ms));
+                    .with_detail("generation_ms", output.generation_ms);
+                let sibling_may_have_run = request.parameters.n > 1
+                    && (self.config.max_parallel_outputs > 1
+                        || outputs
+                            .iter()
+                            .any(|value: &IndexedOutput| value.result.is_ok()));
+                if sibling_may_have_run {
+                    aggregate = aggregate
+                        .retryable(false)
+                        .with_detail("outcome", "unknown")
+                        .with_detail("retry_scope", "do_not_retry_full_batch");
+                }
+                return Err(aggregate);
             }
             if let Err(error) = &mut output.result {
                 *error = error
@@ -375,10 +387,16 @@ impl CodexResponsesProvider {
             let next = tokio::select! {
                 next = stream.next() => next,
                 () = context.cancellation.cancelled() => {
-                    return Err(BridgeError::new(ErrorCode::Cancelled, "Codex Responses stream was cancelled"));
+                    return Err(post_dispatch_unknown(
+                        ErrorCode::Cancelled,
+                        "Codex Responses stream was cancelled",
+                    ));
                 }
                 () = tokio::time::sleep(context.deadline.saturating_duration_since(Instant::now())) => {
-                    return Err(BridgeError::new(ErrorCode::Timeout, "Codex Responses stream timed out").retryable(true));
+                    return Err(post_dispatch_unknown(
+                        ErrorCode::Timeout,
+                        "Codex Responses stream timed out",
+                    ));
                 }
             };
             let Some(chunk) = next else { break };
@@ -702,10 +720,11 @@ fn http_transport_error(error: &reqwest::Error) -> BridgeError {
     } else {
         ErrorCode::Upstream
     };
-    BridgeError::new(code, "Codex Responses transport failed")
-        // A transport failure after sending a paid generation request has an
-        // ambiguous outcome. Callers may explicitly retry with idempotency,
-        // but the provider must not advertise a blind retry as safe.
+    post_dispatch_unknown(code, "Codex Responses transport failed")
+}
+
+fn post_dispatch_unknown(code: ErrorCode, message: &str) -> BridgeError {
+    BridgeError::new(code, message)
         .retryable(false)
         .with_provider("codex-responses")
         .with_detail("outcome", "unknown")
@@ -1206,6 +1225,102 @@ mod tests {
         server.await.unwrap();
         assert_eq!(max_active.load(Ordering::Acquire), 1);
         assert_eq!(error.details["output_index"], 0);
+        assert!(!error.details.contains_key("outcome"));
+    }
+
+    #[tokio::test]
+    async fn concurrent_fail_fast_never_advertises_a_full_batch_retry() {
+        let (address, server, max_active) =
+            mock_parallel_server(2, Some(0), Duration::from_millis(20)).await;
+        let loader =
+            Arc::new(InputLoader::new(Vec::<PathBuf>::new(), ImageLimits::default()).unwrap());
+        let mut config = CodexResponsesConfig::production(loader).unwrap();
+        config.endpoint = Url::parse(&format!("http://{address}/responses")).unwrap();
+        config.max_parallel_outputs = 2;
+        let provider = CodexResponsesProvider::new(Arc::new(FakeCredentials), config).unwrap();
+        let mut request = ImageRequest::generate("ambiguous batch");
+        request.parameters.n = 2;
+        request.parameters.failure_policy = MultiImageFailurePolicy::FailFast;
+        let error = provider
+            .execute(
+                request,
+                ProviderContext {
+                    request_id: "ambiguous-fail-fast".to_owned(),
+                    deadline: Instant::now() + Duration::from_secs(10),
+                    cancellation: tokio_util::sync::CancellationToken::new(),
+                    events: None,
+                },
+            )
+            .await
+            .unwrap_err();
+        server.await.unwrap();
+        assert_eq!(max_active.load(Ordering::Acquire), 2);
+        assert!(!error.retryable);
+        assert_eq!(error.details["outcome"], "unknown");
+        assert_eq!(error.details["retry_scope"], "do_not_retry_full_batch");
+    }
+
+    #[tokio::test]
+    async fn accepted_stalled_sse_is_a_non_retryable_unknown_outcome() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            let header_end = loop {
+                let read = stream.read(&mut buffer).await.unwrap();
+                request.extend_from_slice(&buffer[..read]);
+                if let Some(position) = request.windows(4).position(|value| value == b"\r\n\r\n") {
+                    break position + 4;
+                }
+            };
+            let headers = std::str::from_utf8(&request[..header_end]).unwrap();
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length: ")
+                        .map(str::to_owned)
+                })
+                .unwrap()
+                .parse::<usize>()
+                .unwrap();
+            while request.len() - header_end < content_length {
+                let read = stream.read(&mut buffer).await.unwrap();
+                request.extend_from_slice(&buffer[..read]);
+            }
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        });
+        let loader =
+            Arc::new(InputLoader::new(Vec::<PathBuf>::new(), ImageLimits::default()).unwrap());
+        let mut config = CodexResponsesConfig::production(loader).unwrap();
+        config.endpoint = Url::parse(&format!("http://{address}/responses")).unwrap();
+        let provider = CodexResponsesProvider::new(Arc::new(FakeCredentials), config).unwrap();
+        let error = provider
+            .execute(
+                ImageRequest::generate("stalled stream"),
+                ProviderContext {
+                    request_id: "stalled-stream".to_owned(),
+                    deadline: Instant::now() + Duration::from_millis(100),
+                    cancellation: tokio_util::sync::CancellationToken::new(),
+                    events: None,
+                },
+            )
+            .await
+            .unwrap_err();
+        server.abort();
+        let _ = server.await;
+        assert_eq!(error.code, ErrorCode::Timeout);
+        assert!(!error.retryable);
+        assert_eq!(error.provider.as_deref(), Some("codex-responses"));
+        assert_eq!(error.details["outcome"], "unknown");
     }
 
     #[test]

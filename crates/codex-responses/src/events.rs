@@ -3,6 +3,8 @@
 use imagegen_bridge_core::{BridgeError, ErrorCode, Usage};
 use serde_json::Value;
 
+pub(crate) const MAX_REVISED_PROMPT_BYTES: usize = 128 * 1024;
+
 #[derive(Default)]
 pub(crate) struct EventState {
     final_image: Option<String>,
@@ -141,6 +143,11 @@ fn capture_image_item(
         .or_else(|| item["revisedPrompt"].as_str())
         .filter(|value| !value.is_empty())
     {
+        if revised.len() > MAX_REVISED_PROMPT_BYTES {
+            return Err(protocol_error(
+                "Codex revised prompt exceeds the configured limit",
+            ));
+        }
         state.revised_prompt = Some(revised.to_owned());
     }
     Ok(())
@@ -407,6 +414,31 @@ mod tests {
             let error = classified_upstream_error(code);
             assert_eq!(error.code, expected, "classification for {code}");
             assert_eq!(error.retryable, retryable, "retryability for {code}");
+        }
+    }
+
+    #[test]
+    fn revised_prompt_has_an_independent_utf8_byte_limit() {
+        for key in ["revised_prompt", "revisedPrompt"] {
+            let accepted = "é".repeat(MAX_REVISED_PROMPT_BYTES / 2);
+            let mut event = serde_json::json!({
+                "type": "response.output_item.done",
+                "item": {"type": "image_generation_call", "result": "final"}
+            });
+            event["item"][key] = serde_json::Value::String(accepted.clone());
+            let mut state = EventState::default();
+            process_event(&event.to_string(), &mut state, 16).unwrap();
+
+            let rejected = format!("{accepted}x");
+            let mut event = serde_json::json!({
+                "type": "response.output_item.done",
+                "item": {"type": "image_generation_call", "result": "final"}
+            });
+            event["item"][key] = serde_json::Value::String(rejected);
+            let mut state = EventState::default();
+            let error = process_event(&event.to_string(), &mut state, 16).unwrap_err();
+            assert_eq!(error.code, ErrorCode::Protocol);
+            assert!(error.message.contains("revised prompt"));
         }
     }
 }
