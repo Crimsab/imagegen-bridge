@@ -4,10 +4,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ArtifactCollisionPolicy, ArtifactMetadataPolicy, BridgeError, ErrorCode, ImageAction,
-    ImageOperation, ImageRequest, ImageSource, NegativePromptMode, OutputFormat, ResponseFormat,
-    SessionMode,
+    ArtifactCollisionPolicy, BridgeError, ErrorCode, ImageAction, ImageOperation, ImageRequest,
+    ImageSource, NegativePromptMode, OutputFormat, ResponseFormat, SessionMode,
 };
+
+const MAX_EMBEDDED_REQUEST_TEXT_BYTES: usize = 12 * 1024;
 
 /// Configurable limits applied before provider negotiation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -311,13 +312,35 @@ pub fn validation_issues(request: &ImageRequest, limits: RequestLimits) -> Vec<V
             "collision policy applies only to an explicit filename",
         );
     }
-    if request.output.metadata == ArtifactMetadataPolicy::Sidecar
+    if request.output.metadata.writes_sidecar()
         && request.output.response_format != ResponseFormat::Artifact
     {
         issue(
             "output.metadata",
             "incompatible",
             "metadata sidecars require artifact response format",
+        );
+    }
+    if request.output.metadata.embeds()
+        && request.output.response_format == ResponseFormat::Metadata
+    {
+        issue(
+            "output.metadata",
+            "incompatible",
+            "embedded metadata requires an image-bearing response format",
+        );
+    }
+    if request.output.metadata.embeds()
+        && request
+            .prompt
+            .len()
+            .saturating_add(request.negative_prompt.as_deref().map_or(0, str::len))
+            > MAX_EMBEDDED_REQUEST_TEXT_BYTES
+    {
+        issue(
+            "output.metadata",
+            "too_large",
+            "embedded metadata requires combined prompt text no larger than 12 KiB",
         );
     }
     if let Some(directory) = request.output.directory.as_deref()
@@ -533,7 +556,7 @@ fn validate_input(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ImageInput, InputFidelity, SessionOptions};
+    use crate::{ArtifactMetadataPolicy, ImageInput, InputFidelity, SessionOptions};
 
     #[test]
     fn default_generation_request_is_valid() {
@@ -671,5 +694,30 @@ mod tests {
         );
         request.output.response_format = ResponseFormat::Artifact;
         assert!(validate_request(&request, RequestLimits::default()).is_ok());
+
+        request.output.metadata = ArtifactMetadataPolicy::SidecarAndEmbedded;
+        assert!(validate_request(&request, RequestLimits::default()).is_ok());
+    }
+
+    #[test]
+    fn embedded_metadata_requires_image_bytes_but_not_artifact_delivery() {
+        let mut request = ImageRequest::generate("test");
+        request.output.metadata = ArtifactMetadataPolicy::Embedded;
+        assert!(validate_request(&request, RequestLimits::default()).is_ok());
+
+        request.output.response_format = ResponseFormat::Metadata;
+        assert!(
+            validation_issues(&request, RequestLimits::default())
+                .iter()
+                .any(|item| item.field == "output.metadata")
+        );
+
+        request.output.response_format = ResponseFormat::B64Json;
+        request.prompt = "x".repeat(MAX_EMBEDDED_REQUEST_TEXT_BYTES + 1);
+        assert!(
+            validation_issues(&request, RequestLimits::default())
+                .iter()
+                .any(|item| item.field == "output.metadata" && item.code == "too_large")
+        );
     }
 }

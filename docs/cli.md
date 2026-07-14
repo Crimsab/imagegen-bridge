@@ -103,6 +103,18 @@ image properties. The response exposes its relative `metadata_name`; cleanup
 verifies and removes the owned image and sidecar together. Sidecars are off by
 default because prompt and session content may be sensitive.
 
+`--metadata embedded` writes a bounded XMP record directly into PNG, JPEG, or
+WebP bytes without re-encoding pixels. It can remain in the default `b64_json`
+response or accompany artifact/URL delivery; metadata-only output is rejected.
+The final response checksum covers the image with XMP included.
+`--metadata sidecar_and_embedded` writes both forms and implicitly selects
+artifact delivery. Embedded records include prompt and session content and are
+therefore just as privacy-sensitive as sidecars. Combined prompt text above 12
+KiB is rejected before provider work. Oversized response-only fields are named
+in `omitted_fields` rather than silently truncated. The Rust artifact library
+exposes `extract_embedded_metadata` with explicit image limits for verified,
+bounded extraction.
+
 `--preview` selects artifact output when no response format was explicitly
 chosen and renders PNG through Kitty graphics or supported image formats through
 the iTerm2 inline protocol (also used by WezTerm). Unsupported formats,

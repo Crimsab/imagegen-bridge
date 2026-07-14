@@ -486,15 +486,13 @@ impl ImagegenRuntime {
         if effective_request.policies.revised_prompt == RevisedPromptPolicy::Omit {
             response.revised_prompt = None;
         }
+        response.timings.queue_ms = queue_ms;
+        response.timings.provider_ms = provider_ms;
         let artifact_started = Instant::now();
         response = self
             .await_controlled(
-                self.materializer.materialize(
-                    response,
-                    &effective_request.output,
-                    &effective_request.parameters,
-                    effective_request.policies.compatibility,
-                ),
+                self.materializer
+                    .materialize(response, &request, &effective_request),
                 deadline,
                 external_cancellation,
                 operation,
@@ -502,8 +500,6 @@ impl ImagegenRuntime {
             )
             .await?;
         drop(global_permit);
-        response.timings.queue_ms = queue_ms;
-        response.timings.provider_ms = provider_ms;
         response.timings.artifact_ms = elapsed_ms(artifact_started);
         response.timings.total_ms = elapsed_ms(total_started);
         self.materializer

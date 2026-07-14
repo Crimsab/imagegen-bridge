@@ -362,6 +362,44 @@ fn metadata_sidecar_selects_artifact_delivery_by_default() {
 }
 
 #[test]
+fn embedded_metadata_preserves_image_bearing_default_delivery() {
+    let output = cargo_bin_cmd!("imagegen-bridge")
+        .args([
+            "generate",
+            "test",
+            "--metadata",
+            "embedded",
+            "--dry-run",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output).expect("JSON output");
+    assert_eq!(value["output"]["response_format"], "b64_json");
+    assert_eq!(value["output"]["metadata"], "embedded");
+}
+
+#[test]
+fn combined_metadata_selects_artifact_delivery_by_default() {
+    cargo_bin_cmd!("imagegen-bridge")
+        .args([
+            "generate",
+            "test",
+            "--metadata",
+            "sidecar_and_embedded",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"response_format\": \"artifact\"",
+        ));
+}
+
+#[test]
 fn preview_selects_artifact_delivery_for_natural_cli_requests() {
     cargo_bin_cmd!("imagegen-bridge")
         .args(["generate", "paper fox", "--preview", "--dry-run"])

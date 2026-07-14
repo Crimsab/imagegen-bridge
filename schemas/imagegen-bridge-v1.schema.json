@@ -202,6 +202,16 @@
           "description": "Wire value `sidecar`.",
           "type": "string",
           "const": "sidecar"
+        },
+        {
+          "description": "Wire value `embedded`.",
+          "type": "string",
+          "const": "embedded"
+        },
+        {
+          "description": "Wire value `sidecar_and_embedded`.",
+          "type": "string",
+          "const": "sidecar_and_embedded"
         }
       ]
     },

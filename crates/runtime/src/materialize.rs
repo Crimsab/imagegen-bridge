@@ -4,14 +4,13 @@ use std::sync::Arc;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use imagegen_bridge_artifacts::{
-    ArtifactPublication, ArtifactStore, ImageLimits, ImageMetadata, RemoteImageFetcher,
-    StoredArtifactContent, inspect_image, thumbnail_png,
+    ArtifactPublication, ArtifactStore, ImageLimits, ImageMetadata, MAX_EMBEDDED_METADATA_BYTES,
+    RemoteImageFetcher, StoredArtifactContent, embed_image_metadata, inspect_image, thumbnail_png,
 };
 use imagegen_bridge_core::{
-    ArtifactMetadataPolicy, BridgeError, CompatibilityMode, ErrorCode, GeneratedImage,
-    GenerationParameters, ImageOperation, ImagePayload, ImageRequest, ImageResponse, ImageSize,
-    MultiImageFailurePolicy, Normalization, OutputFormat, OutputOptions, RequestPolicies,
-    ResponseFormat,
+    BridgeError, CompatibilityMode, ErrorCode, GeneratedImage, GenerationParameters,
+    ImageOperation, ImagePayload, ImageRequest, ImageResponse, ImageSize, MultiImageFailurePolicy,
+    Normalization, OutputFormat, OutputOptions, RequestPolicies, ResponseFormat,
 };
 use serde::Serialize;
 use url::Url;
@@ -123,22 +122,44 @@ impl OutputMaterializer {
     pub(crate) async fn materialize(
         &self,
         mut response: ImageResponse,
-        output: &OutputOptions,
-        expected: &GenerationParameters,
-        compatibility: CompatibilityMode,
+        original: &ImageRequest,
+        effective: &ImageRequest,
     ) -> Result<ImageResponse, BridgeError> {
-        Self::validate_output_set(&response, expected.n, expected.failure_policy)?;
+        Self::validate_output_set(
+            &response,
+            effective.parameters.n,
+            effective.parameters.failure_policy,
+        )?;
 
         let mut verified = Vec::with_capacity(response.data.len());
         for image in &response.data {
-            verified.push(self.verify(image, expected.output_format).await?);
+            verified.push(
+                self.verify(image, effective.parameters.output_format)
+                    .await?,
+            );
         }
 
-        Self::reconcile_dimensions(&mut response, &verified, &expected.size, compatibility)?;
+        Self::reconcile_dimensions(
+            &mut response,
+            &verified,
+            &effective.parameters.size,
+            effective.policies.compatibility,
+        )?;
 
         let mut projected = Vec::with_capacity(verified.len());
-        for image in verified {
-            projected.push(self.project(image, output)?);
+        for mut image in verified {
+            if effective.output.metadata.embeds() {
+                let encoded = embedded_metadata(original, effective, &response, &image)?;
+                let (bytes, metadata) = embed_image_metadata(
+                    &image.bytes,
+                    image.metadata.format,
+                    &encoded,
+                    self.config.image_limits,
+                )?;
+                image.bytes = bytes;
+                image.metadata = metadata;
+            }
+            projected.push(self.project(image, &effective.output)?);
         }
         response.data = projected;
         Ok(response)
@@ -150,7 +171,7 @@ impl OutputMaterializer {
         effective: &ImageRequest,
         response: &mut ImageResponse,
     ) -> Result<(), BridgeError> {
-        if effective.output.metadata == ArtifactMetadataPolicy::None {
+        if !effective.output.metadata.writes_sidecar() {
             return Ok(());
         }
         let store = self
@@ -168,7 +189,7 @@ impl OutputMaterializer {
                 } => (id.as_str(), name.as_str()),
                 _ => {
                     return Err(protocol_error(
-                        "metadata sidecars require bridge artifact output",
+                        "metadata sidecar policy requires bridge artifact output",
                     ));
                 }
             };
@@ -459,6 +480,136 @@ struct ArtifactMetadataSidecar<'a> {
 }
 
 #[derive(Serialize)]
+struct EmbeddedArtifactMetadata<'a> {
+    version: u8,
+    kind: &'static str,
+    request_id: &'a str,
+    created: u64,
+    operation: &'a ArtifactOperationSummary,
+    original_prompt: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effective_prompt: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    negative_prompt: Option<&'a str>,
+    policies: &'a RequestPolicies,
+    provider: &'a str,
+    model: &'a str,
+    requested: &'a GenerationParameters,
+    effective: &'a GenerationParameters,
+    #[serde(skip_serializing_if = "slice_is_empty")]
+    normalizations: &'a [Normalization],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    revised_prompt: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    usage: Option<&'a imagegen_bridge_core::Usage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session: Option<&'a imagegen_bridge_core::SessionMetadata>,
+    timings: EmbeddedMetadataTimings,
+    #[serde(skip_serializing_if = "slice_is_empty")]
+    warnings: &'a [String],
+    image: EmbeddedMetadataImage,
+}
+
+#[derive(Serialize)]
+struct EmbeddedMetadataTimings {
+    #[serde(rename = "queue_ms")]
+    queue: u64,
+    #[serde(rename = "provider_ms")]
+    provider: u64,
+    #[serde(rename = "generation_ms", skip_serializing_if = "Option::is_none")]
+    generation: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct EmbeddedMetadataImage {
+    index: u8,
+    format: OutputFormat,
+    width: u32,
+    height: u32,
+}
+
+fn embedded_metadata(
+    original: &ImageRequest,
+    effective: &ImageRequest,
+    response: &ImageResponse,
+    image: &VerifiedImage,
+) -> Result<Vec<u8>, BridgeError> {
+    let operation = operation_summary(&original.operation);
+    let mut value = serde_json::to_value(EmbeddedArtifactMetadata {
+        version: 1,
+        kind: "imagegen_bridge_generation",
+        request_id: &response.id,
+        created: response.created,
+        operation: &operation,
+        original_prompt: &original.prompt,
+        effective_prompt: (original.prompt != effective.prompt)
+            .then_some(effective.prompt.as_str()),
+        negative_prompt: original.negative_prompt.as_deref(),
+        policies: &effective.policies,
+        provider: &response.provider,
+        model: &response.model,
+        requested: &response.requested,
+        effective: &response.effective,
+        normalizations: &response.normalizations,
+        revised_prompt: response.revised_prompt.as_deref(),
+        usage: response.usage.as_ref(),
+        session: response.session.as_ref(),
+        timings: EmbeddedMetadataTimings {
+            queue: response.timings.queue_ms,
+            provider: response.timings.provider_ms,
+            generation: image.generation_ms,
+        },
+        warnings: &response.warnings,
+        image: EmbeddedMetadataImage {
+            index: image.index,
+            format: image.metadata.format,
+            width: image.metadata.width,
+            height: image.metadata.height,
+        },
+    })
+    .map_err(|_| artifact_error("could not encode embedded artifact metadata"))?;
+    let mut encoded = serde_json::to_vec(&value)
+        .map_err(|_| artifact_error("could not encode embedded artifact metadata"))?;
+    if encoded.len() <= MAX_EMBEDDED_METADATA_BYTES {
+        return Ok(encoded);
+    }
+
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| artifact_error("embedded artifact metadata is not an object"))?;
+    let mut omitted = Vec::new();
+    for field in [
+        "usage",
+        "session",
+        "normalizations",
+        "warnings",
+        "revised_prompt",
+    ] {
+        if object.remove(field).is_none() {
+            continue;
+        }
+        omitted.push(field);
+        object.insert(
+            "omitted_fields".to_owned(),
+            serde_json::to_value(&omitted)
+                .map_err(|_| artifact_error("could not encode omitted metadata fields"))?,
+        );
+        encoded = serde_json::to_vec(&object)
+            .map_err(|_| artifact_error("could not encode embedded artifact metadata"))?;
+        if encoded.len() <= MAX_EMBEDDED_METADATA_BYTES {
+            return Ok(encoded);
+        }
+    }
+    Err(artifact_error(
+        "embedded artifact metadata exceeds the portable 40 KiB limit",
+    ))
+}
+
+fn slice_is_empty<T>(value: &&[T]) -> bool {
+    value.is_empty()
+}
+
+#[derive(Serialize)]
 struct ArtifactMetadataImage<'a> {
     index: u8,
     artifact_name: &'a str,
@@ -535,7 +686,10 @@ mod tests {
 
     use std::fs;
 
-    use imagegen_bridge_core::{GenerationParameters, ImageFailure, Timings};
+    use imagegen_bridge_artifacts::extract_embedded_metadata;
+    use imagegen_bridge_core::{
+        ArtifactMetadataPolicy, GenerationParameters, ImageFailure, Timings,
+    };
 
     use super::*;
 
@@ -669,5 +823,153 @@ mod tests {
         assert_eq!(sidecar["model"], "gpt-image-2");
         assert_eq!(sidecar["image"]["artifact_name"], "portraits/woman.png");
         assert_eq!(sidecar["image"]["width"], 1);
+    }
+
+    #[tokio::test]
+    async fn embedded_policy_updates_payload_checksum_and_carries_generation_contract() {
+        let materializer = OutputMaterializer::new(MaterializationConfig::default()).unwrap();
+        let bytes = STANDARD.decode(ONE_PIXEL_PNG).unwrap();
+        let metadata = inspect_image(&bytes, ImageLimits::default()).unwrap();
+        let generated = GeneratedImage {
+            index: 0,
+            payload: ImagePayload::B64Json {
+                b64_json: STANDARD.encode(&bytes),
+            },
+            format: metadata.format,
+            width: metadata.width,
+            height: metadata.height,
+            bytes: metadata.bytes,
+            sha256: metadata.sha256.clone(),
+            generation_ms: Some(41),
+            metadata_name: None,
+        };
+        let mut provider_response = response(vec![generated], Vec::new());
+        provider_response.provider = "codex-app-server".to_owned();
+        provider_response.model = "gpt-image-2".to_owned();
+        provider_response.timings.queue_ms = 3;
+        provider_response.timings.provider_ms = 40;
+        let mut request = ImageRequest::generate("a red paper fox");
+        request.output.metadata = ArtifactMetadataPolicy::Embedded;
+
+        let projected = materializer
+            .materialize(provider_response, &request, &request)
+            .await
+            .unwrap();
+        let b64_json = match &projected.data[0].payload {
+            ImagePayload::B64Json { b64_json } => Some(b64_json),
+            _ => None,
+        }
+        .unwrap();
+        let embedded = STANDARD.decode(b64_json).unwrap();
+        let record: serde_json::Value = serde_json::from_slice(
+            &extract_embedded_metadata(&embedded, ImageLimits::default())
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(record["kind"], "imagegen_bridge_generation");
+        assert_eq!(record["original_prompt"], "a red paper fox");
+        assert_eq!(record["provider"], "codex-app-server");
+        assert_eq!(record["model"], "gpt-image-2");
+        assert_eq!(record["timings"]["provider_ms"], 40);
+        assert_eq!(record["timings"]["generation_ms"], 41);
+        assert_ne!(projected.data[0].sha256, metadata.sha256);
+        assert_eq!(
+            projected.data[0].sha256,
+            inspect_image(&embedded, ImageLimits::default())
+                .unwrap()
+                .sha256
+        );
+    }
+
+    #[tokio::test]
+    async fn combined_policy_publishes_embedded_xmp_and_matching_sidecar() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(ArtifactStore::new(root.path(), ImageLimits::default()).unwrap());
+        let materializer = OutputMaterializer::new(MaterializationConfig {
+            artifact_store: Some(Arc::clone(&store)),
+            ..MaterializationConfig::default()
+        })
+        .unwrap();
+        let bytes = STANDARD.decode(ONE_PIXEL_PNG).unwrap();
+        let metadata = inspect_image(&bytes, ImageLimits::default()).unwrap();
+        let generated = GeneratedImage {
+            index: 0,
+            payload: ImagePayload::B64Json {
+                b64_json: STANDARD.encode(&bytes),
+            },
+            format: metadata.format,
+            width: metadata.width,
+            height: metadata.height,
+            bytes: metadata.bytes,
+            sha256: metadata.sha256,
+            generation_ms: Some(7),
+            metadata_name: None,
+        };
+        let mut request = ImageRequest::generate("a glass lighthouse");
+        request.output = OutputOptions {
+            response_format: ResponseFormat::Artifact,
+            filename: Some("lighthouse.png".to_owned()),
+            metadata: ArtifactMetadataPolicy::SidecarAndEmbedded,
+            ..OutputOptions::default()
+        };
+        let mut provider_response = response(vec![generated], Vec::new());
+        provider_response.provider = "codex-app-server".to_owned();
+        provider_response.model = "gpt-image-2".to_owned();
+        let mut projected = materializer
+            .materialize(provider_response, &request, &request)
+            .await
+            .unwrap();
+        materializer
+            .attach_metadata(&request, &request, &mut projected)
+            .unwrap();
+
+        let (id, name) = match &projected.data[0].payload {
+            ImagePayload::Artifact { id, name } => Some((id, name)),
+            _ => None,
+        }
+        .unwrap();
+        assert_eq!(name.as_deref(), Some("lighthouse.png"));
+        let stored = store.read(id).unwrap();
+        let embedded: serde_json::Value = serde_json::from_slice(
+            &extract_embedded_metadata(&stored.bytes, ImageLimits::default())
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(embedded["original_prompt"], "a glass lighthouse");
+        assert_eq!(stored.metadata.sha256, projected.data[0].sha256);
+        assert!(
+            root.path()
+                .join(projected.data[0].metadata_name.as_deref().unwrap())
+                .is_file()
+        );
+    }
+
+    #[test]
+    fn embedded_record_reports_optional_fields_omitted_for_container_portability() {
+        let bytes = STANDARD.decode(ONE_PIXEL_PNG).unwrap();
+        let metadata = inspect_image(&bytes, ImageLimits::default()).unwrap();
+        let image = VerifiedImage {
+            index: 0,
+            bytes,
+            metadata,
+            generation_ms: Some(9),
+        };
+        let request = ImageRequest::generate("a small prompt");
+        let mut provider_response = response(Vec::new(), Vec::new());
+        provider_response.revised_prompt = Some("r".repeat(50 * 1024));
+
+        let encoded = embedded_metadata(&request, &request, &provider_response, &image).unwrap();
+        assert!(encoded.len() <= MAX_EMBEDDED_METADATA_BYTES);
+        let value: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+        assert!(value.get("revised_prompt").is_none());
+        assert!(
+            value["omitted_fields"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|field| field == "revised_prompt")
+        );
     }
 }

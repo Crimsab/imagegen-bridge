@@ -136,6 +136,26 @@ the ownership record and participates in conservative retention cleanup. It is
 an explicit privacy choice: deployments that publicly serve the artifact root
 must treat sidecars as equally public.
 
+`embedded` stores a compact version of the same generation contract inside the
+returned image. It is supported for PNG, JPEG, and WebP, uses conventional XMP
+containers, and inserts metadata without decoding or re-encoding pixels. The
+bridge fully decodes and verifies the result, then returns the final byte count
+and SHA-256. The embedded record is a bounded JSON object containing prompts,
+operation summary, requested/effective parameters, normalization and warnings,
+provider/model, revised prompt, usage/session, queue/provider/per-image timing,
+format and dimensions. It deliberately omits a checksum of its own final image,
+which would be self-referential. `embedded` works with `b64_json`, `artifact`,
+or bridge-hosted `url` output; it is rejected for metadata-only output.
+`sidecar_and_embedded` writes both and therefore requires artifact delivery.
+Embedding is limited to 40 KiB of JSON so JPEG APP1 remains portable. Combined
+original and negative prompt text is limited to 12 KiB and rejected before any
+provider work. An unchanged effective prompt is omitted as redundant. If
+response-only optional fields would exceed the container, the record removes
+them in a stable order and names every removed field in `omitted_fields`; prompt
+text is never silently truncated. All metadata modes are explicit opt-ins
+because prompts and session identifiers become part of copied or publicly
+served files.
+
 `parameters.input_fidelity` is optional and accepts `low` or `high` only when
 the selected model advertises it. `parameters.action` is `auto`, `generate`, or
 `edit`; intrinsic operation conflicts fail before provider work. Provider

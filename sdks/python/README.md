@@ -31,6 +31,9 @@ async with AsyncImagegenBridgeClient("http://127.0.0.1:8787") as client:
 
 Set `provider` in `ImageRequest.routing` to switch between configured bridge
 providers; client construction and response types do not change.
+`OutputOptions.metadata` accepts `none`, `sidecar`, `embedded`, or
+`sidecar_and_embedded`. Embedded XMP is carried inside the returned PNG, JPEG,
+or WebP bytes; the latter combined mode requires artifact output.
 `client.jobs` is also available on the synchronous client and exposes
 `create`, `get`, `list`, `partial`, `cancel`, and `update` with typed durable job
 models. `partial` returns the latest verified in-memory preview and normally

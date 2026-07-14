@@ -35,6 +35,9 @@ console.log(diagnostics.configuration.listener_scope, diagnostics.providers);
 
 Changing `routing.provider` is the only SDK change needed to select another
 configured provider.
+`output.metadata` accepts `none`, `sidecar`, `embedded`, or
+`sidecar_and_embedded`. Embedded XMP is carried inside the returned PNG, JPEG,
+or WebP bytes; the latter combined mode requires artifact output.
 `bridge.jobs` exposes typed `create`, `get`, `list`, `partial`, `cancel`, and
 `update` operations for durable artifact-backed work. `partial` returns the
 latest verified in-memory preview and normally returns 404 before the first

@@ -307,7 +307,7 @@ pub(crate) struct ImageArgs {
     /// Atomic behavior when an explicit output filename already exists.
     #[arg(long, value_parser = parse_collision)]
     pub collision: Option<ArtifactCollisionPolicy>,
-    /// Persist portable generation metadata beside each artifact.
+    /// Persist portable generation metadata beside or inside each image.
     #[arg(long, value_parser = parse_metadata)]
     pub metadata: Option<ArtifactMetadataPolicy>,
     /// Provider compatibility behavior.

@@ -283,7 +283,7 @@ fn apply_image_args(
     }
     if let Some(metadata) = args.metadata {
         request.output.metadata = metadata;
-        if metadata == imagegen_bridge::core::ArtifactMetadataPolicy::Sidecar
+        if metadata.writes_sidecar()
             && explicit_response_format.is_none()
             && request.output.response_format == imagegen_bridge::core::ResponseFormat::B64Json
         {

@@ -101,7 +101,13 @@ selected. The native API and SDKs expose the same controls as
 `--metadata sidecar` writes an owned JSON record containing prompts,
 requested/effective parameters, model/provider, timings, warnings, session and
 verified image properties; its portable name is returned as `metadata_name`.
-Because the sidecar contains prompt content, it is disabled by default.
+`--metadata embedded` instead writes the generation record into the PNG, JPEG,
+or WebP itself using XMP without re-encoding pixels; `sidecar_and_embedded`
+writes both. Embedded metadata also works with base64 responses. These modes
+are explicit privacy choices because prompt and session content travel with the
+image; metadata is disabled by default. For JPEG portability, embedded JSON is
+bounded to 40 KiB and combined prompt text to 12 KiB, validated before provider
+work.
 `--preview` renders in supported Kitty/iTerm2-compatible terminals and degrades
 to a status message elsewhere; `--open` launches the system image viewer.
 

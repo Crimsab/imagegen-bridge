@@ -166,12 +166,28 @@ string_enum! {
     pub enum ArtifactMetadataPolicy {
         None => "none",
         Sidecar => "sidecar",
+        Embedded => "embedded",
+        SidecarAndEmbedded => "sidecar_and_embedded",
     }
 }
 
 impl Default for ArtifactMetadataPolicy {
     fn default() -> Self {
         Self::None
+    }
+}
+
+impl ArtifactMetadataPolicy {
+    /// Whether the policy writes a JSON file beside each bridge-owned artifact.
+    #[must_use]
+    pub const fn writes_sidecar(self) -> bool {
+        matches!(self, Self::Sidecar | Self::SidecarAndEmbedded)
+    }
+
+    /// Whether the policy embeds a bounded XMP generation record in image bytes.
+    #[must_use]
+    pub const fn embeds(self) -> bool {
+        matches!(self, Self::Embedded | Self::SidecarAndEmbedded)
     }
 }
 
