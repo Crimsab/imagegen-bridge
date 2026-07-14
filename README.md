@@ -360,7 +360,8 @@ cargo test --locked --workspace --all-targets
 
 Live Codex tests are ignored unless their explicit environment gates are set:
 `IMAGEGEN_BRIDGE_LIVE_CODEX=1`, `IMAGEGEN_BRIDGE_LIVE_CODEX_RESPONSES=1`, or
-`IMAGEGEN_BRIDGE_LIVE_BOOTSTRAP=1`.
+`IMAGEGEN_BRIDGE_LIVE_BOOTSTRAP=1`. The exact offline, SDK, container, browser,
+and live-OAuth matrix is documented in [docs/testing.md](docs/testing.md).
 
 ## Security and upstream status
 
