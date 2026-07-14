@@ -3,17 +3,22 @@
 
 # Imagegen Bridge
 
-**Generate and edit images with an existing Codex OAuth login.**
+**Use image generation from your Codex subscription—no OpenAI API key required.**
 
-[Quick start](#quick-start) · [Commands](#main-commands) · [Examples](#common-workflows) · [Dashboard and API](#dashboard-and-api) · [Documentation](#documentation)
+[![Latest release](https://img.shields.io/github/v/release/Crimsab/imagegen-bridge?display_name=tag&sort=semver&label=release)](https://github.com/Crimsab/imagegen-bridge/releases/latest)
+[![Release downloads](https://img.shields.io/github/downloads/Crimsab/imagegen-bridge/total?label=downloads)](https://github.com/Crimsab/imagegen-bridge/releases)
+[![License: MIT](https://img.shields.io/github/license/Crimsab/imagegen-bridge)](LICENSE)
+
+[Quick start](#quick-start) · [Commands](#main-commands) · [Examples](#common-workflows) · [SDKs and skill](#use-from-code-or-agents) · [Dashboard and API](#dashboard-and-api) · [Documentation](#documentation)
 
 </div>
 
 ![Imagegen Bridge connects Codex OAuth to a CLI, API, dashboard, and typed SDKs](https://github.com/Crimsab/imagegen-bridge/raw/refs/heads/main/docs/assets/hero.png)
 
-Imagegen Bridge turns an existing Codex login into a local image-generation
-CLI, dashboard, and HTTP API. Codex-backed usage does not require an
-`OPENAI_API_KEY`.
+Imagegen Bridge connects to the Codex OAuth session from your own subscription
+and exposes its image generation through a local CLI, dashboard, and HTTP API.
+You keep using your existing Codex login instead of configuring or paying for a
+separate OpenAI API key.
 
 ## Quick start
 
@@ -136,6 +141,26 @@ imagegen-bridge generate \
 
 Presets never retain image bytes, masks, reference images, or idempotency keys.
 
+## Use from code or agents
+
+| Surface | Install or location |
+| --- | --- |
+| Rust SDK | `cargo add imagegen-bridge` |
+| Python SDK | `uv add imagegen-bridge` |
+| TypeScript SDK | `bun add imagegen-bridge` |
+| OpenAPI and JSON Schema | `schemas/` |
+| Agent skill | `skills/generate-images-with-bridge/` |
+
+Install the agent skill with:
+
+```sh
+npx skills add Crimsab/imagegen-bridge \
+  --skill generate-images-with-bridge
+```
+
+The SDKs and skill discover the same live provider capabilities as the CLI.
+See [docs/sdks.md](docs/sdks.md) for examples.
+
 ## Dashboard and API
 
 `imagegen-bridge dashboard` opens the embedded UI and starts the local service
@@ -247,26 +272,6 @@ Start with `imagegen-bridge setup`, or use
 [config.example.toml](config.example.toml) for a hand-managed deployment.
 Unknown keys fail validation. `config show` and `config origins` report the
 effective configuration without resolving credential values.
-
-## SDKs and agent skill
-
-| Surface | Install or location |
-| --- | --- |
-| Rust SDK | `cargo add imagegen-bridge` |
-| Python SDK | `uv add imagegen-bridge` |
-| TypeScript SDK | `bun add imagegen-bridge` |
-| OpenAPI and JSON Schema | `schemas/` |
-| Agent skill | `skills/generate-images-with-bridge/` |
-
-Install the agent skill with:
-
-```sh
-npx skills add Crimsab/imagegen-bridge \
-  --skill generate-images-with-bridge
-```
-
-The SDKs and skill use the same live capability discovery as the CLI. See
-[docs/sdks.md](docs/sdks.md) for usage examples.
 
 ## Documentation
 
