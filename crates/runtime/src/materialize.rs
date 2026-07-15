@@ -9,9 +9,9 @@ use imagegen_bridge_artifacts::{
     inspect_image, inspect_transparent_alpha, remove_chroma_key, thumbnail_png,
 };
 use imagegen_bridge_core::{
-    BridgeError, CompatibilityMode, ErrorCode, GeneratedImage, GenerationParameters,
-    ImageOperation, ImagePayload, ImageRequest, ImageResponse, ImageSize, MultiImageFailurePolicy,
-    Normalization, OutputFormat, OutputOptions, RequestPolicies, ResponseFormat,
+    BridgeError, ErrorCode, GeneratedImage, GenerationParameters, ImageOperation, ImagePayload,
+    ImageRequest, ImageResponse, ImageSize, MultiImageFailurePolicy, Normalization, OutputFormat,
+    OutputOptions, RequestPolicies, ResponseFormat,
 };
 use serde::Serialize;
 use url::Url;
@@ -190,12 +190,7 @@ impl OutputMaterializer {
             verified.push(image);
         }
 
-        Self::reconcile_dimensions(
-            &mut response,
-            &verified,
-            &effective.parameters.size,
-            effective.policies.compatibility,
-        )?;
+        Self::reconcile_dimensions(&mut response, &verified, &effective.parameters.size)?;
 
         let mut projected = Vec::with_capacity(verified.len());
         for mut image in verified {
@@ -347,7 +342,6 @@ impl OutputMaterializer {
         response: &mut ImageResponse,
         verified: &[VerifiedImage],
         expected_size: &ImageSize,
-        compatibility: CompatibilityMode,
     ) -> Result<(), BridgeError> {
         let Some((expected_width, expected_height)) = expected_size.dimensions() else {
             return Ok(());
@@ -355,33 +349,44 @@ impl OutputMaterializer {
         let Some(first) = verified.first() else {
             return Ok(());
         };
-        let actual = (first.metadata.width, first.metadata.height);
+        let requested = (expected_width, expected_height);
         if verified
             .iter()
-            .any(|image| (image.metadata.width, image.metadata.height) != actual)
+            .all(|image| (image.metadata.width, image.metadata.height) == requested)
         {
-            return Err(protocol_error(
-                "provider returned inconsistent dimensions across generated images",
-            ));
-        }
-        if actual == (expected_width, expected_height) {
             return Ok(());
         }
-        if compatibility == CompatibilityMode::Strict {
-            return Err(protocol_error(
-                "provider output dimensions do not match the negotiated size",
-            )
-            .with_detail("expected", expected_size.to_string())
-            .with_detail("actual", format!("{}x{}", actual.0, actual.1)));
+
+        let first_actual = (first.metadata.width, first.metadata.height);
+        let uniform = verified
+            .iter()
+            .all(|image| (image.metadata.width, image.metadata.height) == first_actual);
+        if uniform {
+            let actual_size = ImageSize::exact(first_actual.0, first_actual.1)?;
+            response.effective.size = actual_size.clone();
+            response.normalizations.push(Normalization {
+                field: "parameters.size".to_owned(),
+                requested: Some(serde_json::Value::String(expected_size.to_string())),
+                effective: Some(serde_json::Value::String(actual_size.to_string())),
+                reason: "provider_output_dimensions_differed".to_owned(),
+            });
+        } else {
+            for image in verified {
+                let actual = (image.metadata.width, image.metadata.height);
+                if actual == requested {
+                    continue;
+                }
+                response.normalizations.push(Normalization {
+                    field: format!("data[{}].size", image.index),
+                    requested: Some(serde_json::Value::String(expected_size.to_string())),
+                    effective: Some(serde_json::Value::String(format!(
+                        "{}x{}",
+                        actual.0, actual.1
+                    ))),
+                    reason: "provider_output_dimensions_differed".to_owned(),
+                });
+            }
         }
-        let actual_size = ImageSize::exact(actual.0, actual.1)?;
-        response.effective.size = actual_size.clone();
-        response.normalizations.push(Normalization {
-            field: "parameters.size".to_owned(),
-            requested: Some(serde_json::Value::String(expected_size.to_string())),
-            effective: Some(serde_json::Value::String(actual_size.to_string())),
-            reason: "provider_output_dimensions_differed".to_owned(),
-        });
         if !response
             .warnings
             .iter()

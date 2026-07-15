@@ -296,13 +296,12 @@ impl BridgeConfig {
         if self.server.max_body_bytes == 0
             || self.server.max_header_bytes == 0
             || self.server.max_connections == 0
-            || self.server.read_timeout_ms == 0
             || self.server.write_timeout_ms == 0
         {
             issue(
                 "server",
                 "out_of_range",
-                "server request and connection limits must be greater than zero",
+                "server request and connection limits, except the optional read-stall timeout, must be greater than zero",
             );
         }
         if self.server.jobs.enabled
@@ -473,7 +472,7 @@ mod tests {
     #[test]
     fn reports_disabled_default_and_invalid_limits_together() {
         let mut config = BridgeConfig::default();
-        config.providers.codex_app_server.enabled = false;
+        config.providers.codex_responses.enabled = false;
         config.runtime.global.max_concurrent = 0;
         config.server.bind = "not-a-socket".to_owned();
         let issues = config.check();

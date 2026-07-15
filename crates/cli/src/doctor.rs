@@ -326,6 +326,11 @@ async fn provider_checks(
         .iter()
         .filter(|check| matches!(check.status, ProviderReadinessStatus::NotReady { .. }))
         .count();
+    let required_provider = provider.unwrap_or_else(|| registry.default_name());
+    let required_not_ready = readiness.iter().any(|check| {
+        check.provider == required_provider
+            && matches!(check.status, ProviderReadinessStatus::NotReady { .. })
+    });
     if not_ready == 0 && !readiness.is_empty() {
         checks.push(DoctorCheck {
             name: "provider_readiness",
@@ -335,12 +340,26 @@ async fn provider_checks(
                 "providers": readiness.iter().map(|check| &check.provider).collect::<Vec<_>>()
             })),
         });
-    } else {
+    } else if required_not_ready {
         checks.push(DoctorCheck {
             name: "provider_readiness",
             status: CheckStatus::Fail,
-            message: "one or more selected providers are not ready".to_owned(),
-            details: Some(json!({"not_ready": not_ready})),
+            message: "the selected or default provider is not ready".to_owned(),
+            details: Some(json!({
+                "required_provider": required_provider,
+                "not_ready": not_ready
+            })),
+        });
+    } else {
+        checks.push(DoctorCheck {
+            name: "provider_readiness",
+            status: CheckStatus::Warn,
+            message: "the default provider is ready but one or more fallback providers are not"
+                .to_owned(),
+            details: Some(json!({
+                "required_provider": required_provider,
+                "not_ready": not_ready
+            })),
         });
     }
     match registry.capabilities(provider, None).await {

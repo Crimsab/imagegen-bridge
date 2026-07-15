@@ -35,6 +35,11 @@ Native generation accepts the versioned `ImageRequest` schema and returns
 `ImageResponse`. `Idempotency-Key` may be supplied for POST requests. The bridge
 returns an `x-request-id` response header for every request.
 
+Synchronous requests use the runtime deadline (`runtime.default_timeout_ms`,
+overridable per request) rather than the socket write-stall timeout. The default
+socket read-stall timeout is disabled so a valid long generation is not closed
+while its handler is still working.
+
 The SSE handler emits `started`, bounded provider `progress`/`partial_image`
 events when available, then `completed` or `error`, with heartbeat comments,
 backpressure, and disconnect cancellation.

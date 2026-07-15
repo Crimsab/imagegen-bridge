@@ -2,9 +2,11 @@
 
 All SDKs consume the provider-neutral native API. Provider selection lives in
 the request (`routing.provider`), so moving between `codex-app-server` and the
-experimental `codex-responses` adapter does not require a new client, package,
+default `codex-responses` adapter does not require a new client, package,
 authentication flow, or response model. Bridge bearer authentication remains
-separate from Codex OAuth, which is owned by the bridge process.
+separate from Codex/ChatGPT OAuth, which is owned by the bridge process.
+`codex-responses` never uses `OPENAI_API_KEY`; an official Platform API-key
+provider is a separate reserved integration.
 
 ## Rust
 
@@ -55,8 +57,8 @@ from imagegen_bridge import (
 request = ImageRequest.generate(
     "a paper fox",
     routing=RoutingOptions(
-        provider="codex-app-server",
-        fallbacks=(ProviderRoute("codex-responses", "gpt-image-2"),),
+        provider="codex-responses",
+        fallbacks=(ProviderRoute("codex-app-server", "gpt-image-2"),),
     ),
 )
 async with AsyncImagegenBridgeClient(
@@ -115,8 +117,8 @@ const response = await client.images.generate({
   operation: "generate",
   prompt: "a paper fox",
   routing: {
-    provider: "codex-app-server",
-    fallbacks: [{ provider: "codex-responses", model: "gpt-image-2" }],
+    provider: "codex-responses",
+    fallbacks: [{ provider: "codex-app-server", model: "gpt-image-2" }],
   },
 });
 const job = await client.jobs.create({ operation: "generate", prompt: "a paper fox" });

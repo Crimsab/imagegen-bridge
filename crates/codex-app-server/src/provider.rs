@@ -1,7 +1,7 @@
 //! Image provider and persistent Codex thread semantics.
 
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     path::PathBuf,
     sync::{Arc, Weak},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -443,6 +443,7 @@ impl AppServerImageProvider {
             result_bytes: 0,
             max_images,
             max_result_bytes,
+            diagnostics: TurnDiagnostics::default(),
         };
         loop {
             let remaining = context.deadline.saturating_duration_since(Instant::now());
@@ -473,6 +474,9 @@ impl AppServerImageProvider {
                         .await);
                 }
             };
+            if belongs_to(&notification.params, thread_id, &turn_id) {
+                accumulator.diagnostics.observe(&notification);
+            }
             if notification.method == "item/completed"
                 && belongs_to(&notification.params, thread_id, &turn_id)
                 && notification.params["item"]["type"] == "imageGeneration"
@@ -499,11 +503,21 @@ impl AppServerImageProvider {
                     return Err(turn_failure_error(&notification.params["turn"], request));
                 }
                 if accumulator.images.is_empty() {
+                    let diagnostics = accumulator.diagnostics.as_json();
+                    tracing::warn!(
+                        request_id = %context.request_id,
+                        observed_notifications = accumulator.diagnostics.observed_notifications,
+                        completed_items = accumulator.diagnostics.completed_items,
+                        image_items = accumulator.diagnostics.image_items,
+                        completed_image_items = accumulator.diagnostics.completed_image_items,
+                        "Codex app-server turn completed without an image"
+                    );
                     return Err(BridgeError::new(
                         ErrorCode::Upstream,
                         "Codex turn completed without an image",
                     )
-                    .with_provider("codex-app-server"));
+                    .with_provider("codex-app-server")
+                    .with_detail("turn_diagnostics", diagnostics));
                 }
                 return Ok(TurnImages {
                     images: accumulator.images,
@@ -714,17 +728,25 @@ impl ImageProvider for AppServerImageProvider {
     }
 
     async fn check_ready(&self) -> Result<(), BridgeError> {
-        let account = self
-            .connection()
-            .await?
-            .request("account/read", json!({}))
-            .await?;
+        let connection = self.connection().await?;
+        let account = connection.request("account/read", json!({})).await?;
         if account["account"].is_null() {
             return Err(BridgeError::new(
                 ErrorCode::Authentication,
                 "Codex app-server requires authentication",
             )
             .with_provider("codex-app-server"));
+        }
+        let capabilities = connection
+            .request("modelProvider/capabilities/read", json!({}))
+            .await?;
+        if capabilities["imageGeneration"] != true {
+            return Err(BridgeError::new(
+                ErrorCode::UnsupportedCapability,
+                "Codex app-server does not report image generation capability",
+            )
+            .with_provider("codex-app-server")
+            .with_detail("field", "imageGeneration"));
         }
         Ok(())
     }
@@ -936,6 +958,73 @@ struct TurnAccumulator {
     result_bytes: usize,
     max_images: usize,
     max_result_bytes: usize,
+    diagnostics: TurnDiagnostics,
+}
+
+#[derive(Default)]
+struct TurnDiagnostics {
+    observed_notifications: usize,
+    completed_items: usize,
+    image_items: usize,
+    completed_image_items: usize,
+    failed_image_items: usize,
+    terminal_item_count: usize,
+    item_types: BTreeMap<String, usize>,
+    item_statuses: BTreeMap<String, usize>,
+}
+
+impl TurnDiagnostics {
+    fn observe(&mut self, notification: &crate::RpcNotification) {
+        self.observed_notifications = self.observed_notifications.saturating_add(1);
+        if notification.method == "turn/completed" {
+            self.terminal_item_count = notification.params["turn"]["items"]
+                .as_array()
+                .map_or(0, Vec::len);
+            return;
+        }
+        if notification.method != "item/completed" {
+            return;
+        }
+        self.completed_items = self.completed_items.saturating_add(1);
+        let item = &notification.params["item"];
+        let item_type = item["type"]
+            .as_str()
+            .and_then(safe_failure_label)
+            .unwrap_or("unknown");
+        if self.item_types.len() < 16 || self.item_types.contains_key(item_type) {
+            let count = self.item_types.entry(item_type.to_owned()).or_default();
+            *count = count.saturating_add(1);
+        }
+        let status = item["status"]
+            .as_str()
+            .and_then(safe_failure_label)
+            .unwrap_or("unknown");
+        if self.item_statuses.len() < 16 || self.item_statuses.contains_key(status) {
+            let count = self.item_statuses.entry(status.to_owned()).or_default();
+            *count = count.saturating_add(1);
+        }
+        if item_type == "imageGeneration" {
+            self.image_items = self.image_items.saturating_add(1);
+            if status == "completed" {
+                self.completed_image_items = self.completed_image_items.saturating_add(1);
+            } else if matches!(status, "failed" | "declined" | "cancelled") {
+                self.failed_image_items = self.failed_image_items.saturating_add(1);
+            }
+        }
+    }
+
+    fn as_json(&self) -> Value {
+        json!({
+            "observed_notifications": self.observed_notifications,
+            "completed_items": self.completed_items,
+            "image_items": self.image_items,
+            "completed_image_items": self.completed_image_items,
+            "failed_image_items": self.failed_image_items,
+            "terminal_item_count": self.terminal_item_count,
+            "item_types": self.item_types,
+            "item_statuses": self.item_statuses,
+        })
+    }
 }
 
 impl TurnAccumulator {
@@ -1046,6 +1135,7 @@ mod tests {
                 result_bytes: 0,
                 max_images,
                 max_result_bytes,
+                diagnostics: TurnDiagnostics::default(),
             }
         }
 
@@ -1660,6 +1750,25 @@ done
         server
             .send(
                 json!({
+                    "method": "item/completed",
+                    "params": {
+                        "threadId": "thread-missing",
+                        "turnId": "turn-missing",
+                        "item": {
+                            "type": "agentMessage",
+                            "id": "message-1",
+                            "status": "completed",
+                            "text": "secret upstream prose must not enter diagnostics"
+                        }
+                    }
+                })
+                .to_string(),
+            )
+            .await
+            .unwrap();
+        server
+            .send(
+                json!({
                     "method": "turn/completed",
                     "params": {
                         "threadId": "thread-missing",
@@ -1677,6 +1786,17 @@ done
             .unwrap();
         let error = execution.await.unwrap().unwrap_err();
         assert_eq!(error.code, ErrorCode::Upstream);
+        assert_eq!(error.details["turn_diagnostics"]["completed_items"], 1);
+        assert_eq!(
+            error.details["turn_diagnostics"]["item_types"]["agentMessage"],
+            1
+        );
+        assert_eq!(error.details["turn_diagnostics"]["image_items"], 0);
+        assert!(
+            !serde_json::to_string(&error)
+                .unwrap()
+                .contains("secret upstream prose")
+        );
     }
 
     #[tokio::test]
@@ -1711,6 +1831,7 @@ done
         );
         live_request.session.mode = SessionMode::Persistent;
         live_request.session.key = Some("live-persistent-session".to_owned());
+        live_request.parameters.action = ImageAction::Generate;
         let first = provider
             .execute(
                 live_request.clone(),
@@ -1725,6 +1846,10 @@ done
             .unwrap();
         assert_eq!(first.data.len(), 1);
         assert!(first.data[0].bytes > 0);
+        assert!(first.normalizations.iter().any(|normalization| {
+            normalization.field == "parameters.action"
+                && normalization.reason == "provider_uses_automatic_action"
+        }));
         let first_session = first.session.unwrap();
         assert!(!first_session.reused);
 

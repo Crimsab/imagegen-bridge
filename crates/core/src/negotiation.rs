@@ -44,7 +44,7 @@ pub fn negotiate_request(
     check_sessions(request, capabilities)?;
     check_user_attribution(request, capabilities)?;
     check_input_fidelity(request, capabilities)?;
-    check_action(request, capabilities)?;
+    negotiate_action(&mut effective_request, capabilities, &mut normalizations)?;
     negotiate_count(&mut effective_request, capabilities, &mut normalizations)?;
     negotiate_size(&mut effective_request, capabilities, &mut normalizations)?;
     negotiate_hints(&mut effective_request, capabilities, &mut normalizations)?;
@@ -106,12 +106,26 @@ fn check_input_fidelity(
     .with_detail("supported", &capabilities.input_fidelities))
 }
 
-fn check_action(
-    request: &ImageRequest,
+fn negotiate_action(
+    request: &mut ImageRequest,
     capabilities: &ProviderCapabilities,
+    normalizations: &mut Vec<Normalization>,
 ) -> Result<(), BridgeError> {
     let requested = request.parameters.action;
     if capabilities.actions.contains(&requested) {
+        return Ok(());
+    }
+    if requested != crate::ImageAction::Auto
+        && capabilities.actions.contains(&crate::ImageAction::Auto)
+    {
+        record(
+            normalizations,
+            "parameters.action",
+            requested,
+            crate::ImageAction::Auto,
+            "provider_uses_automatic_action",
+        );
+        request.parameters.action = crate::ImageAction::Auto;
         return Ok(());
     }
     Err(unsupported(
@@ -813,7 +827,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_fidelity_and_action_are_capability_checked() {
+    fn explicit_fidelity_is_checked_and_semantic_action_can_use_auto() {
         let mut request = ImageRequest::generate("test");
         request.parameters.input_fidelity = Some(crate::InputFidelity::High);
         let error = negotiate_request(&request, &capabilities()).unwrap_err();
@@ -821,8 +835,17 @@ mod tests {
 
         request.parameters.input_fidelity = None;
         request.parameters.action = crate::ImageAction::Generate;
-        let error = negotiate_request(&request, &capabilities()).unwrap_err();
-        assert_eq!(error.details["field"], "parameters.action");
+        let negotiated = negotiate_request(&request, &capabilities()).unwrap();
+        assert_eq!(
+            negotiated.effective_request.parameters.action,
+            crate::ImageAction::Auto
+        );
+        assert_eq!(negotiated.normalizations.len(), 1);
+        assert_eq!(negotiated.normalizations[0].field, "parameters.action");
+        assert_eq!(
+            negotiated.normalizations[0].reason,
+            "provider_uses_automatic_action"
+        );
     }
 
     #[test]

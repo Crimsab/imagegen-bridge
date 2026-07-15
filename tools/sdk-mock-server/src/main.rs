@@ -152,14 +152,14 @@ async fn diagnostics(headers: HeaderMap) -> Response {
         "bridge_version": "0.1.0-test",
         "configuration": {
             "version": 1,
-            "default_provider": "codex-app-server",
+            "default_provider": "codex-responses",
             "listener_scope": "loopback",
             "authentication_required": true,
             "metrics_enabled": false,
             "jobs_enabled": true,
             "max_connections": 32,
             "max_body_bytes": 83_886_080,
-            "read_timeout_ms": 30000,
+            "read_timeout_ms": 0,
             "write_timeout_ms": 30000,
             "provenance": [
                 {"field":"default_provider","source":"file","key":"default_provider"},
@@ -167,7 +167,7 @@ async fn diagnostics(headers: HeaderMap) -> Response {
             ]
         },
         "artifact_storage_enabled": true,
-        "runtime": {"global_queued": 0, "providers_queued": {"codex-app-server": 0}},
+        "runtime": {"global_queued": 0, "providers_queued": {"codex-responses": 0}},
         "jobs": {
             "total": 1,
             "queued": 0,
@@ -451,7 +451,7 @@ async fn capabilities(
         );
     };
     capabilities["provider"] = Value::String(provider.clone());
-    capabilities["experimental"] = Value::Bool(provider == "codex-responses");
+    capabilities["experimental"] = Value::Bool(false);
     if let Some(model) = query.get("model").filter(|model| !model.is_empty()) {
         capabilities["model"] = Value::String(model.clone());
     }

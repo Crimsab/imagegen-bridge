@@ -63,7 +63,7 @@ pub fn openapi_document() -> Value {
                         {"name":"cursor","in":"query","schema":{"type":"string","maxLength":256}}
                     ],
                     "responses": {
-                        "200": json_response("Provider page", json!({"$ref":"#/components/schemas/ProviderPage"}), json!({"items":[{"name":"codex-app-server","display_name":"Codex app-server","version":"0.1.0","experimental":false,"models":["gpt-image-2"]}]})),
+                        "200": json_response("Provider page", json!({"$ref":"#/components/schemas/ProviderPage"}), json!({"items":[{"name":"codex-responses","display_name":"Codex OAuth Responses","version":"0.1.0","experimental":false,"models":["gpt-image-2","gpt-image-1.5","gpt-image-1","gpt-image-1-mini"]}]})),
                         "400": error_response("Invalid provider cursor"),
                         "401": error_response("Bridge authentication required")
                     }
@@ -158,7 +158,7 @@ pub fn openapi_document() -> Value {
                     "responses": {
                         "200": json_response("Redaction-safe operator diagnostics", json!({"$ref":"#/components/schemas/OperatorDiagnostics"}), json!({
                             "bridge_version":"0.1.0",
-                            "configuration":{"version":1,"default_provider":"codex-app-server","listener_scope":"loopback","listener_port":8787,"authentication_required":true,"metrics_enabled":false,"jobs_enabled":true,"max_connections":256,"max_body_bytes":83_886_080,"read_timeout_ms":30000,"write_timeout_ms":30000,"provenance":[]},
+                            "configuration":{"version":1,"default_provider":"codex-responses","listener_scope":"loopback","listener_port":8787,"authentication_required":true,"metrics_enabled":false,"jobs_enabled":true,"max_connections":256,"max_body_bytes":83_886_080,"read_timeout_ms":0,"write_timeout_ms":30000,"provenance":[]},
                             "artifact_storage_enabled":true,
                             "runtime":{"global_queued":0,"providers_queued":{"codex-app-server":0}},
                             "jobs":{"total":12,"queued":0,"running":1,"succeeded":10,"failed":1,"cancelled":0,"interrupted":0,"hidden":0,"database_bytes":40960,"logical_bytes":1_048_576,"active_workers":1,"max_pending":1000,"max_running":4,"retention_secs":604_800,"max_retained":10000,"max_retained_bytes":268_435_456,"max_database_bytes":1_073_741_824},

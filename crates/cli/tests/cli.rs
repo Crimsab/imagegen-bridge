@@ -703,6 +703,7 @@ while IFS= read -r LINE; do
   case "$LINE" in
     *'"method":"initialize"'*) printf '%s\n' '{"id":1,"result":{}}' ;;
     *'"method":"account/read"'*) printf '%s\n' '{"id":2,"result":{"account":{"type":"chatgpt"}}}' ;;
+    *'"method":"modelProvider/capabilities/read"'*) printf '%s\n' '{"id":3,"result":{"imageGeneration":true,"webSearch":true,"namespaceTools":true}}' ;;
   esac
 done
 "#,
@@ -815,6 +816,8 @@ fn daemon_starts_serves_health_and_stops_on_sigint() {
 while IFS= read -r LINE; do
   case "$LINE" in
     *'"method":"initialize"'*) printf '%s\n' '{"id":1,"result":{}}' ;;
+    *'"method":"account/read"'*) printf '%s\n' '{"id":2,"result":{"account":{"type":"chatgpt"}}}' ;;
+    *'"method":"modelProvider/capabilities/read"'*) printf '%s\n' '{"id":3,"result":{"imageGeneration":true,"webSearch":true,"namespaceTools":true}}' ;;
   esac
 done
 "#,
@@ -969,7 +972,7 @@ database = "{root}/jobs.sqlite3"
                 diagnostics.contains("image operation failed"),
                 "missing trace event: {diagnostics}"
             );
-            assert!(diagnostics.contains("\"provider\":\"codex-app-server\""));
+            assert!(diagnostics.contains("\"provider\":\"codex-responses\""));
             assert!(diagnostics.contains("\"request_id\":"));
             assert!(diagnostics.contains("\"error_code\":\"InvalidRequest\""));
             assert!(!diagnostics.contains("trace-secret prompt"));

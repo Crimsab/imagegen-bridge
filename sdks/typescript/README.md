@@ -16,8 +16,8 @@ const result = await bridge.images.generate({
   operation: "generate",
   prompt: "a paper fox",
   routing: {
-    provider: "codex-app-server",
-    fallbacks: [{ provider: "codex-responses", model: "gpt-image-2" }],
+    provider: "codex-responses",
+    fallbacks: [{ provider: "codex-app-server", model: "gpt-image-2" }],
   },
   output: {
     response_format: "artifact",

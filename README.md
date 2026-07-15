@@ -194,12 +194,14 @@ diagnostics, metrics, errors, and the full route contract.
 
 | Transport | Status | Use it for | Constraint |
 | --- | --- | --- | --- |
-| `codex-app-server` | Default | Supported Codex lifecycle, edits, references, and reusable threads | The image tool exposes a small automatic parameter set |
-| `codex-responses` | Opt-in experimental | Explicit models and additional image controls | Uses a private upstream protocol that may change |
+| `codex-responses` | Default, first class | Built-in Codex image generation, explicit models, and image controls | Uses the Codex Responses backend and Codex/ChatGPT OAuth |
+| `codex-app-server` | Supported fallback | Codex lifecycle, edits, references, and reusable threads | Uses automatic image-tool action negotiation and a smaller parameter set |
 
-The experimental Responses transport can route `gpt-image-2`,
-`gpt-image-1.5`, `gpt-image-1`, and `gpt-image-1-mini`. Enable it in the
-configuration, inspect its live capabilities, and select it explicitly:
+`codex-responses` is the built-in Codex path and can route `gpt-image-2`,
+`gpt-image-1.5`, `gpt-image-1`, and `gpt-image-1-mini`. It authenticates with
+the existing Codex/ChatGPT OAuth session and the Codex Responses backend. It
+does **not** read `OPENAI_API_KEY` and is separate from the official OpenAI
+Platform API-key provider. Inspect its live capabilities with:
 
 ```sh
 imagegen-bridge providers capabilities \
@@ -207,7 +209,6 @@ imagegen-bridge providers capabilities \
   --json
 
 imagegen-bridge generate \
-  --provider codex-responses \
   --model gpt-image-2 \
   "A translucent red glass sculpture"
 ```
@@ -217,8 +218,11 @@ mode rejects unsupported combinations; `--compatibility normalize` applies
 only changes reported back in the response. Masks are currently unsupported by
 both Codex transports.
 
-An API-key-backed official OpenAI provider is reserved in configuration but is
-not implemented. The current project focuses on Codex OAuth.
+`codex-app-server` remains available as a fallback. Its upstream turn may
+occasionally finish without emitting an image item; the bridge treats that as
+an error and records content-safe structured counts of observed item types and
+statuses for diagnosis. An API-key-backed official OpenAI provider is reserved
+in configuration but is not implemented and never shares Codex OAuth handling.
 
 ## Advanced controls
 
@@ -238,8 +242,8 @@ permission failures, or operations with an unknown upstream outcome:
 
 ```sh
 imagegen-bridge generate "A red paper fox" \
-  --provider codex-app-server \
-  --fallback codex-responses:gpt-image-2 \
+  --provider codex-responses \
+  --fallback codex-app-server:gpt-image-2 \
   --fallback-policy on_unavailable
 ```
 
@@ -297,10 +301,11 @@ can consume image-generation allowance. See [docs/testing.md](docs/testing.md).
 
 ## Security and upstream status
 
-The Responses adapter is live-tested, but its private upstream protocol may
-change. App-server remains the default. Imagegen Bridge does not disable or
-bypass upstream safety checks and does not automatically retry an unchanged
-safety refusal.
+The default Responses adapter is live-tested against the Codex backend. Its
+wire protocol is an implementation detail of Codex OAuth and may evolve, so
+releases keep regression fixtures and controlled live gates. Imagegen Bridge
+does not disable or bypass upstream safety checks and does not automatically
+retry an unchanged safety refusal.
 
 Do not commit `auth.json`, mount an entire home directory into the container, or
 bind an unauthenticated bridge to a public interface.

@@ -31,7 +31,7 @@ impl Default for BridgeConfig {
     fn default() -> Self {
         Self {
             version: CONFIG_VERSION,
-            default_provider: "codex-app-server".to_owned(),
+            default_provider: "codex-responses".to_owned(),
             runtime: RuntimeSettings::default(),
             inputs: InputSettings::default(),
             artifacts: ArtifactSettings::default(),
@@ -307,7 +307,7 @@ impl Default for RetentionSettings {
 pub struct ProviderSettings {
     /// Stable app-server provider.
     pub codex_app_server: CodexAppServerSettings,
-    /// Experimental private Responses adapter.
+    /// Codex OAuth Responses adapter.
     pub codex_responses: CodexResponsesSettings,
     /// Official `OpenAI` Images adapter.
     pub openai: OpenAiSettings,
@@ -378,11 +378,11 @@ impl Default for CodexAppServerSettings {
     }
 }
 
-/// Experimental Codex OAuth Responses settings.
+/// Codex OAuth Responses settings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CodexResponsesSettings {
-    /// Explicit opt-in registration of the private adapter.
+    /// Register this provider.
     pub enabled: bool,
     /// Private Responses endpoint.
     pub endpoint: String,
@@ -397,7 +397,7 @@ pub struct CodexResponsesSettings {
 impl Default for CodexResponsesSettings {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             endpoint: "https://chatgpt.com/backend-api/codex/responses".to_owned(),
             responses_model: "gpt-5.5".to_owned(),
             image_model: "gpt-image-2".to_owned(),
@@ -451,7 +451,7 @@ pub struct ServerSettings {
     pub max_header_bytes: usize,
     /// Maximum simultaneous HTTP connections.
     pub max_connections: usize,
-    /// Request read timeout in milliseconds.
+    /// Socket read-stall timeout in milliseconds; zero disables it.
     pub read_timeout_ms: u64,
     /// Maximum time a socket write may remain stalled without progress.
     pub write_timeout_ms: u64,
@@ -471,7 +471,7 @@ impl Default for ServerSettings {
             max_body_bytes: 80 * 1024 * 1024,
             max_header_bytes: 32 * 1024,
             max_connections: 256,
-            read_timeout_ms: 30_000,
+            read_timeout_ms: 0,
             write_timeout_ms: 30_000,
             metrics: MetricsSettings::default(),
             tracing: TracingSettings::default(),

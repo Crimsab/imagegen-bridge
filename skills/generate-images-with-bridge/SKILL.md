@@ -8,6 +8,11 @@ Use the installed `imagegen-bridge` CLI as the only generation boundary. Discove
 the active provider's capabilities before applying optional controls, execute a
 real artifact-backed request, and return the verified absolute output paths from
 the CLI's local-only JSON envelope.
+
+The default `codex-responses` provider is the built-in Codex path. It uses the
+existing Codex/ChatGPT OAuth session and Codex Responses backend, never
+`OPENAI_API_KEY`. `codex-app-server` is a supported fallback, while an official
+OpenAI Platform API-key provider is a separate integration.
 </objective>
 
 <quick_start>

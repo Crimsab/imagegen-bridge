@@ -226,7 +226,7 @@ def test_async_client_matches_shared_http_contract(
                 "completed",
             ]
             providers = await client.providers()
-            assert providers.items[1].experimental
+            assert not providers.items[1].experimental
             assert providers.items[1].models == (
                 "gpt-image-2",
                 "gpt-image-1.5",

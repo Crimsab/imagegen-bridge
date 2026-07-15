@@ -34,7 +34,7 @@ pub async fn serve(
     let listener = LimitedListener::new(
         listener,
         settings.max_connections,
-        Duration::from_millis(settings.read_timeout_ms),
+        (settings.read_timeout_ms > 0).then(|| Duration::from_millis(settings.read_timeout_ms)),
         Duration::from_millis(settings.write_timeout_ms),
     );
     axum::serve(listener, router)
@@ -45,7 +45,7 @@ pub async fn serve(
 struct LimitedListener {
     listener: TcpListener,
     permits: Arc<Semaphore>,
-    read_timeout: Duration,
+    read_timeout: Option<Duration>,
     write_timeout: Duration,
 }
 
@@ -53,7 +53,7 @@ impl LimitedListener {
     fn new(
         listener: TcpListener,
         maximum: usize,
-        read_timeout: Duration,
+        read_timeout: Option<Duration>,
         write_timeout: Duration,
     ) -> Self {
         Self {
@@ -95,8 +95,8 @@ impl Listener for LimitedListener {
 struct LimitedIo {
     stream: TcpStream,
     _permit: OwnedSemaphorePermit,
-    read_timeout: Duration,
-    read_deadline: Pin<Box<Sleep>>,
+    read_timeout: Option<Duration>,
+    read_deadline: Option<Pin<Box<Sleep>>>,
     write_timeout: Duration,
     write_deadline: Pin<Box<Sleep>>,
     write_stalled: bool,
@@ -106,14 +106,14 @@ impl LimitedIo {
     fn new(
         stream: TcpStream,
         permit: OwnedSemaphorePermit,
-        read_timeout: Duration,
+        read_timeout: Option<Duration>,
         write_timeout: Duration,
     ) -> Self {
         Self {
             stream,
             _permit: permit,
             read_timeout,
-            read_deadline: Box::pin(sleep(read_timeout)),
+            read_deadline: read_timeout.map(|timeout| Box::pin(sleep(timeout))),
             write_timeout,
             write_deadline: Box::pin(sleep(write_timeout)),
             write_stalled: false,
@@ -150,15 +150,22 @@ impl AsyncRead for LimitedIo {
     ) -> Poll<io::Result<()>> {
         let before = buffer.filled().len();
         if let Poll::Ready(result) = Pin::new(&mut self.stream).poll_read(context, buffer) {
-            if result.is_ok() && buffer.filled().len() > before {
-                let timeout = self.read_timeout;
-                self.read_deadline
+            if result.is_ok()
+                && buffer.filled().len() > before
+                && let (Some(timeout), Some(deadline)) =
+                    (self.read_timeout, self.read_deadline.as_mut())
+            {
+                deadline
                     .as_mut()
                     .reset(tokio::time::Instant::now() + timeout);
             }
             return Poll::Ready(result);
         }
-        if self.read_deadline.as_mut().poll(context).is_ready() {
+        if self
+            .read_deadline
+            .as_mut()
+            .is_some_and(|deadline| deadline.as_mut().poll(context).is_ready())
+        {
             Poll::Ready(Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 "HTTP connection read timed out",
@@ -254,6 +261,47 @@ mod tests {
         client.read_to_end(&mut response).await.unwrap();
         assert!(response.starts_with(b"HTTP/1.1 200 OK"));
         assert!(response.ends_with(b"ok"));
+        let _ = shutdown.send(());
+        server.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn default_read_policy_keeps_a_long_running_handler_connected() {
+        let listener = bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let settings = ServerSettings {
+            max_connections: 1,
+            write_timeout_ms: 1_000,
+            ..ServerSettings::default()
+        };
+        assert_eq!(settings.read_timeout_ms, 0);
+        let (shutdown, signal) = oneshot::channel();
+        let server = tokio::spawn(serve(
+            listener,
+            Router::new().route(
+                "/generate",
+                get(|| async {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    "generated"
+                }),
+            ),
+            settings,
+            async move {
+                let _ = signal.await;
+            },
+        ));
+        let mut client = TcpStream::connect(address).await.unwrap();
+        client
+            .write_all(b"GET /generate HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        let mut response = Vec::new();
+        timeout(Duration::from_secs(2), client.read_to_end(&mut response))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(response.starts_with(b"HTTP/1.1 200 OK"));
+        assert!(response.ends_with(b"generated"));
         let _ = shutdown.send(());
         server.await.unwrap().unwrap();
     }

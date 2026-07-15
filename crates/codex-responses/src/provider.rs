@@ -1,4 +1,4 @@
-//! Experimental provider for advanced image parameters over Codex OAuth.
+//! First-class built-in image provider over Codex OAuth Responses.
 
 use std::{
     collections::BTreeSet,
@@ -40,10 +40,10 @@ const SUPPORTED_IMAGE_MODELS: [&str; 4] = [
 ];
 const INSTRUCTIONS: &str = "You are an image generation assistant inside the Codex backend. Invoke the image_generation tool exactly once and do not answer with text only.";
 
-/// Experimental provider configuration.
+/// Codex OAuth Responses provider configuration.
 #[derive(Clone)]
 pub struct CodexResponsesConfig {
-    /// Private upstream Responses endpoint.
+    /// Codex Responses endpoint.
     pub endpoint: Url,
     /// Chat model that orchestrates the image tool.
     pub responses_model: String,
@@ -273,7 +273,8 @@ impl CodexResponsesProvider {
             revised_prompt = None;
         }
         let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let mut warnings = vec!["experimental_private_upstream".to_owned()];
+        let normalizations = negotiated.normalizations;
+        let mut warnings = Vec::new();
         if !failures.is_empty() {
             warnings.push("partial_output_failure".to_owned());
         }
@@ -286,7 +287,7 @@ impl CodexResponsesProvider {
             model: image_model.to_owned(),
             requested: negotiated.requested,
             effective: request.parameters.clone(),
-            normalizations: negotiated.normalizations,
+            normalizations,
             attempts: Vec::new(),
             data: images,
             failures,
@@ -570,9 +571,9 @@ impl ImageProvider for CodexResponsesProvider {
     fn descriptor(&self) -> ProviderDescriptor {
         ProviderDescriptor {
             name: "codex-responses".to_owned(),
-            display_name: "Codex OAuth Responses (experimental)".to_owned(),
+            display_name: "Codex OAuth Responses".to_owned(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
-            experimental: true,
+            experimental: false,
             models: SUPPORTED_IMAGE_MODELS
                 .into_iter()
                 .map(str::to_owned)
@@ -641,7 +642,7 @@ fn capabilities(
         provider: "codex-responses".to_owned(),
         implementation_version: env!("CARGO_PKG_VERSION").to_owned(),
         model: Some(model.to_owned()),
-        experimental: true,
+        experimental: false,
         generation: true,
         edits: true,
         count: U8Range { min: 1, max: 4 },
@@ -1094,9 +1095,11 @@ mod tests {
         let mut config = CodexResponsesConfig::production(loader).unwrap();
         config.endpoint = Url::parse(&format!("http://{address}/responses")).unwrap();
         let provider = CodexResponsesProvider::new(Arc::new(FakeCredentials), config).unwrap();
+        let mut request = ImageRequest::generate("test prompt");
+        request.parameters.size = "1024x1024".parse().unwrap();
         let response = provider
             .execute(
-                ImageRequest::generate("test prompt"),
+                request,
                 ProviderContext {
                     request_id: "mock-request".to_owned(),
                     deadline: Instant::now() + std::time::Duration::from_secs(10),
@@ -1398,7 +1401,7 @@ mod tests {
             }],
         };
         request.parameters.size = "1024x1024".parse().unwrap();
-        request.parameters.quality = Quality::Medium;
+        request.parameters.quality = Quality::Low;
         request.parameters.output_format = OutputFormat::Png;
         request.parameters.background = Background::Opaque;
         request.parameters.partial_images = 1;

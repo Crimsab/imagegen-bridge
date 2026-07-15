@@ -1,5 +1,5 @@
 version = 1
-default_provider = "codex-app-server"
+default_provider = "codex-responses"
 
 [runtime]
 default_timeout_ms = 300000
@@ -82,8 +82,8 @@ shutdown_timeout_ms = 5000
 restart_backoff_ms = 250
 
 [providers.codex_responses]
-# Private upstream: this remains explicit opt-in and experimental.
-enabled = false
+# Built-in Codex path: uses ChatGPT/Codex OAuth, not OPENAI_API_KEY.
+enabled = true
 endpoint = "https://chatgpt.com/backend-api/codex/responses"
 responses_model = "gpt-5.5"
 image_model = "gpt-image-2"
@@ -102,7 +102,8 @@ bind = "127.0.0.1:8787"
 max_body_bytes = 83886080
 max_header_bytes = 32768
 max_connections = 256
-read_timeout_ms = 30000
+# Zero disables socket read-idle expiry while a synchronous generation is running.
+read_timeout_ms = 0
 write_timeout_ms = 30000
 
 [server.metrics]

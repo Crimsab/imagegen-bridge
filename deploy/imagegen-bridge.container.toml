@@ -1,5 +1,5 @@
 version = 1
-default_provider = "codex-app-server"
+default_provider = "codex-responses"
 
 [inputs]
 local_roots = ["/workspace"]
@@ -18,7 +18,7 @@ cwd = "/workspace"
 session_database = "/data/state/sessions.sqlite3"
 
 [providers.codex_responses]
-enabled = false
+enabled = true
 
 [providers.openai]
 enabled = false
@@ -29,7 +29,7 @@ bearer_token_env = "IMAGEGEN_BRIDGE_BEARER_TOKEN"
 max_body_bytes = 83886080
 max_header_bytes = 32768
 max_connections = 256
-read_timeout_ms = 30000
+read_timeout_ms = 0
 write_timeout_ms = 30000
 
 [server.metrics]

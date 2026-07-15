@@ -53,8 +53,8 @@ Run only the gate being evaluated.
 | Gate | External work | Contract verified |
 | --- | --- | --- |
 | `IMAGEGEN_BRIDGE_LIVE_BOOTSTRAP=1` | No generation | Both Codex OAuth adapters initialize and report ready |
-| `IMAGEGEN_BRIDGE_LIVE_CODEX=1` | Two app-server images | Verified bytes plus persistent session reuse on the same thread |
-| `IMAGEGEN_BRIDGE_LIVE_CODEX_RESPONSES=1` | One Responses image | Reference input, explicit size/quality/background, high input fidelity, edit action, partial-image request, and verified final bytes |
+| `IMAGEGEN_BRIDGE_LIVE_CODEX=1` | Two app-server images | Verified bytes, `generate` to `auto` action negotiation, plus persistent session reuse on the same thread |
+| `IMAGEGEN_BRIDGE_LIVE_CODEX_RESPONSES=1` | One low-quality Responses image | Reference input, explicit size/background, high input fidelity, edit action, partial-image request, actual dimensions/checksum, and verified final bytes |
 
 ```sh
 IMAGEGEN_BRIDGE_LIVE_BOOTSTRAP=1 \

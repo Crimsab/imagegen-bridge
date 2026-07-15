@@ -3565,7 +3565,7 @@
                   "bridge_version": "0.1.0",
                   "configuration": {
                     "authentication_required": true,
-                    "default_provider": "codex-app-server",
+                    "default_provider": "codex-responses",
                     "jobs_enabled": true,
                     "listener_port": 8787,
                     "listener_scope": "loopback",
@@ -3573,7 +3573,7 @@
                     "max_connections": 256,
                     "metrics_enabled": false,
                     "provenance": [],
-                    "read_timeout_ms": 30000,
+                    "read_timeout_ms": 0,
                     "version": 1,
                     "write_timeout_ms": 30000
                   },
@@ -5125,12 +5125,15 @@
                 "example": {
                   "items": [
                     {
-                      "display_name": "Codex app-server",
+                      "display_name": "Codex OAuth Responses",
                       "experimental": false,
                       "models": [
-                        "gpt-image-2"
+                        "gpt-image-2",
+                        "gpt-image-1.5",
+                        "gpt-image-1",
+                        "gpt-image-1-mini"
                       ],
-                      "name": "codex-app-server",
+                      "name": "codex-responses",
                       "version": "0.1.0"
                     }
                   ]

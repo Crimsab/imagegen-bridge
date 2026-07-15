@@ -49,6 +49,9 @@ while IFS= read -r line; do
     *'"method":"account/read"'*)
       printf '{"id":%s,"result":{"account":{"type":"chatgpt"}}}\n' "$id"
       ;;
+    *'"method":"modelProvider/capabilities/read"'*)
+      printf '{"id":%s,"result":{"imageGeneration":true,"webSearch":true,"namespaceTools":true}}\n' "$id"
+      ;;
     *'"method":"thread/start"'*)
       printf '%s\n' 'thread/start' >>/data/state/rpc-methods.log
       printf '{"id":%s,"result":{"thread":{"id":"thread-container-smoke"}}}\n' "$id"

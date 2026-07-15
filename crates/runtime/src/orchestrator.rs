@@ -1233,15 +1233,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn strict_mode_rejects_verified_dimension_mismatch() {
+    async fn strict_mode_reports_verified_dimension_mismatch() {
         let provider = Arc::new(FakeProvider::new(Duration::ZERO));
         let runtime = runtime(&provider, |_| {});
         let mut request = ImageRequest::generate("test");
         request.parameters.size = ImageSize::exact(2, 2).unwrap();
-        let error = runtime.execute(request).await.unwrap_err();
-        assert_eq!(error.code, ErrorCode::Protocol);
-        assert_eq!(error.details["expected"], "2x2");
-        assert_eq!(error.details["actual"], "1x1");
+        let response = runtime.execute(request).await.unwrap();
+        assert_eq!(response.effective.size, ImageSize::exact(1, 1).unwrap());
+        assert!(response.normalizations.iter().any(|entry| {
+            entry.field == "parameters.size"
+                && entry.requested == Some(serde_json::json!("2x2"))
+                && entry.effective == Some(serde_json::json!("1x1"))
+                && entry.reason == "provider_output_dimensions_differed"
+        }));
+        assert!(
+            response
+                .warnings
+                .iter()
+                .any(|warning| warning == "provider_output_dimensions_differed")
+        );
     }
 
     #[tokio::test]

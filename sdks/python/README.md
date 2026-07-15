@@ -29,8 +29,8 @@ async with AsyncImagegenBridgeClient("http://127.0.0.1:8787") as client:
             metadata="sidecar",
         ),
         routing=RoutingOptions(
-            provider="codex-app-server",
-            fallbacks=(ProviderRoute("codex-responses", "gpt-image-2"),),
+            provider="codex-responses",
+            fallbacks=(ProviderRoute("codex-app-server", "gpt-image-2"),),
         ),
     ))
     print(result.data[0].name, result.data[0].metadata_name)

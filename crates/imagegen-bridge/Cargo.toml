@@ -23,7 +23,7 @@ tokio = { version = "1", features = ["fs"] }
 url = "2"
 
 [features]
-default = ["codex-app-server"]
+default = ["codex-responses", "codex-app-server"]
 codex-app-server = ["dep:imagegen-bridge-codex-app-server"]
 codex-responses = ["dep:imagegen-bridge-codex-responses"]
 

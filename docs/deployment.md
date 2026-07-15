@@ -46,6 +46,14 @@ The default layout is:
 | `/workspace` | Optional local/reference inputs | read-only |
 | `/tmp`, `/home/imagegen` | Bounded ephemeral scratch | tmpfs |
 
+The default `server.read_timeout_ms = 0` disables connection read-idle expiry.
+This is intentional for synchronous image requests that can spend several
+minutes inside a handler before producing response bytes. Request bodies remain
+bounded by `max_body_bytes` and intrinsic input limits. A positive value enables
+an idle read-stall deadline for deployments that prefer it. The write timeout
+is progress-based and starts only when socket output stalls; it does not limit
+generation duration.
+
 ## Health and shutdown
 
 `GET /health/live` is public and content-free for container health checks.

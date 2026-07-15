@@ -1,4 +1,4 @@
-//! Experimental image provider for the private `ChatGPT` Codex Responses route.
+//! First-class image provider for the Codex OAuth Responses backend.
 
 mod auth;
 mod events;
