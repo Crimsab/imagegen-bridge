@@ -129,7 +129,7 @@ data. Applying a preset remains a client operation: the caller reads the
 template, supplies any required image inputs, and posts the resulting native
 request.
 
-Names are 1–64 portable ASCII characters, begin with a letter or number, and
+Names are 1-64 portable ASCII characters, begin with a letter or number, and
 may subsequently contain letters, numbers, `.`, `_`, or `-`. Descriptions are
 optional and bounded. Creation returns `409` for an existing name; read,
 replace, and delete return `404` for a missing preset. Listing uses the same

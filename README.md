@@ -13,7 +13,7 @@
 [![Container: GHCR](https://img.shields.io/badge/container-GHCR-blue?logo=github)](https://github.com/Crimsab/imagegen-bridge/pkgs/container/imagegen-bridge)
 [![License: MIT](https://img.shields.io/github/license/Crimsab/imagegen-bridge)](LICENSE)
 
-[Quick start](#quick-start) · [Commands](#main-commands) · [Examples](#common-workflows) · [SDKs and skill](#use-from-code-or-agents) · [Dashboard and API](#dashboard-and-api) · [Documentation](#documentation)
+[Documentation](https://crimsab.github.io/imagegen-bridge/) · [Quick start](#quick-start) · [Commands](#main-commands) · [Examples](#common-workflows) · [SDKs and skill](#use-from-code-or-agents) · [Dashboard and API](#dashboard-and-api)
 
 </div>
 
@@ -283,6 +283,7 @@ effective configuration without resolving credential values.
 
 ## Documentation
 
+- [Documentation site](https://crimsab.github.io/imagegen-bridge/)
 - [CLI reference](docs/cli.md)
 - [HTTP API contract](docs/api.md)
 - [SDK guide](docs/sdks.md)
