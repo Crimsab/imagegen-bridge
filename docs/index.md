@@ -36,7 +36,7 @@ hide:
 
 ## Start where you are
 
-<div class="ib-paths" markdown>
+<div class="ib-paths">
   <a class="ib-path ib-path--cli" href="cli/">
     <span class="ib-path__label">Local workflow</span>
     <strong>Generate from the command line</strong>
