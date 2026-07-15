@@ -71,6 +71,12 @@ an idle read-stall deadline for deployments that prefer it. The write timeout
 is progress-based and starts only when socket output stalls; it does not limit
 generation duration.
 
+The Codex Responses provider defaults to two total attempts with a 750 ms base
+backoff for failures that are explicitly safe to retry. Set
+`providers.codex_responses.max_transient_attempts = 1` to disable this recovery.
+The accepted range is `1..=2`; unknown outcomes are never retried regardless of
+configuration.
+
 ## Health and shutdown
 
 `GET /health/live` is public and content-free for container health checks.

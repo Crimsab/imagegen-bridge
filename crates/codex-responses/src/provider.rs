@@ -63,6 +63,10 @@ pub struct CodexResponsesConfig {
     pub max_reference_bytes: u64,
     /// Maximum simultaneous upstream calls within one multi-image request.
     pub max_parallel_outputs: usize,
+    /// Maximum attempts for failures that are explicitly safe to retry.
+    pub max_transient_attempts: u8,
+    /// Base delay between safe transient attempts.
+    pub transient_retry_backoff: std::time::Duration,
 }
 
 impl std::fmt::Debug for CodexResponsesConfig {
@@ -79,6 +83,8 @@ impl std::fmt::Debug for CodexResponsesConfig {
             .field("max_base64_chars", &self.max_base64_chars)
             .field("max_reference_bytes", &self.max_reference_bytes)
             .field("max_parallel_outputs", &self.max_parallel_outputs)
+            .field("max_transient_attempts", &self.max_transient_attempts)
+            .field("transient_retry_backoff", &self.transient_retry_backoff)
             .finish()
     }
 }
@@ -99,6 +105,8 @@ impl CodexResponsesConfig {
             max_base64_chars: 128 * 1024 * 1024,
             max_reference_bytes: 64 * 1024 * 1024,
             max_parallel_outputs: 2,
+            max_transient_attempts: 2,
+            transient_retry_backoff: std::time::Duration::from_millis(750),
         })
     }
 }
@@ -143,6 +151,18 @@ impl CodexResponsesProvider {
                 "Codex Responses parallel output limit must be between 1 and 4",
             ));
         }
+        if !(1..=2).contains(&config.max_transient_attempts) {
+            return Err(BridgeError::new(
+                ErrorCode::Configuration,
+                "Codex Responses transient attempt limit must be between 1 and 2",
+            ));
+        }
+        if config.transient_retry_backoff > std::time::Duration::from_secs(30) {
+            return Err(BridgeError::new(
+                ErrorCode::Configuration,
+                "Codex Responses transient retry backoff must not exceed 30 seconds",
+            ));
+        }
         let client = Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
@@ -176,6 +196,7 @@ impl CodexResponsesProvider {
         let started = Instant::now();
         let mut images = Vec::with_capacity(usize::from(request.parameters.n));
         let mut failures = Vec::new();
+        let mut transient_retry_used = false;
         let mut revised_prompt = None;
         let mut usage = Usage::default();
         let output_calls = stream::iter(0..request.parameters.n)
@@ -186,7 +207,7 @@ impl CodexResponsesProvider {
                 async move {
                     let output_started = Instant::now();
                     let result = match self
-                        .call_once(request, image_model, output_index, user_content, context)
+                        .call_resilient(request, image_model, output_index, user_content, context)
                         .await
                         .map_err(|error| annotate_safety_rejection(error, request))
                     {
@@ -240,6 +261,7 @@ impl CodexResponsesProvider {
         for output in outputs {
             match output.result {
                 Ok((result, mut image)) => {
+                    transient_retry_used |= result.attempts > 1;
                     revised_prompt = result.revised_prompt.or(revised_prompt);
                     merge_usage(&mut usage, &result.usage);
                     image.index = output.index;
@@ -277,6 +299,9 @@ impl CodexResponsesProvider {
         let mut warnings = Vec::new();
         if !failures.is_empty() {
             warnings.push("partial_output_failure".to_owned());
+        }
+        if transient_retry_used {
+            warnings.push("transient_provider_retry_used".to_owned());
         }
         Ok(ImageResponse {
             id: context.request_id.clone(),
@@ -377,6 +402,57 @@ impl CodexResponsesProvider {
         // successful body is an SSE stream. The bounded decoder below validates
         // the actual framing and event payloads instead of trusting MIME metadata.
         self.consume_stream(response, output_index, context).await
+    }
+
+    async fn call_resilient(
+        &self,
+        request: &ImageRequest,
+        image_model: &str,
+        output_index: u8,
+        user_content: &[Value],
+        context: &ProviderContext,
+    ) -> Result<CallResult, BridgeError> {
+        for attempt in 1..=self.config.max_transient_attempts {
+            match self
+                .call_once(request, image_model, output_index, user_content, context)
+                .await
+            {
+                Ok(mut result) => {
+                    result.attempts = attempt;
+                    return Ok(result);
+                }
+                Err(error)
+                    if attempt < self.config.max_transient_attempts
+                        && safe_transient_retry(&error) =>
+                {
+                    let multiplier = u32::from(attempt);
+                    let delay = self
+                        .config
+                        .transient_retry_backoff
+                        .saturating_mul(multiplier);
+                    if context.deadline.saturating_duration_since(Instant::now()) <= delay {
+                        return Err(error.with_detail("provider_attempts", attempt));
+                    }
+                    tokio::select! {
+                        () = tokio::time::sleep(delay) => {}
+                        () = context.cancellation.cancelled() => {
+                            return Err(BridgeError::new(
+                                ErrorCode::Cancelled,
+                                "Codex Responses retry was cancelled before dispatch",
+                            )
+                            .with_provider("codex-responses")
+                            .with_detail("provider_attempts", attempt));
+                        }
+                    }
+                }
+                Err(error) => return Err(error.with_detail("provider_attempts", attempt)),
+            }
+        }
+        Err(BridgeError::new(
+            ErrorCode::Internal,
+            "Codex Responses retry loop produced no attempts",
+        )
+        .with_provider("codex-responses"))
     }
 
     async fn consume_stream(
@@ -759,6 +835,15 @@ fn status_error(status: StatusCode) -> BridgeError {
     .retryable(retryable)
     .with_provider("codex-responses")
     .with_detail("http_status", status.as_u16())
+}
+
+fn safe_transient_retry(error: &BridgeError) -> bool {
+    error.retryable
+        && error.details.get("outcome").and_then(Value::as_str) != Some("unknown")
+        && matches!(
+            error.code,
+            ErrorCode::RateLimited | ErrorCode::Overloaded | ErrorCode::Upstream
+        )
 }
 
 fn http_transport_error(error: &reqwest::Error) -> BridgeError {
@@ -1247,6 +1332,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn retries_an_explicit_transient_failure_once_and_reports_the_recovery() {
+        let (address, server, max_active) = mock_parallel_server(2, Some(0), Duration::ZERO).await;
+        let loader =
+            Arc::new(InputLoader::new(Vec::<PathBuf>::new(), ImageLimits::default()).unwrap());
+        let mut config = CodexResponsesConfig::production(loader).unwrap();
+        config.endpoint = Url::parse(&format!("http://{address}/responses")).unwrap();
+        config.transient_retry_backoff = Duration::ZERO;
+        let provider = CodexResponsesProvider::new(Arc::new(FakeCredentials), config).unwrap();
+        let response = provider
+            .execute(
+                ImageRequest::generate("recover from one safe transient failure"),
+                ProviderContext {
+                    request_id: "transient-retry".to_owned(),
+                    deadline: Instant::now() + Duration::from_secs(10),
+                    cancellation: tokio_util::sync::CancellationToken::new(),
+                    events: None,
+                },
+            )
+            .await
+            .unwrap();
+        server.await.unwrap();
+        assert_eq!(max_active.load(Ordering::Acquire), 1);
+        assert_eq!(response.data.len(), 1);
+        assert!(
+            response
+                .warnings
+                .iter()
+                .any(|value| value == "transient_provider_retry_used")
+        );
+    }
+
+    #[tokio::test]
     async fn best_effort_runs_bounded_calls_and_preserves_output_indices() {
         let (address, server, max_active) =
             mock_parallel_server(3, Some(1), Duration::from_millis(40)).await;
@@ -1255,6 +1372,7 @@ mod tests {
         let mut config = CodexResponsesConfig::production(loader).unwrap();
         config.endpoint = Url::parse(&format!("http://{address}/responses")).unwrap();
         config.max_parallel_outputs = 2;
+        config.max_transient_attempts = 1;
         let provider = CodexResponsesProvider::new(Arc::new(FakeCredentials), config).unwrap();
         let mut request = ImageRequest::generate("three bounded images");
         request.parameters.n = 3;
@@ -1312,6 +1430,7 @@ mod tests {
         let mut config = CodexResponsesConfig::production(loader).unwrap();
         config.endpoint = Url::parse(&format!("http://{address}/responses")).unwrap();
         config.max_parallel_outputs = 1;
+        config.max_transient_attempts = 1;
         let provider = CodexResponsesProvider::new(Arc::new(FakeCredentials), config).unwrap();
         let mut request = ImageRequest::generate("fail immediately");
         request.parameters.n = 3;
@@ -1342,6 +1461,7 @@ mod tests {
         let mut config = CodexResponsesConfig::production(loader).unwrap();
         config.endpoint = Url::parse(&format!("http://{address}/responses")).unwrap();
         config.max_parallel_outputs = 2;
+        config.max_transient_attempts = 1;
         let provider = CodexResponsesProvider::new(Arc::new(FakeCredentials), config).unwrap();
         let mut request = ImageRequest::generate("ambiguous batch");
         request.parameters.n = 2;

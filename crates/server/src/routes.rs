@@ -28,6 +28,7 @@ use imagegen_bridge_runtime::{
 };
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -1216,7 +1217,30 @@ async fn run_request_internal(
             tracing::info!(request_id = %request_id.0, provider = %provider, "image operation completed");
         }
         Err(error) => {
-            tracing::warn!(request_id = %request_id.0, provider = %provider, error_code = ?error.code, retryable = error.retryable, "image operation failed");
+            let upstream_code = error.details.get("upstream_code").and_then(Value::as_str);
+            let http_status = error.details.get("http_status").and_then(Value::as_u64);
+            let outcome = error.details.get("outcome").and_then(Value::as_str);
+            let provider_attempts = error
+                .details
+                .get("provider_attempts")
+                .and_then(Value::as_u64);
+            let output_item_types = error.details.get("output_item_types");
+            let message_content_types = error.details.get("message_content_types");
+            let image_call_statuses = error.details.get("image_call_statuses");
+            tracing::warn!(
+                request_id = %request_id.0,
+                provider = %provider,
+                error_code = ?error.code,
+                retryable = error.retryable,
+                upstream_code = ?upstream_code,
+                http_status = ?http_status,
+                outcome = ?outcome,
+                provider_attempts = ?provider_attempts,
+                output_item_types = ?output_item_types,
+                message_content_types = ?message_content_types,
+                image_call_statuses = ?image_call_statuses,
+                "image operation failed"
+            );
         }
     }
     result.map_err(|error| ApiError::from_bridge(error, request_id))

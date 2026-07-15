@@ -252,6 +252,20 @@ impl BridgeConfig {
                     "parallel output limit must be between 1 and 4",
                 );
             }
+            if !(1..=2).contains(&responses.max_transient_attempts) {
+                issue(
+                    "providers.codex_responses.max_transient_attempts",
+                    "out_of_range",
+                    "transient attempt limit must be between 1 and 2",
+                );
+            }
+            if responses.transient_retry_backoff_ms > 30_000 {
+                issue(
+                    "providers.codex_responses.transient_retry_backoff_ms",
+                    "out_of_range",
+                    "transient retry backoff must not exceed 30000 milliseconds",
+                );
+            }
         }
         let openai = &self.providers.openai;
         if openai.enabled {
@@ -490,6 +504,8 @@ mod tests {
         assert!(config.check().is_empty());
         config.providers.codex_responses.endpoint = "http://example.test/responses".to_owned();
         config.providers.codex_responses.max_parallel_outputs = 0;
+        config.providers.codex_responses.max_transient_attempts = 0;
+        config.providers.codex_responses.transient_retry_backoff_ms = 30_001;
         assert!(
             config
                 .check()
@@ -502,6 +518,15 @@ mod tests {
                 .iter()
                 .any(|issue| { issue.field == "providers.codex_responses.max_parallel_outputs" })
         );
+        assert!(
+            config
+                .check()
+                .iter()
+                .any(|issue| { issue.field == "providers.codex_responses.max_transient_attempts" })
+        );
+        assert!(config.check().iter().any(|issue| {
+            issue.field == "providers.codex_responses.transient_retry_backoff_ms"
+        }));
     }
 
     #[test]

@@ -2,6 +2,7 @@
 
 use imagegen_bridge_core::{BridgeError, ErrorCode, Usage};
 use serde_json::Value;
+use std::collections::BTreeSet;
 
 pub(crate) const MAX_REVISED_PROMPT_BYTES: usize = 128 * 1024;
 
@@ -13,6 +14,9 @@ pub(crate) struct EventState {
     usage: Usage,
     failure: Option<BridgeError>,
     completed: bool,
+    output_item_types: BTreeSet<&'static str>,
+    message_content_types: BTreeSet<&'static str>,
+    image_call_statuses: BTreeSet<&'static str>,
 }
 
 impl EventState {
@@ -25,14 +29,40 @@ impl EventState {
                 "Codex Responses stream ended before response.completed",
             ));
         }
-        let b64_json = self
-            .final_image
-            .ok_or_else(|| protocol_error("Codex Responses completed without final image data"))?;
+        let missing_image_error = self.missing_image_error();
+        let b64_json = self.final_image.ok_or(missing_image_error)?;
         Ok(CallResult {
             b64_json,
             revised_prompt: self.revised_prompt,
             usage: self.usage,
+            attempts: 1,
         })
+    }
+
+    fn missing_image_error(&self) -> BridgeError {
+        let refusal = self.message_content_types.contains("refusal");
+        let mut error = if refusal {
+            BridgeError::safety_rejected("Codex Responses declined the image request")
+                .with_detail("upstream_code", "completed_with_refusal")
+        } else {
+            BridgeError::new(
+                ErrorCode::Upstream,
+                "Codex Responses completed without final image data",
+            )
+            .retryable(true)
+            .with_detail("upstream_code", "completed_without_image")
+        }
+        .with_provider("codex-responses");
+        if !self.output_item_types.is_empty() {
+            error = error.with_detail("output_item_types", &self.output_item_types);
+        }
+        if !self.message_content_types.is_empty() {
+            error = error.with_detail("message_content_types", &self.message_content_types);
+        }
+        if !self.image_call_statuses.is_empty() {
+            error = error.with_detail("image_call_statuses", &self.image_call_statuses);
+        }
+        error
     }
 }
 
@@ -41,6 +71,7 @@ pub(crate) struct CallResult {
     pub(crate) b64_json: String,
     pub(crate) revised_prompt: Option<String>,
     pub(crate) usage: Usage,
+    pub(crate) attempts: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,6 +92,7 @@ pub(crate) fn process_event(
         .map_err(|_| protocol_error("Codex Responses sent malformed JSON event"))?;
     match event["type"].as_str().unwrap_or_default() {
         "response.output_item.done" => {
+            record_output_item(&event["item"], state);
             if event["item"]["type"] == "image_generation_call" {
                 capture_image_item(&event["item"], state, maximum_base64)?;
             }
@@ -94,6 +126,7 @@ pub(crate) fn process_event(
             state.completed = true;
             if let Some(output) = event["response"]["output"].as_array() {
                 for item in output {
+                    record_output_item(item, state);
                     if item["type"] == "image_generation_call" {
                         capture_image_item(item, state, maximum_base64)?;
                     }
@@ -118,6 +151,46 @@ pub(crate) fn process_event(
         _ => {}
     }
     Ok(None)
+}
+
+fn record_output_item(item: &Value, state: &mut EventState) {
+    let item_type = match item["type"].as_str() {
+        Some("image_generation_call") => "image_generation_call",
+        Some("message") => "message",
+        Some("reasoning") => "reasoning",
+        Some("function_call") => "function_call",
+        Some("web_search_call") => "web_search_call",
+        Some("computer_call") => "computer_call",
+        Some(_) => "other",
+        None => "missing",
+    };
+    state.output_item_types.insert(item_type);
+
+    if item_type == "image_generation_call" {
+        let status = match item["status"].as_str() {
+            Some("in_progress") => "in_progress",
+            Some("generating") => "generating",
+            Some("completed") => "completed",
+            Some("failed") => "failed",
+            Some(_) => "other",
+            None => "missing",
+        };
+        state.image_call_statuses.insert(status);
+    }
+
+    if item_type == "message"
+        && let Some(content) = item["content"].as_array()
+    {
+        for part in content {
+            let content_type = match part["type"].as_str() {
+                Some("refusal") => "refusal",
+                Some("output_text") => "output_text",
+                Some(_) => "other",
+                None => "missing",
+            };
+            state.message_content_types.insert(content_type);
+        }
+    }
 }
 
 fn capture_image_item(
@@ -329,7 +402,13 @@ mod tests {
             100,
         )
         .unwrap();
-        assert_eq!(partial.finish().unwrap_err().code, ErrorCode::Protocol);
+        let empty_completed = partial.finish().unwrap_err();
+        assert_eq!(empty_completed.code, ErrorCode::Upstream);
+        assert!(empty_completed.retryable);
+        assert_eq!(
+            empty_completed.details["upstream_code"],
+            "completed_without_image"
+        );
 
         let mut truncated = EventState::default();
         process_event(
@@ -339,6 +418,81 @@ mod tests {
         )
         .unwrap();
         assert_eq!(truncated.finish().unwrap_err().code, ErrorCode::Protocol);
+    }
+
+    #[test]
+    fn completed_without_image_reports_only_redaction_safe_output_shape() {
+        let mut state = EventState::default();
+        process_event(
+            r#"{"type":"response.output_item.done","item":{"type":"reasoning","summary":[]}}"#,
+            &mut state,
+            100,
+        )
+        .unwrap();
+        process_event(
+            r#"{"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","text":"private upstream text"}]}]}}"#,
+            &mut state,
+            100,
+        )
+        .unwrap();
+        let error = state.finish().unwrap_err();
+        assert_eq!(error.code, ErrorCode::Upstream);
+        assert!(error.retryable);
+        assert_eq!(
+            error.details["output_item_types"],
+            serde_json::json!(["message", "reasoning"])
+        );
+        assert_eq!(
+            error.details["message_content_types"],
+            serde_json::json!(["output_text"])
+        );
+        assert!(!format!("{error:?}").contains("private upstream text"));
+    }
+
+    #[test]
+    fn completed_refusal_is_a_non_retryable_safety_rejection() {
+        let mut state = EventState::default();
+        process_event(
+            r#"{"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"refusal","refusal":"private refusal"}]}]}}"#,
+            &mut state,
+            100,
+        )
+        .unwrap();
+        let error = state.finish().unwrap_err();
+        assert_eq!(error.code, ErrorCode::SafetyRejected);
+        assert!(!error.retryable);
+        assert_eq!(error.details["upstream_code"], "completed_with_refusal");
+        assert_eq!(
+            error.details["message_content_types"],
+            serde_json::json!(["refusal"])
+        );
+        assert!(!format!("{error:?}").contains("private refusal"));
+    }
+
+    #[test]
+    fn failed_image_call_status_is_reported_without_provider_payloads() {
+        let mut state = EventState::default();
+        process_event(
+            r#"{"type":"response.output_item.done","item":{"type":"image_generation_call","status":"failed","result":null}}"#,
+            &mut state,
+            100,
+        )
+        .unwrap();
+        process_event(
+            r#"{"type":"response.completed","response":{}}"#,
+            &mut state,
+            100,
+        )
+        .unwrap();
+        let error = state.finish().unwrap_err();
+        assert_eq!(
+            error.details["output_item_types"],
+            serde_json::json!(["image_generation_call"])
+        );
+        assert_eq!(
+            error.details["image_call_statuses"],
+            serde_json::json!(["failed"])
+        );
     }
 
     #[test]

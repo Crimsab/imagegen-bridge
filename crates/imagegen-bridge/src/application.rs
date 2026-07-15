@@ -3,7 +3,10 @@
 use std::sync::Arc;
 
 #[cfg(feature = "codex-app-server")]
-use std::{path::Path, time::Duration};
+use std::path::Path;
+
+#[cfg(any(feature = "codex-app-server", feature = "codex-responses"))]
+use std::time::Duration;
 
 #[cfg(any(feature = "codex-app-server", feature = "codex-responses"))]
 use imagegen_bridge_artifacts::ImageLimits;
@@ -144,6 +147,9 @@ impl BridgeApplication {
                     .image_model
                     .clone_from(&settings.image_model);
                 provider_config.max_parallel_outputs = settings.max_parallel_outputs;
+                provider_config.max_transient_attempts = settings.max_transient_attempts;
+                provider_config.transient_retry_backoff =
+                    Duration::from_millis(settings.transient_retry_backoff_ms);
                 provider_config.remote_fetcher.clone_from(&inputs.remote);
                 provider_config.image_limits = image_limits;
                 provider_config.max_base64_chars = config.artifacts.max_base64_chars;

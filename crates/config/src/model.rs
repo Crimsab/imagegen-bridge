@@ -392,6 +392,10 @@ pub struct CodexResponsesSettings {
     pub image_model: String,
     /// Maximum simultaneous upstream calls within one multi-image request.
     pub max_parallel_outputs: usize,
+    /// Maximum attempts for failures that are explicitly safe to retry.
+    pub max_transient_attempts: u8,
+    /// Base delay between safe transient attempts in milliseconds.
+    pub transient_retry_backoff_ms: u64,
 }
 
 impl Default for CodexResponsesSettings {
@@ -402,6 +406,8 @@ impl Default for CodexResponsesSettings {
             responses_model: "gpt-5.5".to_owned(),
             image_model: "gpt-image-2".to_owned(),
             max_parallel_outputs: 2,
+            max_transient_attempts: 2,
+            transient_retry_backoff_ms: 750,
         }
     }
 }

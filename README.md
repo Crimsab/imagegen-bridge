@@ -231,6 +231,13 @@ an error and records content-safe structured counts of observed item types and
 statuses for diagnosis. An API-key-backed official OpenAI provider is reserved
 in configuration but is not implemented and never shares Codex OAuth handling.
 
+`codex-responses` retries once by default only when the upstream explicitly
+reports a transient failure before returning an image, including a completed
+response with no image item. Transport timeouts, cancellations, safety or
+permission failures, malformed output, and every unknown outcome are never
+retried automatically. Configure the bounded policy with
+`max_transient_attempts` and `transient_retry_backoff_ms`.
+
 ## Advanced controls
 
 The native contract supports, where the provider allows them:

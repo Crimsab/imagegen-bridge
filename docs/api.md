@@ -348,6 +348,20 @@ bridge does not automatically weaken the prompt or moderation setting.
 When Codex returns public moderation details, the bridge preserves only the
 documented `input|output|unknown` stage and coarse allow-listed categories;
 unknown/internal classifier labels are discarded.
+
+The `codex-responses` adapter may repeat a provider call only for an explicitly
+retryable pre-output result such as HTTP `429`/`5xx`, a declared transient
+Responses failure, or `response.completed` without an image item. The default
+limit is two total attempts. Errors marked with `outcome=unknown`, as well as
+safety, authentication, permission, cancellation, timeout-after-dispatch, and
+protocol failures, are not repeated. A recovered call adds the response warning
+`transient_provider_retry_used`; a final error includes `provider_attempts`.
+If a completed response has no image, the error may also include bounded,
+allow-listed shape diagnostics such as `output_item_types`,
+`message_content_types`, and `image_call_statuses`. These fields contain only
+documented enum-like labels, never response text, prompts, image data, or raw
+provider payloads. A completed response containing a refusal is classified as
+a non-retryable safety rejection instead of a transient missing-image result.
 The top-level request ID also appears in the `x-request-id` response header.
 
 Validation/input errors map to `400`/`422`, missing authentication to `401`,
