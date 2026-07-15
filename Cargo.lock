@@ -994,7 +994,7 @@ dependencies = [
 
 [[package]]
 name = "imagegen-bridge"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "imagegen-bridge-artifacts",
@@ -1010,7 +1010,7 @@ dependencies = [
 
 [[package]]
 name = "imagegen-bridge-artifacts"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base16ct",
  "base64",
@@ -1030,7 +1030,7 @@ dependencies = [
 
 [[package]]
 name = "imagegen-bridge-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "assert_cmd",
  "base16ct",
@@ -1054,7 +1054,7 @@ dependencies = [
 
 [[package]]
 name = "imagegen-bridge-codex-app-server"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "base64",
@@ -1072,7 +1072,7 @@ dependencies = [
 
 [[package]]
 name = "imagegen-bridge-codex-responses"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "base64",
@@ -1092,7 +1092,7 @@ dependencies = [
 
 [[package]]
 name = "imagegen-bridge-config"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "imagegen-bridge-artifacts",
  "imagegen-bridge-core",
@@ -1107,7 +1107,7 @@ dependencies = [
 
 [[package]]
 name = "imagegen-bridge-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "futures-core",
@@ -1121,7 +1121,7 @@ dependencies = [
 
 [[package]]
 name = "imagegen-bridge-runtime"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "base16ct",
@@ -1144,7 +1144,7 @@ dependencies = [
 
 [[package]]
 name = "imagegen-bridge-schema-gen"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "imagegen-bridge-core",
  "imagegen-bridge-server",
@@ -1153,7 +1153,7 @@ dependencies = [
 
 [[package]]
 name = "imagegen-bridge-sdk-mock-server"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
  "base64",
@@ -1167,7 +1167,7 @@ dependencies = [
 
 [[package]]
 name = "imagegen-bridge-server"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "axum",

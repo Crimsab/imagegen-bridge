@@ -34,7 +34,7 @@ RUN apt-get update && \
     install -Dm0755 "/tmp/codex-${target}" /out/codex
 
 FROM ${RUNTIME_IMAGE} AS runtime
-ARG IMAGE_VERSION=0.1.0
+ARG IMAGE_VERSION=0.1.1
 LABEL org.opencontainers.image.title="Imagegen Bridge" \
       org.opencontainers.image.description="Provider-neutral Codex OAuth image-generation bridge" \
       org.opencontainers.image.source="https://github.com/Crimsab/imagegen-bridge" \

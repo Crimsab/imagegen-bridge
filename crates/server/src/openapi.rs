@@ -63,7 +63,7 @@ pub fn openapi_document() -> Value {
                         {"name":"cursor","in":"query","schema":{"type":"string","maxLength":256}}
                     ],
                     "responses": {
-                        "200": json_response("Provider page", json!({"$ref":"#/components/schemas/ProviderPage"}), json!({"items":[{"name":"codex-responses","display_name":"Codex OAuth Responses","version":"0.1.0","experimental":false,"models":["gpt-image-2","gpt-image-1.5","gpt-image-1","gpt-image-1-mini"]}]})),
+                        "200": json_response("Provider page", json!({"$ref":"#/components/schemas/ProviderPage"}), json!({"items":[{"name":"codex-responses","display_name":"Codex OAuth Responses","version":env!("CARGO_PKG_VERSION"),"experimental":false,"models":["gpt-image-2","gpt-image-1.5","gpt-image-1","gpt-image-1-mini"]}]})),
                         "400": error_response("Invalid provider cursor"),
                         "401": error_response("Bridge authentication required")
                     }
@@ -157,7 +157,7 @@ pub fn openapi_document() -> Value {
                     "security": [{"bridgeBearer": []}],
                     "responses": {
                         "200": json_response("Redaction-safe operator diagnostics", json!({"$ref":"#/components/schemas/OperatorDiagnostics"}), json!({
-                            "bridge_version":"0.1.0",
+                            "bridge_version":env!("CARGO_PKG_VERSION"),
                             "configuration":{"version":1,"default_provider":"codex-responses","listener_scope":"loopback","listener_port":8787,"authentication_required":true,"metrics_enabled":false,"jobs_enabled":true,"max_connections":256,"max_body_bytes":83_886_080,"read_timeout_ms":0,"write_timeout_ms":30000,"provenance":[]},
                             "artifact_storage_enabled":true,
                             "runtime":{"global_queued":0,"providers_queued":{"codex-app-server":0}},

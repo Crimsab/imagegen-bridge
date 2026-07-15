@@ -3,14 +3,14 @@
     {
       "name": "codex-app-server",
       "display_name": "Codex app-server",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "experimental": false,
       "models": ["gpt-image-2"]
     },
     {
       "name": "codex-responses",
       "display_name": "Codex OAuth Responses",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "experimental": false,
       "models": ["gpt-image-2", "gpt-image-1.5", "gpt-image-1", "gpt-image-1-mini"]
     }
