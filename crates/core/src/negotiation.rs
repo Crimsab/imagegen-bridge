@@ -4,9 +4,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Background, BridgeError, CompatibilityMode, ErrorCode, GenerationParameters, ImageOperation,
-    ImageRequest, ImageSize, Moderation, NegativePromptMode, Normalization, OutputFormat,
-    ProviderCapabilities, Quality, RevisedPromptPolicy, SessionMode, SupportLevel,
+    Background, BridgeError, CODEX_RASTER_MASK_UNSUPPORTED, CompatibilityMode, ErrorCode,
+    GenerationParameters, ImageOperation, ImageRequest, ImageSize, Moderation, NegativePromptMode,
+    Normalization, OutputFormat, ProviderCapabilities, Quality, RevisedPromptPolicy, SessionMode,
+    SupportLevel,
 };
 
 /// Request after provider capability negotiation.
@@ -215,11 +216,12 @@ fn check_input_counts(
             && (capabilities.masks.support == SupportLevel::Unsupported
                 || capabilities.masks.max_count == 0)
         {
-            return Err(unsupported(
-                capabilities,
-                "mask",
-                "provider does not support edit masks",
-            ));
+            let mut error =
+                unsupported(capabilities, "mask", "provider does not support edit masks");
+            if capabilities.provider.starts_with("codex-") {
+                error = error.with_detail("codex_code", CODEX_RASTER_MASK_UNSUPPORTED);
+            }
+            return Err(error);
         }
     }
     Ok(())
@@ -786,6 +788,37 @@ mod tests {
             max_bytes_each: 0,
             max_bytes_total: 0,
         }
+    }
+
+    #[test]
+    fn codex_mask_rejection_has_stable_transport_code() {
+        let mut capabilities = capabilities();
+        capabilities.provider = "codex-responses".to_owned();
+        capabilities.edits = true;
+        capabilities.edit_images = InputCapabilities {
+            support: SupportLevel::Native,
+            max_count: 1,
+            max_bytes_each: 1024,
+            max_bytes_total: 1024,
+        };
+        let input = crate::ImageInput {
+            source: crate::ImageSource::Base64 {
+                data: "aGVsbG8=".to_owned(),
+            },
+            media_type: Some("image/png".to_owned()),
+            filename: None,
+        };
+        let mut request = ImageRequest::generate("edit fixture");
+        request.operation = ImageOperation::Edit {
+            images: vec![input.clone()],
+            mask: Some(Box::new(input)),
+            reference_images: Vec::new(),
+        };
+
+        let error = negotiate_request(&request, &capabilities).unwrap_err();
+        assert_eq!(error.code, ErrorCode::UnsupportedCapability);
+        assert_eq!(error.details["codex_code"], CODEX_RASTER_MASK_UNSUPPORTED);
+        assert_eq!(error.details["field"], "mask");
     }
 
     #[test]

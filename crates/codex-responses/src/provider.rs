@@ -304,7 +304,7 @@ impl CodexResponsesProvider {
     }
 
     async fn input_content(&self, request: &ImageRequest) -> Result<Vec<Value>, BridgeError> {
-        let mut content = vec![json!({"type": "input_text", "text": request.prompt})];
+        let mut content = vec![json!({"type": "input_text", "text": contextual_prompt(request)})];
         let inputs = request_images(request);
         let mut total = 0_u64;
         for input in inputs {
@@ -712,6 +712,27 @@ fn request_images(request: &ImageRequest) -> Vec<&imagegen_bridge_core::ImageInp
     }
 }
 
+fn contextual_prompt(request: &ImageRequest) -> String {
+    match &request.operation {
+        ImageOperation::Generate { reference_images } if !reference_images.is_empty() => format!(
+            "Generate an image using the {count} attached image(s) as visual references. Prompt: {prompt}",
+            count = reference_images.len(),
+            prompt = request.prompt
+        ),
+        ImageOperation::Generate { .. } => request.prompt.clone(),
+        ImageOperation::Edit {
+            images,
+            reference_images,
+            ..
+        } => format!(
+            "Edit the first {sources} attached source image(s) according to the prompt. The following {references} attached image(s), if any, are visual references only. Prompt: {prompt}",
+            sources = images.len(),
+            references = reference_images.len(),
+            prompt = request.prompt
+        ),
+    }
+}
+
 fn image_data_url(image: &LoadedImage) -> String {
     let media_type = match image.metadata.format {
         OutputFormat::Png => "image/png",
@@ -1040,6 +1061,49 @@ mod tests {
             BTreeSet::from([InputFidelity::High])
         );
         assert_eq!(capabilities.masks.support, SupportLevel::Unsupported);
+    }
+
+    #[tokio::test]
+    async fn contextual_edit_attaches_sources_to_the_codex_responses_turn() {
+        let provider = provider();
+        let source = ImageInput {
+            source: ImageSource::Base64 {
+                data: ONE_PIXEL_PNG.to_owned(),
+            },
+            media_type: Some("image/png".to_owned()),
+            filename: Some("source.png".to_owned()),
+        };
+        let mut request = ImageRequest::generate("replace the blue shape with a red circle");
+        request.operation = ImageOperation::Edit {
+            images: vec![source.clone()],
+            mask: None,
+            reference_images: vec![source],
+        };
+        request.parameters.action = ImageAction::Edit;
+
+        let content = provider.input_content(&request).await.unwrap();
+        assert_eq!(content.len(), 3);
+        assert_eq!(content[0]["type"], "input_text");
+        assert!(
+            content[0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("first 1 attached source image")
+        );
+        assert!(
+            content[1..]
+                .iter()
+                .all(|item| item["type"] == "input_image")
+        );
+        assert!(content[1..].iter().all(|item| {
+            item["image_url"]
+                .as_str()
+                .is_some_and(|value| value.starts_with("data:image/png;base64,"))
+        }));
+
+        let body = provider.request_body(&request, "gpt-image-2", &content);
+        assert_eq!(body["tools"][0]["action"], "edit");
+        assert_eq!(body["input"][0]["content"].as_array().unwrap().len(), 3);
     }
 
     #[test]

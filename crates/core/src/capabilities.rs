@@ -10,6 +10,9 @@ use crate::{
     OutputFormat, Quality,
 };
 
+/// Stable detail code returned when a Codex transport receives a raster mask.
+pub const CODEX_RASTER_MASK_UNSUPPORTED: &str = "CODEX_RASTER_MASK_UNSUPPORTED";
+
 /// Degree to which a provider supports a semantic feature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]

@@ -407,7 +407,7 @@ impl AppServerImageProvider {
         let paths = self.reference_paths(request).await?;
         let mut input = vec![json!({
             "type": "text",
-            "text": turn_prompt(&request.prompt, &paths),
+            "text": turn_prompt(request, &paths),
             "textElements": []
         })];
         input.extend(
@@ -856,18 +856,34 @@ fn request_images(request: &ImageRequest) -> Vec<imagegen_bridge_core::ImageInpu
     }
 }
 
-fn turn_prompt(prompt: &str, paths: &[PathBuf]) -> String {
+fn turn_prompt(request: &ImageRequest, paths: &[PathBuf]) -> String {
     if paths.is_empty() {
-        format!("Generate this image now with image_gen.imagegen: {prompt}")
-    } else {
-        let paths = paths
-            .iter()
-            .map(|path| path.display().to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!(
-            "Generate or edit this image now with image_gen.imagegen. Use referenced_image_paths exactly as listed: [{paths}]. Prompt: {prompt}"
-        )
+        return format!(
+            "Generate this image now with image_gen.imagegen: {}",
+            request.prompt
+        );
+    }
+    let paths = paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    match &request.operation {
+        ImageOperation::Generate { reference_images } => format!(
+            "Generate this image now with image_gen.imagegen. Use all {count} referenced_image_paths as visual references exactly as listed: [{paths}]. Prompt: {prompt}",
+            count = reference_images.len(),
+            prompt = request.prompt
+        ),
+        ImageOperation::Edit {
+            images,
+            reference_images,
+            ..
+        } => format!(
+            "Edit the first {sources} referenced_image_paths with image_gen.imagegen. The following {references} path(s), if any, are visual references only. Use the paths exactly as listed: [{paths}]. Prompt: {prompt}",
+            sources = images.len(),
+            references = reference_images.len(),
+            prompt = request.prompt
+        ),
     }
 }
 
@@ -1374,6 +1390,81 @@ mod tests {
         assert!(paths[0].starts_with(staging_root.canonicalize().unwrap()));
         assert!(paths[0].is_file());
         assert!(!paths[0].to_string_lossy().contains("visual reference"));
+    }
+
+    #[tokio::test]
+    async fn contextual_edit_attaches_staged_source_to_the_fake_codex_turn() {
+        let (rpc, mut server) = rpc_and_server().await;
+        let directory = tempfile::tempdir().unwrap();
+        let input_root = directory.path().join("inputs");
+        let staging_root = directory.path().join("staging");
+        fs::create_dir(&input_root).unwrap();
+        let limits = ImageLimits::default();
+        let reference_inputs = AppServerReferenceInputs::new(
+            Arc::new(InputLoader::new([input_root], limits).unwrap()),
+            None,
+            Arc::new(ArtifactStore::new(&staging_root, limits).unwrap()),
+            1024 * 1024,
+        )
+        .unwrap();
+        let provider = Arc::new(AppServerImageProvider::new_with_inputs(
+            rpc,
+            Arc::new(MemorySessionBindingStore::default()),
+            AppServerProviderConfig {
+                codex_model: None,
+                cwd: directory.path().to_owned(),
+                image_limits: limits,
+            },
+            reference_inputs,
+        ));
+        let mut edit = request();
+        edit.prompt = "replace the blue square with a red circle".to_owned();
+        edit.operation = ImageOperation::Edit {
+            images: vec![imagegen_bridge_core::ImageInput {
+                source: imagegen_bridge_core::ImageSource::Base64 {
+                    data: ONE_PIXEL_PNG.to_owned(),
+                },
+                media_type: Some("image/png".to_owned()),
+                filename: Some("source.png".to_owned()),
+            }],
+            mask: None,
+            reference_images: Vec::new(),
+        };
+
+        let execution = tokio::spawn({
+            let provider = Arc::clone(&provider);
+            async move { provider.execute(edit, context("contextual-edit")).await }
+        });
+        let start = next_message(&mut server).await;
+        assert_eq!(start["method"], "thread/start");
+        server
+            .send(
+                json!({"id": start["id"], "result": {"thread": {"id": "thread-edit"}}}).to_string(),
+            )
+            .await
+            .unwrap();
+        let turn = next_message(&mut server).await;
+        assert_eq!(turn["method"], "turn/start");
+        let input = turn["params"]["input"].as_array().unwrap();
+        assert_eq!(input.len(), 2);
+        assert!(
+            input[0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("Edit the first 1 referenced_image_paths")
+        );
+        assert_eq!(input[1]["type"], "localImage");
+        let staged_path = PathBuf::from(input[1]["path"].as_str().unwrap());
+        assert!(staged_path.starts_with(staging_root.canonicalize().unwrap()));
+        assert!(staged_path.is_file());
+
+        server
+            .send(json!({"id": turn["id"], "result": {"turn": {"id": "turn-edit"}}}).to_string())
+            .await
+            .unwrap();
+        complete_turn(&mut server, "thread-edit", "turn-edit").await;
+        let response = execution.await.unwrap().unwrap();
+        assert_eq!(response.data.len(), 1);
     }
 
     #[tokio::test]

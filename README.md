@@ -220,7 +220,10 @@ imagegen-bridge generate \
 Requests are checked against the selected provider before generation. Strict
 mode rejects unsupported combinations; `--compatibility normalize` applies
 only changes reported back in the response. Masks are currently unsupported by
-both Codex transports.
+both Codex transports and return the stable Codex detail code
+`CODEX_RASTER_MASK_UNSUPPORTED`. Source-only edits are contextual edits: the
+bridge attaches verified images to the current Codex turn. See the
+[Codex contextual-edit integration contract](docs/api.md#codex-contextual-edit-integration).
 
 `codex-app-server` remains available as a fallback. Its upstream turn may
 occasionally finish without emitting an image item; the bridge treats that as

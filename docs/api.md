@@ -235,6 +235,59 @@ multipart edit route accepts the official `input_fidelity` field. Masks remain
 present in the contract but both Codex providers currently advertise them as
 unsupported and reject them before generation.
 
+### Codex contextual-edit integration
+
+Codex consumers should use the existing version-1 provider capability document
+instead of maintaining a second bridge-specific matrix. For a selected model,
+query `GET /v1/providers/{name}/capabilities?model=...` and derive the operation
+flags as follows:
+
+| Consumer flag | Authoritative version-1 fields |
+| --- | --- |
+| `generate` | `generation` |
+| `contextualEdit` | `edits` and `edit_images.support != unsupported` |
+| `rasterMaskEdit` | `masks.support != unsupported` and `masks.max_count > 0` |
+| `referenceImages` | `reference_images.support != unsupported` |
+| `sourceTransport` | `conversation_attachment` for both current Codex transports |
+
+`codex-responses` sends each verified source/reference as an `input_image` data
+URL in the current Codex message. `codex-app-server` stages each verified input
+under bridge-owned storage and sends it as a `localImage` item in the current
+turn. These are contextual attachments: neither transport accepts an arbitrary
+OneDay path, asset identifier, story identifier, or branch identifier.
+
+A contextual edit request uses the native `POST /v1/images` contract with a
+source image and no mask. Callers should request the explicit `edit` action
+when the selected transport advertises it:
+
+```json
+{
+  "version": "1",
+  "operation": "edit",
+  "prompt": "Replace the blue square with a red circle",
+  "images": [
+    {
+      "type": "data_url",
+      "data_url": "data:image/png;base64,...",
+      "filename": "source.png"
+    }
+  ],
+  "parameters": {
+    "action": "edit"
+  },
+  "routing": {
+    "provider": "codex-responses",
+    "model": "gpt-image-2"
+  }
+}
+```
+
+When a request includes `mask`, capability negotiation stops before source
+materialization or Codex dispatch. The error remains the stable version-1
+`unsupported_capability` classification and includes the Codex-specific detail
+`"codex_code": "CODEX_RASTER_MASK_UNSUPPORTED"`. Callers must not reinterpret
+that rejection as prompt-guided inpainting or silently retry without the mask.
+
 ## Authentication
 
 When `server.bearer_token_env` is configured, `/v1/**` and the opt-in
