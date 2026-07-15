@@ -6,7 +6,11 @@
 **Use image generation from your Codex subscription—no OpenAI API key required.**
 
 [![Latest release](https://img.shields.io/github/v/release/Crimsab/imagegen-bridge?display_name=tag&sort=semver&label=release)](https://github.com/Crimsab/imagegen-bridge/releases/latest)
-[![Release downloads](https://img.shields.io/github/downloads/Crimsab/imagegen-bridge/total?label=downloads)](https://github.com/Crimsab/imagegen-bridge/releases)
+[![CI](https://img.shields.io/github/actions/workflow/status/Crimsab/imagegen-bridge/ci.yml?branch=main&label=CI)](https://github.com/Crimsab/imagegen-bridge/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/imagegen-bridge-cli?label=crates.io)](https://crates.io/crates/imagegen-bridge-cli)
+[![PyPI](https://img.shields.io/pypi/v/imagegen-bridge?label=PyPI)](https://pypi.org/project/imagegen-bridge/)
+[![npm](https://img.shields.io/npm/v/imagegen-bridge?label=npm)](https://www.npmjs.com/package/imagegen-bridge)
+[![Container: GHCR](https://img.shields.io/badge/container-GHCR-blue?logo=github)](https://github.com/Crimsab/imagegen-bridge/pkgs/container/imagegen-bridge)
 [![License: MIT](https://img.shields.io/github/license/Crimsab/imagegen-bridge)](LICENSE)
 
 [Quick start](#quick-start) · [Commands](#main-commands) · [Examples](#common-workflows) · [SDKs and skill](#use-from-code-or-agents) · [Dashboard and API](#dashboard-and-api) · [Documentation](#documentation)
