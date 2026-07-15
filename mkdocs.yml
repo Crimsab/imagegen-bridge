@@ -10,8 +10,9 @@ theme:
   name: material
   custom_dir: docs/overrides
   language: en
+  logo: assets/icon.png
+  favicon: assets/icon.png
   icon:
-    logo: material/image-multiple-outline
     repo: fontawesome/brands/github
   palette:
     - media: "(prefers-color-scheme: light)"

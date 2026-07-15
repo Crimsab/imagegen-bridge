@@ -6,6 +6,23 @@ runtime root filesystem is compatible with read-only mode. Only Codex OAuth
 state, bridge session state, verified artifacts, and optional input workspace
 are mounted.
 
+## Why the image includes Codex
+
+The default `codex-responses` path does not spawn Codex for each request. It
+reads the mounted ChatGPT OAuth state and calls the Codex Responses backend
+directly. The image also carries a checksum-verified, pinned Codex executable
+because the supported `codex-app-server` compatibility path is a child process
+owned and supervised by the bridge.
+
+A native bridge installation can reuse the `codex` executable already on the
+user's `PATH`, or an explicit `providers.codex_app_server.executable` path. A
+container cannot safely execute an unrelated process from its host without an
+additional socket or network protocol. Mounting the host executable is also
+fragile across architectures, libraries, permissions, and upgrades, so the
+public image is intentionally self-contained. When `codex-app-server` is
+disabled, that executable is not used at runtime, although it remains present
+in the current general-purpose image.
+
 ## Prepare Codex OAuth state
 
 Use a dedicated writable Codex home rather than mounting an unrelated user's

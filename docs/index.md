@@ -15,7 +15,7 @@ hide:
     </div>
   </div>
   <figure class="ib-hero__visual">
-    <img src="assets/hero.png" alt="Imagegen Bridge connects Codex OAuth to its CLI, API, dashboard, and SDKs" width="1672" height="941" loading="eager" fetchpriority="high">
+    <img src="assets/hero.png" alt="Imagegen Bridge connects Codex OAuth to its CLI, API, dashboard, and SDKs" width="1672" height="941" loading="eager" decoding="sync" fetchpriority="high">
   </figure>
 </section>
 
