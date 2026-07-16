@@ -19,7 +19,7 @@ first-party providers; `BridgeApplication::builder` accepts third-party
 cargo add imagegen-bridge
 ```
 
-```rust,no_run
+```rust
 use imagegen_bridge::{BridgeApplication, config::BridgeConfig};
 
 # async fn example(config: BridgeConfig) -> Result<(), imagegen_bridge::core::BridgeError> {
