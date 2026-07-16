@@ -1,0 +1,29 @@
+# Imagegen Bridge
+
+> Image generation through Codex OAuth, exposed as a CLI, private HTTP API,
+> dashboard, and typed Rust, Python, and TypeScript SDKs.
+
+## Start here
+
+- [Choose your path](https://crimsab.github.io/imagegen-bridge/getting-started/): Select the CLI, packaged container, API, or SDK workflow.
+- [Docker quickstart](https://crimsab.github.io/imagegen-bridge/docker-quickstart/): Run the published GHCR image without cloning the source repository.
+- [CLI guide](https://crimsab.github.io/imagegen-bridge/cli/): Install, configure, generate, edit, and inspect images from a terminal.
+
+## Integration
+
+- [HTTP API](https://crimsab.github.io/imagegen-bridge/api/): Requests, streaming events, jobs, artifacts, and stable errors.
+- [SDK guide](https://crimsab.github.io/imagegen-bridge/sdks/): Rust, Python, and TypeScript clients.
+- [Configuration](https://crimsab.github.io/imagegen-bridge/configuration/): Configuration precedence and supported settings.
+- [Limits and guarantees](https://crimsab.github.io/imagegen-bridge/limits/): Payload limits, validation, retries, and safety boundaries.
+
+## Operations
+
+- [Deployment](https://crimsab.github.io/imagegen-bridge/deployment/): Authentication, mounts, networking, and production topology.
+- [Operations runbook](https://crimsab.github.io/imagegen-bridge/operations/): Health, metrics, backups, upgrades, and troubleshooting.
+- [Testing](https://crimsab.github.io/imagegen-bridge/testing/): Local, contract, and opt-in live tests.
+- [Releasing](https://crimsab.github.io/imagegen-bridge/releasing/): Versioning and publication workflow.
+- [FAQ](https://crimsab.github.io/imagegen-bridge/faq/): Authentication, providers, storage, and common deployment questions.
+
+## Source
+
+- [GitHub repository](https://github.com/Crimsab/imagegen-bridge)

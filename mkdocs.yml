@@ -30,6 +30,7 @@ theme:
         icon: material/weather-sunny
         name: Switch to light mode
   features:
+    - content.action.view
     - content.code.annotate
     - content.code.copy
     - content.tabs.link
@@ -83,6 +84,9 @@ markdown_extensions:
 
 extra_css:
   - stylesheets/extra.css
+
+extra_javascript:
+  - javascripts/page-actions.js
 
 extra:
   generator: false

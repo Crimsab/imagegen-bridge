@@ -1,0 +1,37 @@
+{# Keep Material's standard page actions and add a Markdown copy action. #}
+{% if page.edit_url %}
+  {% if "/blob/" in page.edit_url %}
+    {% set part = "blob" %}
+  {% else %}
+    {% set part = "edit" %}
+  {% endif %}
+  {% set source_url = page.edit_url | replace(part, "raw") %}
+  {% set raw_url = page.edit_url
+    | replace("https://github.com/", "https://raw.githubusercontent.com/")
+    | replace("/edit/", "/")
+    | replace("/blob/", "/") %}
+
+  {% if "content.action.edit" in features %}
+    <a href="{{ page.edit_url }}" title="{{ lang.t('action.edit') }}" class="md-content__button md-icon" rel="edit">
+      {% set icon = config.theme.icon.edit or "material/file-edit-outline" %}
+      {% include ".icons/" ~ icon ~ ".svg" %}
+    </a>
+  {% endif %}
+
+  {% if "content.action.view" in features %}
+    <a href="{{ source_url }}" title="View page as Markdown" aria-label="View page as Markdown" class="md-content__button md-icon">
+      {% set icon = config.theme.icon.view or "material/file-eye-outline" %}
+      {% include ".icons/" ~ icon ~ ".svg" %}
+    </a>
+  {% endif %}
+
+  <button
+    type="button"
+    class="md-content__button md-icon ib-copy-page"
+    title="Copy page as Markdown"
+    aria-label="Copy page as Markdown"
+    data-ib-copy-page="{{ raw_url }}"
+  >
+    {% include ".icons/material/content-copy.svg" %}
+  </button>
+{% endif %}

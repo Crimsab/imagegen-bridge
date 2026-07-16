@@ -1,0 +1,53 @@
+name: imagegen-bridge
+
+services:
+  imagegen-bridge:
+    image: ${IMAGEGEN_BRIDGE_IMAGE:-ghcr.io/crimsab/imagegen-bridge:0.1.1}
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Europe/Rome}
+      IMAGEGEN_BRIDGE_BEARER_TOKEN: ${IMAGEGEN_BRIDGE_BEARER_TOKEN:?set a bridge bearer token}
+    command:
+      - imagegen-bridge
+      - --quiet
+      - --set
+      - 'inputs.local_roots=["/workspace"]'
+      - --set
+      - 'artifacts.root="/data/artifacts"'
+      - --set
+      - 'providers.codex_app_server.session_database="/data/state/sessions.sqlite3"'
+      - --set
+      - 'server.bind="0.0.0.0:8787"'
+      - --set
+      - 'server.bearer_token_env="IMAGEGEN_BRIDGE_BEARER_TOKEN"'
+      - --set
+      - 'server.metrics.enabled=true'
+      - --set
+      - 'server.jobs.database="/data/state/jobs.sqlite3"'
+      - serve
+    ports:
+      - "${IMAGEGEN_BRIDGE_LISTEN_HOST:-127.0.0.1}:${IMAGEGEN_BRIDGE_PORT:-8787}:8787"
+    volumes:
+      - ${IMAGEGEN_BRIDGE_CODEX_HOME:?set a dedicated writable Codex home}:/codex-home
+      - imagegen_bridge_state:/data/state
+      - imagegen_bridge_artifacts:/data/artifacts
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=1777
+      - /home/imagegen:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=0700
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    stop_grace_period: 45s
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8787/health/live"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  imagegen_bridge_state:
+  imagegen_bridge_artifacts:

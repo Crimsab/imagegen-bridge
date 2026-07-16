@@ -1,36 +1,61 @@
 # Docker quickstart
 
-The included Compose profile runs Imagegen Bridge as a non-root process with a
-read-only root filesystem, dropped Linux capabilities, bounded temporary
-storage, and a loopback host bind.
+The recommended Docker path pulls the published package from GHCR. It does not
+clone the repository and does not compile Rust locally. The container is
+available for Linux AMD64 and ARM64.
 
-## Prepare the repository
+## Choose the right Docker path
+
+| Goal | Use | Repository clone |
+| --- | --- | --- |
+| Run the released service | `compose.package.yaml` and the GHCR image | No |
+| Modify or audit the image | `compose.yaml` and the included `Dockerfile` | Yes |
+| Develop the Rust project | Source checkout and the normal test workflow | Yes |
+
+The package Compose file runs the service as a non-root process with a
+read-only root filesystem, dropped Linux capabilities, bounded temporary
+storage, persistent named volumes, and a loopback host bind. It requires Docker
+Compose v2. The safe container settings are passed through the bridge's native
+configuration overrides, so no second configuration file is required.
+
+## Run the published package
+
+Create an empty deployment directory and download the standalone Compose file:
 
 ```sh
-git clone https://github.com/Crimsab/imagegen-bridge.git
-cd imagegen-bridge
+mkdir imagegen-bridge && cd imagegen-bridge
+curl --fail --location --remote-name \
+  https://raw.githubusercontent.com/Crimsab/imagegen-bridge/main/compose.package.yaml
 ```
 
 Create a dedicated Codex home. Codex may rotate its OAuth state, so this mount
-must remain writable by UID `10001`.
+must remain writable by container UID `10001`.
 
 ```sh
-install -d -m 0700 ./deploy/codex-home
-cp "$HOME/.codex/auth.json" ./deploy/codex-home/auth.json
-chown -R 10001:10001 ./deploy/codex-home
+install -d -m 0700 ./codex-home
+cp "$HOME/.codex/auth.json" ./codex-home/auth.json
+chown -R 10001:10001 ./codex-home
 ```
 
-The directory is ignored by Git. Never commit `auth.json` or mount an unrelated
-user home into the container.
+Never commit or share this directory. It contains the Codex OAuth credential,
+which is separate from the bridge bearer token.
 
-## Start the service
+Start the released image:
 
 ```sh
 export IMAGEGEN_BRIDGE_BEARER_TOKEN="$(openssl rand -hex 32)"
-export IMAGEGEN_BRIDGE_CODEX_HOME="$PWD/deploy/codex-home"
-docker compose up --build -d
-docker compose ps
+export IMAGEGEN_BRIDGE_CODEX_HOME="$PWD/codex-home"
+docker compose -f compose.package.yaml pull
+docker compose -f compose.package.yaml up -d
+docker compose -f compose.package.yaml ps
 ```
+
+The file pins `ghcr.io/crimsab/imagegen-bridge:0.1.1`. Set
+`IMAGEGEN_BRIDGE_IMAGE` to another released tag when you intentionally upgrade.
+Using a versioned tag keeps restarts reproducible; `latest` is available but is
+not the recommended production pin.
+
+## Verify the service
 
 Check the public, detail-free health endpoints:
 
@@ -39,7 +64,7 @@ curl --fail http://127.0.0.1:8787/health/live
 curl --fail http://127.0.0.1:8787/health/ready
 ```
 
-## Make the first authenticated request
+Make the first authenticated request:
 
 ```sh
 curl --fail --silent --show-error \
@@ -52,6 +77,25 @@ curl --fail --silent --show-error \
 Open `http://127.0.0.1:8787/dashboard` and enter the same bridge bearer in the
 Connection dialog. The token remains in tab-scoped `sessionStorage`.
 
+## Build from source instead
+
+Clone only when you want the repository's Dockerfile to compile the Rust binary
+and assemble a local image:
+
+```sh
+git clone https://github.com/Crimsab/imagegen-bridge.git
+cd imagegen-bridge
+install -d -m 0700 ./deploy/codex-home
+cp "$HOME/.codex/auth.json" ./deploy/codex-home/auth.json
+chown -R 10001:10001 ./deploy/codex-home
+export IMAGEGEN_BRIDGE_BEARER_TOKEN="$(openssl rand -hex 32)"
+export IMAGEGEN_BRIDGE_CODEX_HOME="$PWD/deploy/codex-home"
+docker compose up --build -d
+```
+
+In this path, `compose.yaml` uses the included multi-stage `Dockerfile`; the
+clone is build input, not an installation requirement for released users.
+
 ## Persistent data
 
 | Path | Purpose | Access |
@@ -60,9 +104,9 @@ Connection dialog. The token remains in tab-scoped `sessionStorage`.
 | `/data/state` | Sessions, presets, and job history | Read/write |
 | `/data/artifacts` | Verified generated outputs | Read/write |
 | `/workspace` | Optional source and reference images | Read-only |
-| `/config/imagegen-bridge.toml` | Versioned service configuration | Read-only |
+| Command configuration | Versioned safe service defaults | Container arguments |
 
-Use named volumes or explicit host paths for state and artifacts. Stop the
+The package Compose file uses named volumes for state and artifacts. Stop the
 service or take a SQLite-consistent snapshot before backing up `/data/state`.
 
 ## Expose it safely

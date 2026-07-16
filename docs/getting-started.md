@@ -28,11 +28,15 @@ endpoint. The service adds bearer authentication, streaming, durable jobs,
 artifacts, metrics, and the embedded dashboard.
 
 ```sh
-git clone https://github.com/Crimsab/imagegen-bridge.git
-cd imagegen-bridge
+mkdir imagegen-bridge && cd imagegen-bridge
+curl --fail --location --remote-name \
+  https://raw.githubusercontent.com/Crimsab/imagegen-bridge/main/compose.package.yaml
+install -d -m 0700 ./codex-home
+cp "$HOME/.codex/auth.json" ./codex-home/auth.json
+chown -R 10001:10001 ./codex-home
+export IMAGEGEN_BRIDGE_CODEX_HOME="$PWD/codex-home"
 export IMAGEGEN_BRIDGE_BEARER_TOKEN="$(openssl rand -hex 32)"
-export IMAGEGEN_BRIDGE_CODEX_HOME="$HOME/.codex"
-docker compose up --build -d
+docker compose -f compose.package.yaml up -d
 ```
 
 Read the [Docker quickstart](docker-quickstart.md) before binding outside host

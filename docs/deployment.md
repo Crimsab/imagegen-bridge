@@ -39,6 +39,17 @@ Never commit this directory. The repository ignores `deploy/codex-home/`.
 
 ## Compose
 
+There are two Compose entry points:
+
+| File | Purpose | Image source |
+| --- | --- | --- |
+| `compose.package.yaml` | Standalone released deployment | Pulls the pinned GHCR package |
+| `compose.yaml` | Source build and image development | Builds the included `Dockerfile` |
+
+For a deployment without a repository checkout, follow the
+[Docker quickstart](docker-quickstart.md). The commands below are specifically
+for building from a source checkout:
+
 ```sh
 export IMAGEGEN_BRIDGE_BEARER_TOKEN="use-a-secret-manager-or-random-value"
 export IMAGEGEN_BRIDGE_CODEX_HOME="$PWD/deploy/codex-home"
@@ -46,17 +57,17 @@ docker compose up --build -d
 docker compose ps
 ```
 
-The included Compose file binds the API to host loopback by default, drops every
-Linux capability, blocks privilege escalation, limits PIDs, mounts the root
-filesystem read-only, and uses bounded tmpfs mounts. It uses Compose's default
-project network. Do not bind the API publicly without bridge bearer
-authentication and a trusted TLS reverse proxy.
+Both Compose paths bind the API to host loopback by default, drop every Linux
+capability, block privilege escalation, limit PIDs, mount the root filesystem
+read-only, and use bounded tmpfs mounts. They use Compose's default project
+network. Do not bind the API publicly without bridge bearer authentication and
+a trusted TLS reverse proxy.
 
 The default layout is:
 
 | Container path | Purpose | Access |
 | --- | --- | --- |
-| `/config/imagegen-bridge.toml` | Versioned bridge configuration | read-only |
+| Service configuration | Mounted TOML for source builds; container arguments for the package | read-only |
 | `/codex-home` | Dedicated Codex OAuth state | read/write, secret |
 | `/data/state` | SQLite session bindings and durable job history | read/write, persistent |
 | `/data/artifacts` | Verified bridge-owned outputs | read/write, persistent |
