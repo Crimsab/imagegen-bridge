@@ -28,7 +28,7 @@ services:
     ports:
       - "${IMAGEGEN_BRIDGE_LISTEN_HOST:-127.0.0.1}:${IMAGEGEN_BRIDGE_PORT:-8787}:8787"
     volumes:
-      - ${IMAGEGEN_BRIDGE_CODEX_HOME:?set a dedicated writable Codex home}:/codex-home
+      - ${IMAGEGEN_BRIDGE_CODEX_HOME:-./codex-home}:/codex-home
       - imagegen_bridge_state:/data/state
       - imagegen_bridge_artifacts:/data/artifacts
     read_only: true

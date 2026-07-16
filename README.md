@@ -264,7 +264,8 @@ imagegen-bridge generate "A red paper fox" \
 ## Docker
 
 Released users can run the published GHCR package without cloning or compiling
-the repository. See the [Docker quickstart](docs/docker-quickstart.md).
+the repository. See the [container package](https://github.com/Crimsab/imagegen-bridge/pkgs/container/imagegen-bridge)
+and the complete [Docker quickstart](docs/docker-quickstart.md).
 
 To build the container from source instead:
 

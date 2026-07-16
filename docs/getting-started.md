@@ -32,10 +32,10 @@ mkdir imagegen-bridge && cd imagegen-bridge
 curl --fail --location --remote-name \
   https://raw.githubusercontent.com/Crimsab/imagegen-bridge/main/compose.package.yaml
 install -d -m 0700 ./codex-home
-cp "$HOME/.codex/auth.json" ./codex-home/auth.json
-chown -R 10001:10001 ./codex-home
-export IMAGEGEN_BRIDGE_CODEX_HOME="$PWD/codex-home"
-export IMAGEGEN_BRIDGE_BEARER_TOKEN="$(openssl rand -hex 32)"
+install -m 0600 "${CODEX_HOME:-$HOME/.codex}/auth.json" ./codex-home/auth.json
+sudo chown -R 10001:10001 ./codex-home
+umask 077
+printf 'IMAGEGEN_BRIDGE_BEARER_TOKEN=%s\n' "$(openssl rand -hex 32)" > .env
 docker compose -f compose.package.yaml up -d
 ```
 
