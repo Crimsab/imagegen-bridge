@@ -46,12 +46,20 @@ theme:
 
 nav:
   - Home: index.md
+  - Get started:
+      - Choose your path: getting-started.md
+      - Docker quickstart: docker-quickstart.md
   - Use the bridge:
       - Command-line interface: cli.md
       - HTTP API: api.md
       - SDKs: sdks.md
+  - Understand it:
+      - Configuration reference: configuration.md
+      - Limits and guarantees: limits.md
+      - FAQ: faq.md
   - Operate it:
       - Deployment: deployment.md
+      - Operations runbook: operations.md
       - Testing: testing.md
       - Releasing: releasing.md
 

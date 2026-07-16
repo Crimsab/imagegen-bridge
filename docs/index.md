@@ -96,10 +96,14 @@ Codex / ChatGPT OAuth
 ## Continue with the guide you need
 
 <nav class="ib-doc-map" aria-label="Documentation guides">
+  <a href="getting-started/"><strong>Get started</strong><span>Choose the CLI, Docker, API, or SDK path.</span></a>
   <a href="cli/"><strong>CLI</strong><span>Install, configure, generate, and diagnose.</span></a>
   <a href="api/"><strong>API</strong><span>Routes, authentication, jobs, streaming, and errors.</span></a>
   <a href="sdks/"><strong>SDKs</strong><span>Rust, Python, and TypeScript integration.</span></a>
-  <a href="deployment/"><strong>Deployment</strong><span>OAuth state, Compose, backups, and upgrades.</span></a>
+  <a href="configuration/"><strong>Configuration</strong><span>Defaults, precedence, limits, and safe profiles.</span></a>
+  <a href="limits/"><strong>Guarantees</strong><span>Retries, concurrency, idempotency, and restarts.</span></a>
+  <a href="operations/"><strong>Operations</strong><span>Health, backups, upgrades, rollback, and rotation.</span></a>
+  <a href="faq/"><strong>FAQ</strong><span>OAuth, privacy, exposure, providers, and persistence.</span></a>
   <a href="testing/"><strong>Testing</strong><span>Offline gates, OAuth smoke tests, and dashboard QA.</span></a>
   <a href="releasing/"><strong>Releasing</strong><span>Registry setup and the coordinated release process.</span></a>
 </nav>

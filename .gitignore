@@ -28,6 +28,10 @@
 /sdks/typescript/package/
 /sdks/typescript/*.tgz
 /deploy/codex-home/
+/compose.*.local.yaml
+/compose.homelab.yaml
+/deploy/*.local.toml
+/deploy/*.homelab.toml
 __pycache__/
 *.py[cod]
 .DS_Store
