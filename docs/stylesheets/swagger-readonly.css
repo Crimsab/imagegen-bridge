@@ -1,0 +1,4 @@
+/* The public explorer documents the contract; it does not target a deployment. */
+.swagger-ui .scheme-container {
+  display: none;
+}

@@ -53,6 +53,7 @@ nav:
   - Use the bridge:
       - Command-line interface: cli.md
       - HTTP API: api.md
+      - API explorer: api-explorer.md
       - SDKs: sdks.md
   - Understand it:
       - Configuration reference: configuration.md
@@ -66,6 +67,18 @@ nav:
 
 plugins:
   - search
+  - swagger-ui-tag:
+      docExpansion: list
+      filter: true
+      extra_css:
+        - stylesheets/swagger-readonly.css
+      supportedSubmitMethods: []
+      validatorUrl: none
+  - git-revision-date-localized:
+      type: date
+      locale: en
+      fallback_to_build_date: true
+      enable_creation_date: false
 
 markdown_extensions:
   - admonition
