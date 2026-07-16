@@ -41,9 +41,17 @@ impl EventState {
 
     fn missing_image_error(&self) -> BridgeError {
         let refusal = self.message_content_types.contains("refusal");
+        let image_call_failed = self.image_call_statuses.contains("failed");
         let mut error = if refusal {
             BridgeError::safety_rejected("Codex Responses declined the image request")
                 .with_detail("upstream_code", "completed_with_refusal")
+        } else if image_call_failed {
+            BridgeError::new(
+                ErrorCode::Upstream,
+                "Codex Responses image generation tool failed",
+            )
+            .retryable(false)
+            .with_detail("upstream_code", "image_call_failed")
         } else {
             BridgeError::new(
                 ErrorCode::Upstream,
@@ -485,6 +493,9 @@ mod tests {
         )
         .unwrap();
         let error = state.finish().unwrap_err();
+        assert_eq!(error.code, ErrorCode::Upstream);
+        assert!(!error.retryable);
+        assert_eq!(error.details["upstream_code"], "image_call_failed");
         assert_eq!(
             error.details["output_item_types"],
             serde_json::json!(["image_generation_call"])
