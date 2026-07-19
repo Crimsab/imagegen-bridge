@@ -57,6 +57,7 @@ nav:
       - SDKs: sdks.md
   - Understand it:
       - Configuration reference: configuration.md
+      - Errors and recovery: errors.md
       - Limits and guarantees: limits.md
       - Resilience model: resilience.md
       - FAQ: faq.md
@@ -65,6 +66,7 @@ nav:
       - Operations runbook: operations.md
       - Testing: testing.md
       - Capacity and failure testing: capacity.md
+      - Release 0.3.0: releases/0.3.0.md
       - Release 0.2.0: releases/0.2.0.md
       - Releasing: releasing.md
 

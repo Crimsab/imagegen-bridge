@@ -33,7 +33,7 @@ pub async fn serve(
 ) -> io::Result<()> {
     let listener = LimitedListener::new(
         listener,
-        settings.max_connections,
+        settings.max_connections.runtime_value(),
         (settings.read_timeout_ms > 0).then(|| Duration::from_millis(settings.read_timeout_ms)),
         Duration::from_millis(settings.write_timeout_ms),
     );
@@ -58,7 +58,11 @@ impl LimitedListener {
     ) -> Self {
         Self {
             listener,
-            permits: Arc::new(Semaphore::new(maximum)),
+            permits: Arc::new(Semaphore::new(if maximum == usize::MAX {
+                Semaphore::MAX_PERMITS
+            } else {
+                maximum
+            })),
             read_timeout,
             write_timeout,
         }
@@ -238,7 +242,7 @@ mod tests {
         let listener = bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
         let address = listener.local_addr().unwrap();
         let settings = ServerSettings {
-            max_connections: 1,
+            max_connections: imagegen_bridge_config::Capacity::Limited(1),
             read_timeout_ms: 1_000,
             write_timeout_ms: 1_000,
             ..ServerSettings::default()
@@ -270,7 +274,7 @@ mod tests {
         let listener = bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
         let address = listener.local_addr().unwrap();
         let settings = ServerSettings {
-            max_connections: 1,
+            max_connections: imagegen_bridge_config::Capacity::Limited(1),
             write_timeout_ms: 1_000,
             ..ServerSettings::default()
         };
@@ -311,7 +315,7 @@ mod tests {
         let listener = bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
         let address = listener.local_addr().unwrap();
         let settings = ServerSettings {
-            max_connections: 1,
+            max_connections: imagegen_bridge_config::Capacity::Limited(1),
             read_timeout_ms: 5_000,
             write_timeout_ms: 150,
             ..ServerSettings::default()

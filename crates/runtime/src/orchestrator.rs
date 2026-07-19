@@ -42,8 +42,8 @@ pub struct ConcurrencyLimit {
 impl Default for ConcurrencyLimit {
     fn default() -> Self {
         Self {
-            max_concurrent: 4,
-            max_queued: 16,
+            max_concurrent: usize::MAX,
+            max_queued: usize::MAX,
         }
     }
 }
@@ -83,8 +83,8 @@ impl Default for RuntimeConfig {
             cancellation_grace: Duration::from_secs(1),
             shutdown_grace: Duration::from_secs(10),
             global_limit: ConcurrencyLimit {
-                max_concurrent: 16,
-                max_queued: 64,
+                max_concurrent: usize::MAX,
+                max_queued: usize::MAX,
             },
             default_provider_limit: ConcurrencyLimit::default(),
             provider_limits: BTreeMap::new(),

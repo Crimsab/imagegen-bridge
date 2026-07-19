@@ -1,13 +1,14 @@
 # Resilience model
 
-Imagegen Bridge bounds every integration point and treats provider degradation
-as normal operational state. The release-readiness diagnostic is 8/8:
+Imagegen Bridge protects every integration point while leaving throughput
+policy under operator control. Provider degradation is treated as normal
+operational state. The release-readiness diagnostic is 8/8:
 
 | Control | Implementation | Verification |
 | --- | --- | --- |
 | Outbound deadlines | One propagated request deadline plus transport and cancellation bounds | Runtime timeout and unknown-outcome tests |
 | Circuit breakers | Independent closed/open/half-open state per provider | Breaker state-machine, fallback, and unknown-outcome tests |
-| Bulkheads | Global and per-provider execution plus bounded waiting rooms | Admission and stress tests |
+| Configurable bulkheads | Global/per-provider admission accepts `unlimited` or operator-selected finite execution and queues | Unlimited admission plus finite stress tests |
 | Zero-error handoff | OAuth-sterile gateway plus mutually exclusive blue/green slots | Gateway hold/switch test and Compose contract |
 | Deep health | Cached provider readiness, state-store diagnostics, and slot readiness gates | Readiness and container smoke tests |
 | Correlated telemetry | W3C `traceparent`, `x-request-id`, nested spans, JSON logs, bounded metrics | Header propagation and metrics tests |

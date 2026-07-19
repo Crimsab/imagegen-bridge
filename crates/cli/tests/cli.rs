@@ -11,7 +11,7 @@ fn help_and_version_are_available_without_configuration() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "A bounded, provider-neutral image generation bridge",
+            "A provider-neutral image generation bridge with user-controlled concurrency",
         ))
         .stdout(predicate::str::contains("--local-artifact-paths"));
     cargo_bin_cmd!("imagegen-bridge")

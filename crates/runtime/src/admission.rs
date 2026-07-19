@@ -32,8 +32,13 @@ impl AdmissionGate {
                 "concurrency limits must be greater than zero",
             ));
         }
+        let permits = if max_concurrent == usize::MAX {
+            Semaphore::MAX_PERMITS
+        } else {
+            max_concurrent
+        };
         Ok(Self {
-            semaphore: Arc::new(Semaphore::new(max_concurrent)),
+            semaphore: Arc::new(Semaphore::new(permits)),
             queued: Arc::new(AtomicUsize::new(0)),
             max_queued,
             label: label.into(),
@@ -84,7 +89,7 @@ impl AdmissionGate {
     fn reserve_queue(&self) -> Result<QueueReservation, BridgeError> {
         let mut current = self.queued.load(Ordering::Acquire);
         loop {
-            if current >= self.max_queued {
+            if self.max_queued != usize::MAX && current >= self.max_queued {
                 return Err(BridgeError::new(
                     ErrorCode::Overloaded,
                     "runtime queue capacity is exhausted",
@@ -184,5 +189,21 @@ mod tests {
         let error = waiter.await.unwrap().unwrap_err();
         assert_eq!(error.code, ErrorCode::Cancelled);
         assert_eq!(gate.queued(), 0);
+    }
+
+    #[tokio::test]
+    async fn unlimited_gate_admits_independent_calls_without_queueing() {
+        let gate = AdmissionGate::new(usize::MAX, usize::MAX, "unlimited").unwrap();
+        let cancellation = CancellationToken::new();
+        let mut permits = Vec::new();
+        for _ in 0..8 {
+            permits.push(
+                gate.acquire(Instant::now() + Duration::from_secs(1), &cancellation)
+                    .await
+                    .unwrap(),
+            );
+        }
+        assert_eq!(gate.queued(), 0);
+        assert_eq!(permits.len(), 8);
     }
 }

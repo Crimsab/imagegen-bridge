@@ -14,6 +14,7 @@
 - [HTTP API](https://crimsab.github.io/imagegen-bridge/api/): Requests, streaming events, jobs, artifacts, and stable errors.
 - [SDK guide](https://crimsab.github.io/imagegen-bridge/sdks/): Rust, Python, and TypeScript clients.
 - [Configuration](https://crimsab.github.io/imagegen-bridge/configuration/): Configuration precedence and supported settings.
+- [Errors and recovery](https://crimsab.github.io/imagegen-bridge/errors/): Stable error codes, machine-readable suggestions, and operator fixes.
 - [Limits and guarantees](https://crimsab.github.io/imagegen-bridge/limits/): Payload limits, validation, retries, and safety boundaries.
 
 ## Operations

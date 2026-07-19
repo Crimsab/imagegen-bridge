@@ -209,14 +209,15 @@ impl BridgeConfig {
             }
             if app.max_outputs == 0
                 || app.max_outputs > self.runtime.request.max_outputs
-                || app.max_parallel_outputs == 0
-                || app.max_parallel_outputs > app.max_outputs
-                || app.max_parallel_outputs > 4
+                || app
+                    .max_parallel_outputs
+                    .limited()
+                    .is_some_and(|value| value == 0 || value > usize::from(app.max_outputs))
             {
                 issue(
                     "providers.codex_app_server.max_outputs",
                     "out_of_range",
-                    "app-server fan-out limits must fit the request limit and parallelism must be between 1 and 4",
+                    "app-server output capacity must fit the request limit; parallelism accepts `auto` or a positive value no greater than max_outputs",
                 );
             }
             if app.rpc_max_message_bytes == 0
@@ -260,11 +261,17 @@ impl BridgeConfig {
                     "Codex Responses model names must not be empty",
                 );
             }
-            if !(1..=4).contains(&responses.max_parallel_outputs) {
+            if responses.max_outputs == 0
+                || responses.max_outputs > self.runtime.request.max_outputs
+                || responses
+                    .max_parallel_outputs
+                    .limited()
+                    .is_some_and(|value| value == 0 || value > usize::from(responses.max_outputs))
+            {
                 issue(
                     "providers.codex_responses.max_parallel_outputs",
                     "out_of_range",
-                    "parallel output limit must be between 1 and 4",
+                    "Codex Responses output capacity must fit the request limit; parallelism accepts `auto` or a positive value no greater than max_outputs",
                 );
             }
             if !(1..=2).contains(&responses.max_transient_attempts) {
@@ -324,7 +331,7 @@ impl BridgeConfig {
         }
         if self.server.max_body_bytes == 0
             || self.server.max_header_bytes == 0
-            || self.server.max_connections == 0
+            || self.server.max_connections.limited() == Some(0)
             || self.server.write_timeout_ms == 0
         {
             issue(
@@ -412,7 +419,7 @@ fn validate_concurrency(
     settings: ConcurrencySettings,
     issue: &mut impl FnMut(&str, &str, &str),
 ) {
-    if settings.max_concurrent == 0 {
+    if settings.max_concurrent.limited() == Some(0) {
         issue(
             field,
             "out_of_range",
@@ -537,7 +544,7 @@ mod tests {
     fn reports_disabled_default_and_invalid_limits_together() {
         let mut config = BridgeConfig::default();
         config.providers.codex_responses.enabled = false;
-        config.runtime.global.max_concurrent = 0;
+        config.runtime.global.max_concurrent = crate::Capacity::Limited(0);
         config.server.bind = "not-a-socket".to_owned();
         let issues = config.check();
         assert!(issues.iter().any(|issue| issue.field == "default_provider"));
@@ -553,7 +560,8 @@ mod tests {
         config.providers.codex_responses.endpoint = "http://127.0.0.1:8080/responses".to_owned();
         assert!(config.check().is_empty());
         config.providers.codex_responses.endpoint = "http://example.test/responses".to_owned();
-        config.providers.codex_responses.max_parallel_outputs = 0;
+        config.providers.codex_responses.max_parallel_outputs =
+            crate::OutputParallelism::Limited(0);
         config.providers.codex_responses.max_transient_attempts = 0;
         config.providers.codex_responses.transient_retry_backoff_ms = 30_001;
         assert!(
@@ -584,7 +592,8 @@ mod tests {
         let mut config = BridgeConfig::default();
         config.providers.codex_app_server.max_outputs = 5;
         config.runtime.request.max_outputs = 4;
-        config.providers.codex_app_server.max_parallel_outputs = 5;
+        config.providers.codex_app_server.max_parallel_outputs =
+            crate::OutputParallelism::Limited(5);
         assert!(
             config
                 .check()
@@ -592,8 +601,10 @@ mod tests {
                 .any(|issue| { issue.field == "providers.codex_app_server.max_outputs" })
         );
 
+        config.runtime.request.max_outputs = u8::MAX;
         config.providers.codex_app_server.max_outputs = 4;
-        config.providers.codex_app_server.max_parallel_outputs = 2;
+        config.providers.codex_app_server.max_parallel_outputs =
+            crate::OutputParallelism::Limited(2);
         assert!(config.check().is_empty());
     }
 

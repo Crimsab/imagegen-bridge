@@ -158,7 +158,7 @@ pub fn openapi_document() -> Value {
                     "responses": {
                         "200": json_response("Redaction-safe operator diagnostics", json!({"$ref":"#/components/schemas/OperatorDiagnostics"}), json!({
                             "bridge_version":env!("CARGO_PKG_VERSION"),
-                            "configuration":{"version":1,"default_provider":"codex-responses","listener_scope":"loopback","listener_port":8787,"authentication_required":true,"metrics_enabled":false,"jobs_enabled":true,"max_connections":256,"max_body_bytes":83_886_080,"read_timeout_ms":0,"write_timeout_ms":30000,"provenance":[]},
+                            "configuration":{"version":1,"default_provider":"codex-responses","listener_scope":"loopback","listener_port":8787,"authentication_required":true,"metrics_enabled":false,"jobs_enabled":true,"max_connections":null,"max_body_bytes":83_886_080,"read_timeout_ms":0,"write_timeout_ms":30000,"provenance":[]},
                             "artifact_storage_enabled":true,
                             "runtime":{"global_queued":0,"providers_queued":{"codex-app-server":0}},
                             "jobs":{"total":12,"queued":0,"running":1,"succeeded":10,"failed":1,"cancelled":0,"interrupted":0,"hidden":0,"database_bytes":40960,"logical_bytes":1_048_576,"active_workers":1,"max_pending":1000,"max_running":4,"retention_secs":604_800,"max_retained":10000,"max_retained_bytes":268_435_456,"max_database_bytes":1_073_741_824},
@@ -574,7 +574,8 @@ fn add_compatibility_schemas(schemas: &mut Map<String, Value>) {
             "retryable":{"type":"boolean"},
             "provider":{"type":"string"},
             "upstream_request_id":{"type":"string"},
-            "details":{"type":"object","additionalProperties":true}
+            "details":{"type":"object","additionalProperties":true},
+            "suggestions":{"type":"array","items":{"type":"string"},"description":"Ordered recovery actions safe to display to callers"}
         }
     }));
     schemas.insert(
@@ -653,7 +654,7 @@ fn add_compatibility_schemas(schemas: &mut Map<String, Value>) {
             "authentication_required":{"type":"boolean"},
             "metrics_enabled":{"type":"boolean"},
             "jobs_enabled":{"type":"boolean"},
-            "max_connections":{"type":"integer","minimum":0},
+            "max_connections":{"type":["integer","null"],"minimum":1,"description":"Configured connection cap, or null when unlimited"},
             "max_body_bytes":{"type":"integer","minimum":0},
             "read_timeout_ms":{"type":"integer","minimum":0},
             "write_timeout_ms":{"type":"integer","minimum":0},

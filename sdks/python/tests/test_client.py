@@ -278,6 +278,7 @@ def test_structured_errors_are_available_for_http_and_sse(bridge_url: str) -> No
         assert raised.value.bridge_code == "rate_limited"
         assert raised.value.retryable
         assert raised.value.request_id == "request_fixture_error"
+        assert raised.value.suggestions
 
         with pytest.raises(BridgeAPIError) as streamed:
             list(client.images.stream(request))

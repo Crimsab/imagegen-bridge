@@ -5,14 +5,15 @@ model rather than a conventional high-RPS model.
 
 ```text
 sustainable operations/second ≈ provider concurrency / p95 provider seconds
-provider admission envelope = max_concurrent + max_queued
-global admission envelope = max_concurrent + max_queued
+finite provider admission envelope = max_concurrent + max_queued
+finite global admission envelope = max_concurrent + max_queued
 ```
 
-With the defaults, a provider can execute 4 and queue 16 operations; the global
-runtime can execute 16 and queue 64. Set these from measured latency and
-account/provider limits, then keep client retries outside the bridge's bounded
-retry budget.
+The default profile uses `"unlimited"`, so the bridge does not create an
+admission envelope of its own. The upstream service and host resources remain
+real constraints. Operators who prefer overload shedding can set finite
+global and provider values from measured latency and account/provider limits,
+then keep client retries outside the bridge's bounded retry budget.
 
 ## Offline harness
 
@@ -29,7 +30,8 @@ bun run tools/resilience-harness.ts --scenario soak --soak-seconds 300 --json
 bun run tools/resilience-harness.ts --scenario faults --json
 ```
 
-The synthetic envelope is 4 active plus 16 queued. Stress submits 60
+The harness deliberately selects a finite synthetic envelope of 4 active plus
+16 queued; it does not inherit the unlimited product default. Stress submits 60
 concurrent operations—3x that envelope—and must degrade through fast 503s,
 remain live, drain every queue slot, and accept a recovery probe. Spike repeats
 the sudden burst. Soak runs at expected load. Faults inject 502, 429,
@@ -43,7 +45,7 @@ fallback behavior through the real runtime.
 
 A shortened pass is part of normal CI. The scheduled workflow runs the
 five-minute soak. Longer 1–24 hour runs should be started manually before
-raising concurrency limits.
+choosing finite concurrency limits.
 
 ## Example synthetic baseline
 
@@ -57,7 +59,7 @@ On 2026-07-19, seed 7 with a 15–25 ms synthetic dependency produced:
 | Abbreviated soak | 400/400 success; recovery passed |
 | Fault matrix | Four expected failures; recovery passed |
 
-This baseline proves bounded behavior, not Codex throughput. Measure real
+This baseline proves the opt-in finite-capacity profile, not Codex throughput. Measure real
 provider p95 separately; do not load-test subscription-backed generation
 without explicit authorization.
 
@@ -69,7 +71,8 @@ batch and effectively zero bridge queue time. A final 0.2.0 low-quality
 single-output smoke took 42.27 seconds end to end: 42.26 seconds provider time,
 0 milliseconds queue time, and about 10 milliseconds artifact/bridge work.
 
-These samples are not an SLA, but they show why three outputs can take several
-minutes. With `max_parallel_outputs = 2`, three outputs require two provider
-waves. Browser ChatGPT may use different orchestration, capacity, defaults, or
+These samples are not an SLA. They were captured with the previous
+`max_parallel_outputs = 2`, where three outputs required two provider waves.
+The current `"auto"` default launches the three calls together. Browser ChatGPT
+may still use different orchestration, capacity, defaults, or
 presentation; matching its wall time is not a reliable bridge requirement.

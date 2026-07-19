@@ -53,7 +53,7 @@ hide:
 
 ## One contract across every surface
 
-Imagegen Bridge normalizes requests, capability negotiation, metadata, errors, and provider attempts before they reach either supported Codex transport.
+Imagegen Bridge normalizes requests, capability negotiation, metadata, errors, and provider attempts before they reach either supported Codex transport. Multiple requested images fan out concurrently by default; every concurrency and queue boundary can instead be set explicitly by the operator.
 
 <div class="ib-surface-list" markdown>
   <div>
@@ -62,7 +62,7 @@ Imagegen Bridge normalizes requests, capability negotiation, metadata, errors, a
   </div>
   <div>
     <strong>HTTP and OpenAPI</strong>
-    <span>A private network service with bounded payloads and stable error codes.</span>
+    <span>A private network service with bounded payloads, stable error codes, and actionable recovery suggestions.</span>
   </div>
   <div>
     <strong>Python and TypeScript</strong>
@@ -101,6 +101,7 @@ Codex / ChatGPT OAuth
   <a href="api/"><strong>API</strong><span>Routes, authentication, jobs, streaming, and errors.</span></a>
   <a href="sdks/"><strong>SDKs</strong><span>Rust, Python, and TypeScript integration.</span></a>
   <a href="configuration/"><strong>Configuration</strong><span>Defaults, precedence, limits, and safe profiles.</span></a>
+  <a href="errors/"><strong>Errors</strong><span>Stable codes, recovery suggestions, and concurrency troubleshooting.</span></a>
   <a href="limits/"><strong>Guarantees</strong><span>Retries, concurrency, idempotency, and restarts.</span></a>
   <a href="resilience/"><strong>Resilience</strong><span>Circuit breakers, correlated telemetry, and zero-error handoff.</span></a>
   <a href="capacity/"><strong>Capacity</strong><span>Load, stress, spike, soak, and deterministic fault injection.</span></a>

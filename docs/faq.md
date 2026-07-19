@@ -2,9 +2,11 @@
 
 ## Why can three images take several minutes?
 
-Generation is provider-latency-bound. With `max_parallel_outputs = 2`, a batch
-of three runs in two waves; observed medium-quality provider calls have taken
-roughly 95–119 seconds each. Inspect response `timings`: `provider_ms` near
+Generation is provider-latency-bound. The current default
+`max_parallel_outputs = "auto"` starts all requested outputs concurrently.
+An operator-selected value such as `2` deliberately creates multiple waves;
+observed medium-quality provider calls have taken roughly 95–119 seconds each.
+Inspect response `timings`: `provider_ms` near
 `total_ms` with `queue_ms` near zero means the bridge is not the bottleneck.
 Browser ChatGPT can use different defaults and infrastructure.
 
@@ -56,9 +58,11 @@ remain authenticated, and the bearer is not placed in image URLs.
 
 ## Can several applications share one bridge?
 
-Yes. Use durable jobs, idempotency, bounded queues, and capability discovery.
-Remember that one bridge bearer defines one history ownership scope and that
-provider concurrency remains finite.
+Yes. One process handles independent requests concurrently; multiple bridge
+processes are not required. Admission defaults to `"unlimited"`, while finite
+global/provider values and queues are opt-in. One bridge bearer still defines
+one history ownership scope, and the upstream account may enforce its own rate
+limits.
 
 ## What survives a restart?
 

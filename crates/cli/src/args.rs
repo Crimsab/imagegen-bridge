@@ -14,7 +14,7 @@ use imagegen_bridge::core::{
     name = "imagegen-bridge",
     version,
     about = "Generate and edit images through Codex OAuth",
-    long_about = "A bounded, provider-neutral image generation bridge. Configuration precedence is defaults < file < environment < --set/--unset.",
+    long_about = "A provider-neutral image generation bridge with user-controlled concurrency. Configuration precedence is defaults < file < environment < --set/--unset.",
     disable_help_subcommand = true,
     propagate_version = true
 )]
@@ -106,7 +106,7 @@ pub(crate) enum Command {
     Edit(EditArgs),
     /// Detect and remove a flat image background without calling a provider.
     Background(BackgroundArgs),
-    /// Run the bounded HTTP API until interrupted.
+    /// Run the configurable HTTP API until interrupted.
     Serve(ServeArgs),
     /// Run the stable active/passive deployment gateway without OAuth access.
     Gateway(GatewayArgs),

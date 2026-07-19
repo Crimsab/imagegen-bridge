@@ -11,7 +11,10 @@
       "upstream_request_id": "upstream_fixture_01",
       "details": {
         "retry_after_ms": 1000
-      }
+      },
+      "suggestions": [
+        "Honor Retry-After; lower provider concurrency if rate limits persist."
+      ]
     }
   },
   "request_id": "request_fixture_error"

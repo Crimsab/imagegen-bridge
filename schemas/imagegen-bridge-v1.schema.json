@@ -402,6 +402,13 @@
           "description": "Whether retrying later may succeed without changing the request.",
           "type": "boolean"
         },
+        "suggestions": {
+          "description": "Ordered, redaction-safe recovery actions suitable for humans and automation.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "upstream_request_id": {
           "description": "Safe provider correlation ID when one exists.",
           "type": [

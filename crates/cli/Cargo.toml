@@ -22,8 +22,8 @@ clap_complete = "4.5.66"
 clap_mangen = "0.3.0"
 flate2 = "1.1.9"
 futures-util = "0.3"
-imagegen-bridge = { path = "../imagegen-bridge", version = "0.2.0", features = ["codex-responses"] }
-imagegen-bridge-server = { path = "../server", version = "0.2.0" }
+imagegen-bridge = { path = "../imagegen-bridge", version = "0.3.0", features = ["codex-responses"] }
+imagegen-bridge-server = { path = "../server", version = "0.3.0" }
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls", "stream"] }
 semver = "1.0.28"
 serde = { version = "1", features = ["derive"] }

@@ -7,7 +7,7 @@ produce, and what it may execute concurrently.
 
 `GET /v1/providers/{name}/capabilities` is the authority for model features and
 limits. A request can accept several outputs while a provider supports only one
-output per upstream call. In that case the bridge uses bounded fan-out and
+output per upstream call. In that case the bridge uses independent fan-out and
 restores the original output order.
 
 Capabilities can change independently of the versioned API contract. Consumers
@@ -17,12 +17,16 @@ should cache them briefly and refresh after upgrades or capability errors.
 
 Admission happens at three levels:
 
-1. The global runtime limits all active and queued operations.
-2. Each provider limits its active calls and waiting queue.
-3. Durable jobs have separate pending and worker limits.
+1. The global runtime may limit active and queued operations.
+2. Each provider may have its own active-call and waiting-room policy.
+3. Durable jobs have separate explicit pending and worker policies.
 
-Extra workers do not bypass provider concurrency. They wait behind the same
-provider semaphore.
+Global/provider admission defaults to `"unlimited"`. Set a positive
+`max_concurrent` only when you want a bridge-side bulkhead; set
+`max_queued = 0` for fail-fast or `"unlimited"` for no bridge-side waiting-room
+ceiling. `max_parallel_outputs = "auto"` runs every output in one logical
+request concurrently, while a positive integer deliberately caps that fan-out.
+These settings do not change provider-side account limits.
 
 ## Retry boundary
 
@@ -39,8 +43,9 @@ The bridge never automatically retries:
 - a timeout or disconnect after upstream dispatch;
 - any result whose completion is unknown.
 
-Structured errors expose `retryable` and ordered provider attempts so callers
-do not need to guess.
+Structured errors expose `retryable`, ordered provider attempts, diagnostics,
+and ordered `suggestions` so callers can show concrete recovery actions without
+guessing from HTTP status text.
 
 ## Idempotency
 

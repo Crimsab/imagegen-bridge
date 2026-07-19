@@ -7,12 +7,12 @@ cancellation_grace_ms = 1000
 shutdown_grace_ms = 10000
 
 [runtime.global]
-max_concurrent = 16
-max_queued = 64
+max_concurrent = "unlimited"
+max_queued = "unlimited"
 
 [runtime.provider_default]
-max_concurrent = 4
-max_queued = 16
+max_concurrent = "unlimited"
+max_queued = "unlimited"
 
 # Slow successful generations do not count as breaker failures. The three-minute
 # cooldown starts only after repeated qualifying provider failures.
@@ -26,7 +26,7 @@ success_threshold = 1
 [runtime.request]
 max_prompt_bytes = 131072
 max_negative_prompt_bytes = 65536
-max_outputs = 16
+max_outputs = 255
 max_inputs = 16
 max_inline_encoded_bytes = 67108864
 max_edge = 16384
@@ -80,8 +80,8 @@ max_scan_entries = 100000
 enabled = true
 executable = "codex"
 args = []
-max_outputs = 4
-max_parallel_outputs = 2
+max_outputs = 255
+max_parallel_outputs = "auto"
 session_database = "./data/state.sqlite3"
 rpc_max_message_bytes = 67108864
 rpc_max_notification_bytes = 50331648
@@ -96,7 +96,8 @@ enabled = true
 endpoint = "https://chatgpt.com/backend-api/codex/responses"
 responses_model = "gpt-5.5"
 image_model = "gpt-image-2"
-max_parallel_outputs = 2
+max_outputs = 255
+max_parallel_outputs = "auto"
 # Retries only explicit pre-output transient failures; unknown outcomes are never retried.
 max_transient_attempts = 2
 transient_retry_backoff_ms = 750
@@ -114,7 +115,7 @@ bind = "127.0.0.1:8787"
 # activation_lock = "/shared/coord/oauth-active.lock"
 max_body_bytes = 83886080
 max_header_bytes = 32768
-max_connections = 256
+max_connections = "unlimited"
 # Zero disables socket read-idle expiry while a synchronous generation is running.
 read_timeout_ms = 0
 write_timeout_ms = 30000

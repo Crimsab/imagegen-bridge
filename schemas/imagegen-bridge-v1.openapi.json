@@ -188,6 +188,13 @@
             "description": "Whether retrying later may succeed without changing the request.",
             "type": "boolean"
           },
+          "suggestions": {
+            "description": "Ordered, redaction-safe recovery actions suitable for humans and automation.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "upstream_request_id": {
             "description": "Safe provider correlation ID when one exists.",
             "type": [
@@ -218,6 +225,13 @@
           },
           "retryable": {
             "type": "boolean"
+          },
+          "suggestions": {
+            "description": "Ordered recovery actions safe to display to callers",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "upstream_request_id": {
             "type": "string"
@@ -546,8 +560,12 @@
             "type": "integer"
           },
           "max_connections": {
-            "minimum": 0,
-            "type": "integer"
+            "description": "Configured connection cap, or null when unlimited",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "metrics_enabled": {
             "type": "boolean"
@@ -3322,7 +3340,7 @@
   "info": {
     "description": "Provider-neutral image generation over Codex OAuth with native and OpenAI-familiar surfaces.",
     "title": "Imagegen Bridge API",
-    "version": "0.2.0"
+    "version": "0.3.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -3562,7 +3580,7 @@
               "application/json": {
                 "example": {
                   "artifact_storage_enabled": true,
-                  "bridge_version": "0.2.0",
+                  "bridge_version": "0.3.0",
                   "configuration": {
                     "authentication_required": true,
                     "default_provider": "codex-responses",
@@ -3570,7 +3588,7 @@
                     "listener_port": 8787,
                     "listener_scope": "loopback",
                     "max_body_bytes": 83886080,
-                    "max_connections": 256,
+                    "max_connections": null,
                     "metrics_enabled": false,
                     "provenance": [],
                     "read_timeout_ms": 0,
@@ -5134,7 +5152,7 @@
                         "gpt-image-1-mini"
                       ],
                       "name": "codex-responses",
-                      "version": "0.2.0"
+                      "version": "0.3.0"
                     }
                   ]
                 },

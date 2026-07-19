@@ -27,6 +27,7 @@ class BridgeAPIError(ImagegenBridgeError):
     upstream_request_id: str | None = None
     request_id: str | None = None
     details: dict[str, JSONValue] = field(default_factory=dict)
+    suggestions: list[str] = field(default_factory=list)
 
     def __str__(self) -> str:
         discriminator = self.bridge_code or self.code or self.type
@@ -47,6 +48,7 @@ class BridgeAPIError(ImagegenBridgeError):
         extension = error.get("imagegen_bridge")
         bridge = extension if isinstance(extension, dict) else {}
         details = bridge.get("details")
+        suggestions = bridge.get("suggestions")
         return cls(
             message=str(error.get("message", "bridge request failed")),
             status_code=status_code,
@@ -59,6 +61,9 @@ class BridgeAPIError(ImagegenBridgeError):
             upstream_request_id=_optional_string(bridge.get("upstream_request_id")),
             request_id=_optional_string(root.get("request_id")),
             details=cast(dict[str, JSONValue], details) if isinstance(details, dict) else {},
+            suggestions=[str(value) for value in suggestions]
+            if isinstance(suggestions, list)
+            else [],
         )
 
 

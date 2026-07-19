@@ -17,6 +17,7 @@ struct CheckResult {
     latest_version: String,
     update_available: bool,
     release_url: String,
+    recommended_command: String,
 }
 
 pub(crate) async fn run(command: &UpdateCommand, output: &Output) -> Result<(), BridgeError> {
@@ -93,10 +94,7 @@ pub(crate) async fn notify_if_available(output: &Output) {
         return;
     };
     if is_newer(&version) && cache.should_notify(&version.to_string()) {
-        let _ = output.notice(&format!(
-            "Imagegen Bridge {version} is available (current {}). Run `imagegen-bridge update check`.",
-            env!("CARGO_PKG_VERSION")
-        ));
+        let _ = output.notice(&notification_message(&version));
         cache.notified_version = Some(version.to_string());
         cache.notified_at = Some(cache::now());
         cache.store();
@@ -119,6 +117,7 @@ fn show_check(release: &github::Release, output: &Output) -> Result<(), BridgeEr
         latest_version: latest.to_string(),
         update_available: is_newer(&latest),
         release_url: release.html_url.clone(),
+        recommended_command: recommended_command().to_owned(),
     };
     if output.is_human() {
         if result.update_available {
@@ -127,7 +126,7 @@ fn show_check(release: &github::Release, output: &Output) -> Result<(), BridgeEr
                 result.current_version, result.latest_version
             ))?;
             output.text(&format!("Release: {}", result.release_url))?;
-            output.text("Preview: imagegen-bridge update install --dry-run")
+            output.text(&format!("Next: {}", result.recommended_command))
         } else {
             output.text(&format!(
                 "Imagegen Bridge {} is up to date.",
@@ -165,6 +164,22 @@ fn is_newer(latest: &Version) -> bool {
     Version::parse(env!("CARGO_PKG_VERSION")).is_ok_and(|current| latest > &current)
 }
 
+fn notification_message(version: &Version) -> String {
+    format!(
+        "Imagegen Bridge {version} is available (current {}). Next: `{}`.",
+        env!("CARGO_PKG_VERSION"),
+        recommended_command()
+    )
+}
+
+fn recommended_command() -> &'static str {
+    if std::path::Path::new("/.dockerenv").exists() {
+        "imagegen-bridge update docker --compose-file <compose.yaml> --env-file <.env> --dry-run (run on the Docker host)"
+    } else {
+        "imagegen-bridge update install --dry-run"
+    }
+}
+
 fn truthy(name: &str) -> bool {
     std::env::var(name).is_ok_and(|value| {
         matches!(
@@ -182,5 +197,13 @@ mod tests {
     fn current_version_is_not_newer() -> Result<(), Box<dyn std::error::Error>> {
         assert!(!is_newer(&Version::parse(env!("CARGO_PKG_VERSION"))?));
         Ok(())
+    }
+
+    #[test]
+    fn passive_notice_contains_version_and_action() {
+        let message = notification_message(&Version::new(9, 8, 7));
+        assert!(message.contains("9.8.7"));
+        assert!(message.contains("update"));
+        assert!(message.contains("--dry-run"));
     }
 }

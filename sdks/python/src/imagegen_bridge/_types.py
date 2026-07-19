@@ -470,6 +470,7 @@ class BridgeErrorData:
     provider: str | None = None
     upstream_request_id: str | None = None
     details: dict[str, JSONValue] = field(default_factory=dict)
+    suggestions: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -659,7 +660,8 @@ class ConfigurationDiagnostics:
     authentication_required: bool
     metrics_enabled: bool
     jobs_enabled: bool
-    max_connections: int
+    # Configured connection cap, or None when unlimited.
+    max_connections: int | None
     max_body_bytes: int
     read_timeout_ms: int
     write_timeout_ms: int

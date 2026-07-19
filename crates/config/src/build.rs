@@ -140,8 +140,8 @@ const fn circuit_breaker(settings: crate::CircuitBreakerSettings) -> CircuitBrea
 
 const fn concurrency(settings: crate::ConcurrencySettings) -> ConcurrencyLimit {
     ConcurrencyLimit {
-        max_concurrent: settings.max_concurrent,
-        max_queued: settings.max_queued,
+        max_concurrent: settings.max_concurrent.runtime_value(),
+        max_queued: settings.max_queued.runtime_value(),
     }
 }
 
@@ -208,8 +208,8 @@ mod tests {
     fn maps_all_runtime_limits_without_loss() {
         let mut config = BridgeConfig::default();
         config.runtime.global = crate::ConcurrencySettings {
-            max_concurrent: 7,
-            max_queued: 11,
+            max_concurrent: crate::Capacity::Limited(7),
+            max_queued: crate::Capacity::Limited(11),
         };
         config.runtime.request.max_prompt_bytes = 1234;
         config.runtime.idempotency.max_entries = 99;

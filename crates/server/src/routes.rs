@@ -283,11 +283,10 @@ pub fn router(state: ServerState, settings: &ServerSettings) -> Router {
     if state.jobs.is_some() {
         public = public.merge(dashboard_router());
     }
-    public
+    let router = public
         .merge(protected)
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(not_found)
-        .layer(ConcurrencyLimitLayer::new(settings.max_connections))
         .layer(axum::extract::DefaultBodyLimit::max(
             usize::try_from(settings.max_body_bytes).unwrap_or(usize::MAX),
         ))
@@ -295,8 +294,13 @@ pub fn router(state: ServerState, settings: &ServerSettings) -> Router {
             settings.max_header_bytes,
             enforce_header_limit,
         ))
-        .layer(middleware::from_fn_with_state(state.clone(), request_id))
-        .with_state(state)
+        .layer(middleware::from_fn_with_state(state.clone(), request_id));
+    let router = if let Some(max_connections) = settings.max_connections.limited() {
+        router.layer(ConcurrencyLimitLayer::new(max_connections))
+    } else {
+        router
+    };
+    router.with_state(state)
 }
 
 async fn not_found(Extension(request_id): Extension<RequestId>) -> ApiError {

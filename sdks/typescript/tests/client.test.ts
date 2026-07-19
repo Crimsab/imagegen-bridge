@@ -240,6 +240,7 @@ describe("ImagegenBridgeClient", () => {
       expect(api.statusCode).toBe(429);
       expect(api.bridgeCode).toBe("rate_limited");
       expect(api.retryable).toBeTrue();
+      expect(api.suggestions.length).toBeGreaterThan(0);
     }
     await expect(async () => {
       for await (const _event of client.images.stream(request)) {

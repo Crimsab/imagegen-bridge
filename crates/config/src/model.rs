@@ -7,6 +7,82 @@ use serde::{Deserialize, Serialize};
 /// Current configuration document version.
 pub const CONFIG_VERSION: u32 = 1;
 
+/// Configurable admission capacity: a caller-selected finite value or no policy limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Capacity {
+    /// Explicit caller-selected capacity. Zero is valid for queues and means no waiting room.
+    Limited(usize),
+    /// String form used for an unbounded admission policy.
+    Mode(CapacityMode),
+}
+
+impl Capacity {
+    /// Resolves the setting to the runtime sentinel used for an unbounded policy.
+    #[must_use]
+    pub const fn runtime_value(self) -> usize {
+        match self {
+            Self::Limited(value) => value,
+            Self::Mode(CapacityMode::Unlimited) => usize::MAX,
+        }
+    }
+
+    /// Returns the finite value when the user configured one.
+    #[must_use]
+    pub const fn limited(self) -> Option<usize> {
+        match self {
+            Self::Limited(value) => Some(value),
+            Self::Mode(CapacityMode::Unlimited) => None,
+        }
+    }
+}
+
+/// Named capacity modes accepted by TOML and environment overrides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapacityMode {
+    /// Do not impose a bridge-side admission limit.
+    Unlimited,
+}
+
+/// Multi-output parallelism selected automatically or capped by the caller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum OutputParallelism {
+    /// Explicit caller-selected simultaneous output count.
+    Limited(usize),
+    /// String form for request-sized automatic fan-out.
+    Mode(OutputParallelismMode),
+}
+
+impl OutputParallelism {
+    /// Resolves automatic fan-out against the configured per-request output ceiling.
+    #[must_use]
+    pub fn resolve(self, max_outputs: u8) -> u8 {
+        match self {
+            Self::Limited(value) => u8::try_from(value).unwrap_or(u8::MAX),
+            Self::Mode(OutputParallelismMode::Auto) => max_outputs,
+        }
+    }
+
+    /// Returns the finite value when the user configured one.
+    #[must_use]
+    pub const fn limited(self) -> Option<usize> {
+        match self {
+            Self::Limited(value) => Some(value),
+            Self::Mode(OutputParallelismMode::Auto) => None,
+        }
+    }
+}
+
+/// Named multi-output parallelism modes accepted by configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputParallelismMode {
+    /// Run all outputs requested by the logical request concurrently.
+    Auto,
+}
+
 /// Complete application configuration shared by library bootstrap, CLI, and server.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -74,8 +150,8 @@ impl Default for RuntimeSettings {
             cancellation_grace_ms: 1_000,
             shutdown_grace_ms: 10_000,
             global: ConcurrencySettings {
-                max_concurrent: 16,
-                max_queued: 64,
+                max_concurrent: Capacity::Mode(CapacityMode::Unlimited),
+                max_queued: Capacity::Mode(CapacityMode::Unlimited),
             },
             provider_default: ConcurrencySettings::default(),
             providers: BTreeMap::new(),
@@ -120,16 +196,16 @@ impl Default for CircuitBreakerSettings {
 #[serde(default, deny_unknown_fields)]
 pub struct ConcurrencySettings {
     /// Maximum executing calls.
-    pub max_concurrent: usize,
+    pub max_concurrent: Capacity,
     /// Maximum waiting calls.
-    pub max_queued: usize,
+    pub max_queued: Capacity,
 }
 
 impl Default for ConcurrencySettings {
     fn default() -> Self {
         Self {
-            max_concurrent: 4,
-            max_queued: 16,
+            max_concurrent: Capacity::Mode(CapacityMode::Unlimited),
+            max_queued: Capacity::Mode(CapacityMode::Unlimited),
         }
     }
 }
@@ -162,7 +238,7 @@ impl Default for RequestLimitSettings {
         Self {
             max_prompt_bytes: limits.max_prompt_bytes,
             max_negative_prompt_bytes: limits.max_negative_prompt_bytes,
-            max_outputs: limits.max_outputs,
+            max_outputs: u8::MAX,
             max_inputs: limits.max_inputs,
             max_inline_encoded_bytes: limits.max_inline_encoded_bytes,
             max_edge: limits.max_edge,
@@ -374,7 +450,7 @@ pub struct CodexAppServerSettings {
     /// Effective maximum outputs per logical request after bridge fan-out.
     pub max_outputs: u8,
     /// Provider-wide maximum simultaneous app-server image turns.
-    pub max_parallel_outputs: u8,
+    pub max_parallel_outputs: OutputParallelism,
     /// `SQLite` session binding database.
     pub session_database: PathBuf,
     /// Maximum JSONL message bytes.
@@ -399,8 +475,8 @@ impl Default for CodexAppServerSettings {
             args: Vec::new(),
             cwd: None,
             codex_model: None,
-            max_outputs: 4,
-            max_parallel_outputs: 2,
+            max_outputs: u8::MAX,
+            max_parallel_outputs: OutputParallelism::Mode(OutputParallelismMode::Auto),
             session_database: PathBuf::from("./data/state.sqlite3"),
             rpc_max_message_bytes: 64 * 1024 * 1024,
             rpc_max_notification_bytes: 48 * 1024 * 1024,
@@ -424,8 +500,10 @@ pub struct CodexResponsesSettings {
     pub responses_model: String,
     /// Image generation tool model.
     pub image_model: String,
+    /// Effective maximum outputs accepted by one logical request.
+    pub max_outputs: u8,
     /// Maximum simultaneous upstream calls within one multi-image request.
-    pub max_parallel_outputs: usize,
+    pub max_parallel_outputs: OutputParallelism,
     /// Maximum attempts for failures that are explicitly safe to retry.
     pub max_transient_attempts: u8,
     /// Base delay between safe transient attempts in milliseconds.
@@ -439,7 +517,8 @@ impl Default for CodexResponsesSettings {
             endpoint: "https://chatgpt.com/backend-api/codex/responses".to_owned(),
             responses_model: "gpt-5.5".to_owned(),
             image_model: "gpt-image-2".to_owned(),
-            max_parallel_outputs: 2,
+            max_outputs: u8::MAX,
+            max_parallel_outputs: OutputParallelism::Mode(OutputParallelismMode::Auto),
             max_transient_attempts: 2,
             transient_retry_backoff_ms: 750,
         }
@@ -492,7 +571,7 @@ pub struct ServerSettings {
     /// Maximum header bytes.
     pub max_header_bytes: usize,
     /// Maximum simultaneous HTTP connections.
-    pub max_connections: usize,
+    pub max_connections: Capacity,
     /// Socket read-stall timeout in milliseconds; zero disables it.
     pub read_timeout_ms: u64,
     /// Maximum time a socket write may remain stalled without progress.
@@ -513,7 +592,7 @@ impl Default for ServerSettings {
             activation_lock: None,
             max_body_bytes: 80 * 1024 * 1024,
             max_header_bytes: 32 * 1024,
-            max_connections: 256,
+            max_connections: Capacity::Mode(CapacityMode::Unlimited),
             read_timeout_ms: 0,
             write_timeout_ms: 30_000,
             metrics: MetricsSettings::default(),
@@ -579,5 +658,41 @@ pub struct TracingSettings {
 impl Default for TracingSettings {
     fn default() -> Self {
         Self { enabled: true }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_unlimited_admission_and_auto_output_parallelism()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let config: BridgeConfig = toml::from_str(
+            r#"
+            [runtime.global]
+            max_concurrent = "unlimited"
+            max_queued = "unlimited"
+
+            [providers.codex_responses]
+            max_outputs = 5
+            max_parallel_outputs = "auto"
+
+            [server]
+            max_connections = "unlimited"
+            "#,
+        )?;
+        assert_eq!(config.runtime.global.max_concurrent.limited(), None);
+        assert_eq!(
+            config
+                .providers
+                .codex_responses
+                .max_parallel_outputs
+                .resolve(5),
+            5
+        );
+        assert_eq!(config.server.max_connections.limited(), None);
+        assert!(config.check().is_empty());
+        Ok(())
     }
 }

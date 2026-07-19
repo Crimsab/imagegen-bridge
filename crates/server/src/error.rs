@@ -55,6 +55,13 @@ pub struct BridgeErrorExtension {
     /// Redaction-safe structured bridge diagnostics.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub details: std::collections::BTreeMap<String, Value>,
+    /// Ordered recovery actions safe to display to callers.
+    #[serde(default, skip_serializing_if = "suggestions_are_empty")]
+    pub suggestions: Box<[String]>,
+}
+
+fn suggestions_are_empty(value: &[String]) -> bool {
+    value.is_empty()
 }
 
 /// One response-ready error with explicit HTTP semantics.
@@ -84,6 +91,7 @@ impl ApiError {
                 provider: error.provider,
                 upstream_request_id: error.upstream_request_id,
                 details: error.details,
+                suggestions: error.suggestions,
             },
         };
         Self {
@@ -238,6 +246,7 @@ mod tests {
             envelope.error.imagegen_bridge.code,
             ErrorCode::SafetyRejected
         );
+        assert!(!envelope.error.imagegen_bridge.suggestions.is_empty());
         assert_eq!(envelope.request_id, "request-1");
     }
 

@@ -66,6 +66,13 @@ pub struct BridgeError {
     /// Structured, redaction-safe diagnostic values.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub details: BTreeMap<String, serde_json::Value>,
+    /// Ordered, redaction-safe recovery actions suitable for humans and automation.
+    #[serde(default, skip_serializing_if = "suggestions_are_empty")]
+    pub suggestions: Box<[String]>,
+}
+
+fn suggestions_are_empty(value: &[String]) -> bool {
+    value.is_empty()
 }
 
 impl BridgeError {
@@ -79,6 +86,10 @@ impl BridgeError {
             provider: None,
             upstream_request_id: None,
             details: BTreeMap::new(),
+            suggestions: default_suggestions(code)
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect(),
         }
     }
 
@@ -114,6 +125,76 @@ impl BridgeError {
         }
         self
     }
+
+    /// Adds one concrete, redaction-safe recovery action.
+    #[must_use]
+    pub fn with_suggestion(mut self, suggestion: impl Into<String>) -> Self {
+        let suggestion = suggestion.into();
+        if !suggestion.is_empty() && !self.suggestions.contains(&suggestion) {
+            let mut suggestions = self.suggestions.into_vec();
+            suggestions.push(suggestion);
+            self.suggestions = suggestions.into_boxed_slice();
+        }
+        self
+    }
+}
+
+const fn default_suggestions(code: ErrorCode) -> &'static [&'static str] {
+    match code {
+        ErrorCode::InvalidRequest => &[
+            "Inspect the reported field/details and compare the request with `imagegen-bridge providers capabilities`.",
+        ],
+        ErrorCode::UnsupportedCapability => &[
+            "Run `imagegen-bridge providers capabilities --json` and remove or change unsupported parameters.",
+        ],
+        ErrorCode::Configuration => &[
+            "Run `imagegen-bridge config check` to list every invalid field and its source.",
+            "Run `imagegen-bridge doctor` after correcting the configuration.",
+        ],
+        ErrorCode::Authentication => &[
+            "Run `imagegen-bridge auth-doctor` and refresh the provider login if it is expired or missing.",
+        ],
+        ErrorCode::PermissionDenied => &[
+            "Verify the bridge bearer scope and the provider account entitlement for this operation.",
+        ],
+        ErrorCode::SafetyRejected => {
+            &["Revise the prompt or input images; retrying the unchanged request will not help."]
+        }
+        ErrorCode::RateLimited => &[
+            "Honor Retry-After when present; if rate limits persist, set an explicit lower provider concurrency instead of `unlimited`/`auto`.",
+        ],
+        ErrorCode::Overloaded => &[
+            "Inspect `imagegen-bridge diagnostics` for the exhausted gate or open circuit.",
+            "For a configured admission gate, increase its capacity or set `max_concurrent = \"unlimited\"`; keep a finite value only when you want backpressure.",
+        ],
+        ErrorCode::Timeout => &[
+            "Compare provider and queue timing, then increase `runtime.default_timeout_ms` and `runtime.request.max_timeout_ms` if the provider is still making progress.",
+        ],
+        ErrorCode::Cancelled => {
+            &["Retry only if the caller intentionally cancelled before provider dispatch."]
+        }
+        ErrorCode::Upstream => &[
+            "Use the request ID with provider/bridge logs, honor `retryable`, and run `imagegen-bridge doctor` if failures persist.",
+        ],
+        ErrorCode::Protocol => &[
+            "Run `imagegen-bridge update check`; if already current, capture the request ID and provider diagnostics for a compatibility report.",
+        ],
+        ErrorCode::Input => &[
+            "Verify that every input is readable, within configured byte/pixel limits, and under an allowed local or remote source.",
+        ],
+        ErrorCode::Artifact => &[
+            "Check artifact-root permissions, free space, and configured image/response size ceilings.",
+        ],
+        ErrorCode::Session => &[
+            "List existing sessions or retry with an isolated session when conversational continuity is not required.",
+        ],
+        ErrorCode::IdempotencyConflict => {
+            &["Reuse an idempotency key only with the identical request, or generate a new key."]
+        }
+        ErrorCode::Internal => &[
+            "Run `imagegen-bridge doctor` and `imagegen-bridge update check`, then correlate the failure with its request ID.",
+        ],
+    }
 }
 
 #[cfg(test)]
@@ -128,5 +209,6 @@ mod tests {
         assert_eq!(error.details["recovery"], "revise_prompt_or_inputs");
         assert_eq!(error.details["retry_same_request"], false);
         assert_eq!(error.details["safety_controls_relaxed"], false);
+        assert!(!error.suggestions.is_empty());
     }
 }

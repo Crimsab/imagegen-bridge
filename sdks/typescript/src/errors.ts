@@ -15,6 +15,7 @@ export interface BridgeAPIErrorOptions {
   upstreamRequestId?: string | null;
   requestId?: string | null;
   details?: Record<string, JsonValue>;
+  suggestions?: string[];
 }
 
 export class BridgeAPIError extends ImagegenBridgeError {
@@ -29,6 +30,7 @@ export class BridgeAPIError extends ImagegenBridgeError {
   readonly upstreamRequestId: string | null;
   readonly requestId: string | null;
   readonly details: Record<string, JsonValue>;
+  readonly suggestions: string[];
 
   constructor(message: string, options: BridgeAPIErrorOptions) {
     super(message);
@@ -42,6 +44,7 @@ export class BridgeAPIError extends ImagegenBridgeError {
     this.upstreamRequestId = options.upstreamRequestId ?? null;
     this.requestId = options.requestId ?? null;
     this.details = options.details ?? {};
+    this.suggestions = options.suggestions ?? [];
   }
 
   static fromPayload(statusCode: number, payload: unknown): BridgeAPIError {
@@ -49,6 +52,9 @@ export class BridgeAPIError extends ImagegenBridgeError {
     const error = record(root?.error);
     const bridge = record(error?.imagegen_bridge);
     const details = record(bridge?.details) as Record<string, JsonValue> | null;
+    const suggestions = Array.isArray(bridge?.suggestions)
+      ? bridge.suggestions.filter((value): value is string => typeof value === "string")
+      : [];
     return new BridgeAPIError(string(error?.message) ?? "bridge request failed", {
       statusCode,
       type: string(error?.type) ?? "api_error",
@@ -59,6 +65,7 @@ export class BridgeAPIError extends ImagegenBridgeError {
       provider: string(bridge?.provider),
       upstreamRequestId: string(bridge?.upstream_request_id),
       requestId: string(root?.request_id),
+      suggestions,
       ...(details ? { details } : {}),
     });
   }

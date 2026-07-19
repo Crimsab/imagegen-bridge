@@ -102,8 +102,10 @@ new slot, and rolls back automatically on failure.
 After successful interactive CLI commands, a background check may print one
 short update notice to the terminal at most once per day. It is skipped for
 JSON/plain output, quiet mode, CI, server/dashboard processes, redirected
-stderr, and network failures. It sends no telemetry and can be disabled with
-`IMAGEGEN_BRIDGE_NO_UPDATE_CHECK=1`.
+stderr, and network failures. The notice includes the installed/latest version
+and the appropriate dry-run next step: standalone install or Docker-host
+update. It sends no telemetry, caches only public release metadata with `0600`
+permissions, and can be disabled with `IMAGEGEN_BRIDGE_NO_UPDATE_CHECK=1`.
 
 ## Generation and editing
 
@@ -163,14 +165,20 @@ state shared with the API and dashboard. Deletion requires `--force`, while
 `--dry-run` is non-mutating.
 
 `--count N` requests multiple outputs. A provider may return them natively or
-the bridge may fan out into bounded upstream calls; inspect `providers
+the bridge may fan out into independent upstream calls; inspect `providers
 capabilities --json` and its `batching` field for the exact behavior. Isolated
 Codex app-server batches can run concurrently. `--session-key` and
 `--thread-id` batches are intentionally sequential so turns on one conversation
 remain ordered.
 Use `--batch-execution sequential` for one upstream fan-out call at a time or
-`--batch-execution parallel` to require configured bounded concurrency.
+`--batch-execution parallel` to require concurrent fan-out. With the default
+`max_parallel_outputs = "auto"`, every requested output starts concurrently;
+set a positive integer in provider configuration to impose your own ceiling.
 `auto` is the default and becomes sequential for conversational sessions.
+
+Human-readable CLI failures print every structured recovery suggestion on its
+own `suggestion:` line. JSON mode exposes the same ordered `suggestions` array,
+alongside `code`, `retryable`, provider, request correlation and safe details.
 
 `-o, --output FILE` selects an exact filename and is valid only when `n=1`.
 `--output-dir DIR` retains generated UUID filenames inside a per-call directory.

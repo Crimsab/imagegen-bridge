@@ -205,7 +205,7 @@ def _job_update(favorite: bool | None, deleted: bool | None) -> dict[str, bool]:
 
 
 def _headers(bearer_token: str | None, default_headers: Mapping[str, str] | None) -> dict[str, str]:
-    headers = {"accept": "application/json", "user-agent": "imagegen-bridge-python/0.2.0"}
+    headers = {"accept": "application/json", "user-agent": "imagegen-bridge-python/0.3.0"}
     if default_headers:
         headers.update(default_headers)
     if bearer_token is not None:

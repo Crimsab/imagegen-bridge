@@ -431,7 +431,10 @@ public_base_url = "https://images.example.test/v1/"
             )
             .unwrap();
         assert_eq!(resolved.config.runtime.default_timeout_ms, 3000);
-        assert_eq!(resolved.config.runtime.global.max_concurrent, 2);
+        assert_eq!(
+            resolved.config.runtime.global.max_concurrent,
+            crate::Capacity::Limited(2)
+        );
         assert_eq!(resolved.config.inputs.remote.allowed_ports, [8080, 8443]);
         assert_eq!(resolved.config.artifacts.public_base_url, None);
         assert!(!resolved.config.server.metrics.enabled);
@@ -472,6 +475,44 @@ public_base_url = "https://images.example.test/v1/"
         assert_eq!(error.code, ErrorCode::Configuration);
         assert!(!error.message.contains(secret));
         assert!(!format!("{error:?}").contains(secret));
+    }
+
+    #[test]
+    fn accepts_named_capacity_modes_from_environment_and_overrides() {
+        let resolved = ConfigLoader::default()
+            .resolve_with_environment(
+                None,
+                [
+                    (
+                        "IMAGEGEN_BRIDGE__RUNTIME__GLOBAL__MAX_CONCURRENT".to_owned(),
+                        "unlimited".to_owned(),
+                    ),
+                    (
+                        "IMAGEGEN_BRIDGE__PROVIDERS__CODEX_RESPONSES__MAX_PARALLEL_OUTPUTS"
+                            .to_owned(),
+                        "auto".to_owned(),
+                    ),
+                ],
+                &[ConfigOverride::set("server.max_connections", "unlimited")],
+            )
+            .unwrap();
+
+        assert_eq!(
+            resolved.config.runtime.global.max_concurrent,
+            crate::Capacity::Mode(crate::CapacityMode::Unlimited)
+        );
+        assert_eq!(
+            resolved
+                .config
+                .providers
+                .codex_responses
+                .max_parallel_outputs,
+            crate::OutputParallelism::Mode(crate::OutputParallelismMode::Auto)
+        );
+        assert_eq!(
+            resolved.config.server.max_connections,
+            crate::Capacity::Mode(crate::CapacityMode::Unlimited)
+        );
     }
 
     #[test]

@@ -36,7 +36,8 @@ bridge.shutdown().await?;
 ## Python
 
 The package in `sdks/python` supports Python 3.10+, sync and async HTTPX
-clients, bounded SSE streaming, deadlines, structured errors, and every native
+clients, bounded SSE streaming, deadlines, structured errors with recovery
+suggestions, and every native
 discovery/session endpoint. It ships `py.typed`, frozen dataclass models, and
 wheel/sdist metadata.
 

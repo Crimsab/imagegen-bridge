@@ -119,7 +119,9 @@ impl BridgeApplication {
                     provider,
                     OutputFanoutConfig {
                         max_outputs: settings.max_outputs,
-                        max_parallel_outputs: settings.max_parallel_outputs,
+                        max_parallel_outputs: settings
+                            .max_parallel_outputs
+                            .resolve(settings.max_outputs),
                     },
                 )?));
             }
@@ -146,7 +148,9 @@ impl BridgeApplication {
                 provider_config
                     .image_model
                     .clone_from(&settings.image_model);
-                provider_config.max_parallel_outputs = settings.max_parallel_outputs;
+                provider_config.max_outputs = settings.max_outputs;
+                provider_config.max_parallel_outputs =
+                    usize::from(settings.max_parallel_outputs.resolve(settings.max_outputs));
                 provider_config.max_transient_attempts = settings.max_transient_attempts;
                 provider_config.transient_retry_backoff =
                     Duration::from_millis(settings.transient_retry_backoff_ms);
@@ -354,7 +358,7 @@ mod tests {
             .capabilities(Some("codex-app-server"), None)
             .await
             .unwrap();
-        assert_eq!(capabilities.count.max, 4);
+        assert_eq!(capabilities.count.max, u8::MAX);
         assert_eq!(
             capabilities.batching.mode,
             imagegen_bridge_core::BatchMode::FanOut

@@ -61,6 +61,8 @@ pub struct CodexResponsesConfig {
     pub max_base64_chars: usize,
     /// Maximum aggregate decoded reference bytes.
     pub max_reference_bytes: u64,
+    /// Maximum outputs accepted by one logical request.
+    pub max_outputs: u8,
     /// Maximum simultaneous upstream calls within one multi-image request.
     pub max_parallel_outputs: usize,
     /// Maximum attempts for failures that are explicitly safe to retry.
@@ -82,6 +84,7 @@ impl std::fmt::Debug for CodexResponsesConfig {
             .field("sse_limits", &self.sse_limits)
             .field("max_base64_chars", &self.max_base64_chars)
             .field("max_reference_bytes", &self.max_reference_bytes)
+            .field("max_outputs", &self.max_outputs)
             .field("max_parallel_outputs", &self.max_parallel_outputs)
             .field("max_transient_attempts", &self.max_transient_attempts)
             .field("transient_retry_backoff", &self.transient_retry_backoff)
@@ -104,7 +107,8 @@ impl CodexResponsesConfig {
             sse_limits: SseLimits::default(),
             max_base64_chars: 128 * 1024 * 1024,
             max_reference_bytes: 64 * 1024 * 1024,
-            max_parallel_outputs: 2,
+            max_outputs: u8::MAX,
+            max_parallel_outputs: usize::from(u8::MAX),
             max_transient_attempts: 2,
             transient_retry_backoff: std::time::Duration::from_millis(750),
         })
@@ -145,10 +149,13 @@ impl CodexResponsesProvider {
                 "Codex Responses endpoint must use HTTPS",
             ));
         }
-        if config.max_parallel_outputs == 0 || config.max_parallel_outputs > 4 {
+        if config.max_outputs == 0
+            || config.max_parallel_outputs == 0
+            || config.max_parallel_outputs > usize::from(config.max_outputs)
+        {
             return Err(BridgeError::new(
                 ErrorCode::Configuration,
-                "Codex Responses parallel output limit must be between 1 and 4",
+                "Codex Responses parallel output capacity must be positive and no greater than max_outputs",
             ));
         }
         if !(1..=2).contains(&config.max_transient_attempts) {
@@ -189,7 +196,11 @@ impl CodexResponsesProvider {
         let image_model = self.selected_image_model(request.routing.model.as_deref())?;
         let negotiated = negotiate_request(
             &request,
-            &capabilities(image_model, self.config.max_parallel_outputs)?,
+            &capabilities(
+                image_model,
+                self.config.max_outputs,
+                self.config.max_parallel_outputs,
+            )?,
         )?;
         let request = negotiated.effective_request;
         let user_content = self.input_content(&request).await?;
@@ -625,6 +636,7 @@ impl CodexResponsesProvider {
     ) -> Result<ProviderCapabilities, BridgeError> {
         capabilities(
             self.selected_image_model(requested)?,
+            self.config.max_outputs,
             self.config.max_parallel_outputs,
         )
     }
@@ -680,6 +692,7 @@ impl ImageProvider for CodexResponsesProvider {
 
 fn capabilities(
     model: &str,
+    max_outputs: u8,
     max_parallel_outputs: usize,
 ) -> Result<ProviderCapabilities, BridgeError> {
     if !SUPPORTED_IMAGE_MODELS.contains(&model) {
@@ -725,7 +738,10 @@ fn capabilities(
         experimental: false,
         generation: true,
         edits: true,
-        count: U8Range { min: 1, max: 4 },
+        count: U8Range {
+            min: 1,
+            max: max_outputs,
+        },
         batching: BatchCapabilities {
             mode: BatchMode::FanOut,
             native_count: U8Range { min: 1, max: 1 },
@@ -1477,6 +1493,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn five_outputs_can_run_in_parallel_when_the_user_allows_it() {
+        let (address, server, max_active) =
+            mock_parallel_server(5, None, Duration::from_millis(40)).await;
+        let loader =
+            Arc::new(InputLoader::new(Vec::<PathBuf>::new(), ImageLimits::default()).unwrap());
+        let mut config = CodexResponsesConfig::production(loader).unwrap();
+        config.endpoint = Url::parse(&format!("http://{address}/responses")).unwrap();
+        config.max_outputs = 5;
+        config.max_parallel_outputs = 5;
+        config.max_transient_attempts = 1;
+        let provider = CodexResponsesProvider::new(Arc::new(FakeCredentials), config).unwrap();
+        let mut request = ImageRequest::generate("five independent images");
+        request.parameters.n = 5;
+        let response = provider
+            .execute(
+                request,
+                ProviderContext {
+                    request_id: "five-parallel".to_owned(),
+                    deadline: Instant::now() + Duration::from_secs(10),
+                    cancellation: tokio_util::sync::CancellationToken::new(),
+                    events: None,
+                },
+            )
+            .await
+            .unwrap();
+        server.await.unwrap();
+        assert_eq!(max_active.load(Ordering::Acquire), 5);
+        assert_eq!(response.data.len(), 5);
+    }
+
+    #[tokio::test]
     async fn fail_fast_does_not_start_later_outputs_after_the_first_failure() {
         let (address, server, max_active) =
             mock_parallel_server(1, Some(0), Duration::from_millis(5)).await;
@@ -1604,7 +1651,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unbounded_parallel_output_configuration() {
+    fn rejects_zero_parallel_output_configuration() {
         let loader =
             Arc::new(InputLoader::new(Vec::<PathBuf>::new(), ImageLimits::default()).unwrap());
         let mut config = CodexResponsesConfig::production(loader).unwrap();

@@ -230,6 +230,7 @@ export interface BridgeErrorData {
   provider?: string | null;
   upstream_request_id?: string | null;
   details?: Record<string, JsonValue>;
+  suggestions?: string[];
 }
 
 export interface ImageFailure {
@@ -346,7 +347,8 @@ export interface ConfigurationDiagnostics {
   authentication_required: boolean;
   metrics_enabled: boolean;
   jobs_enabled: boolean;
-  max_connections: number;
+  /** Configured connection cap, or null when unlimited. */
+  max_connections: number | null;
   max_body_bytes: number;
   read_timeout_ms: number;
   write_timeout_ms: number;

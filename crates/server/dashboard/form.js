@@ -296,7 +296,7 @@ export function applyCapabilities(form, capabilities) {
 	const batching = capabilities?.batching;
 	count.title =
 		batching?.mode === "fan_out"
-			? `The bridge runs bounded upstream requests, up to ${batching.max_parallel_outputs} at once.`
+			? `The bridge starts independent upstream requests, up to ${batching.max_parallel_outputs} at once.`
 			: "The provider returns the requested outputs natively.";
 
 	const partial = form.elements.namedItem("partial-images");

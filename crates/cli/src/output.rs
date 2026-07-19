@@ -208,11 +208,8 @@ impl Output {
             if let Some(provider) = error.provider.as_deref() {
                 let _ = writeln!(stderr, "provider: {}", terminal_safe(provider));
             }
-            if error.code == ErrorCode::SafetyRejected {
-                let _ = writeln!(
-                    stderr,
-                    "recovery: revise the prompt or input images; retrying the unchanged request will not help"
-                );
+            for suggestion in &error.suggestions {
+                let _ = writeln!(stderr, "suggestion: {}", terminal_safe(suggestion));
             }
         }
     }

@@ -108,8 +108,10 @@ imagegen-bridge generate \
   --output-dir batches/bridges
 ```
 
-If a transport supports only one image per request, the bridge fans out bounded
-provider calls and preserves the requested order.
+If a transport supports only one image per request, the bridge fans out
+independent provider calls and preserves the requested order. The default
+`max_parallel_outputs = "auto"` starts every requested output concurrently;
+set a positive integer when you deliberately want a cap.
 
 ### Edit with references
 
@@ -258,7 +260,7 @@ retried automatically. Configure the bounded policy with
 The native contract supports, where the provider allows them:
 
 - size, aspect ratio, resolution, quality, format, compression, and background;
-- multiple outputs with sequential or bounded parallel execution;
+- multiple outputs with sequential, automatic full-fan-out, or explicitly capped parallel execution;
 - negative-prompt, moderation, revised-prompt, and partial-image policies;
 - input fidelity, reference images, edits, and reusable sessions;
 - native or emulated transparency with alpha validation and despill;

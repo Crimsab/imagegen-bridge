@@ -47,7 +47,10 @@ backpressure, and disconnect cancellation.
 Capability responses distinguish the logical bridge contract from one upstream
 call. `count` is the accepted request range. `batching.mode=fan_out` means the
 bridge divides a larger request into calls bounded by `batching.native_count`;
-`batching.max_parallel_outputs` is the provider-wide simultaneous-call cap.
+`batching.max_parallel_outputs` is the effective provider-wide simultaneous-call
+capacity. `max_parallel_outputs = "auto"` resolves to the configured logical
+output ceiling, so all requested outputs can start together; a numeric setting
+is an operator-selected cap.
 Output and partial-image indices are remapped into the original request order.
 Persistent and explicit-thread app-server batches run sequentially, while
 isolated batches may use the advertised parallelism.
@@ -368,6 +371,10 @@ Validation/input errors map to `400`/`422`, missing authentication to `401`,
 permission failures to `403`, conflicts to `409`, rate limits to `429`, capacity
 or readiness failures to `503`, deadlines to `504`, and unexpected bridge or
 upstream failures to `500`/`502`.
+Every native error includes an ordered, redaction-safe `suggestions` array. The
+bridge derives it from the stable error taxonomy; overload, rate-limit,
+timeout, authentication, configuration and protocol failures therefore carry
+specific inspection or configuration steps instead of only a status code.
 
 The checked-in OpenAPI 3.1 document includes native and compatibility request,
 response, error, extension, multipart, provider, session, job, readiness, and SSE
