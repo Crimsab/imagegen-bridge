@@ -63,11 +63,15 @@ artifact root. Publication is atomic and never overwrites by default.
 
 `codex-responses` is enabled by default and uses Codex OAuth directly. Its
 default image model is `gpt-image-2`, provider-wide output parallelism is `2`,
-and explicit safe transient failures receive at most two total attempts.
+and explicit safe transient failures receive at most two total attempts. A
+failed `image_generation_call` is a known failed outcome and receives one
+retry; refusals and unknown post-dispatch outcomes remain terminal.
 
-`codex-app-server` is the supported compatibility transport. It supervises the
-pinned or configured Codex executable and stores reusable session bindings in
-SQLite.
+`codex-app-server` is a compatibility transport. It supervises the pinned or
+configured Codex executable and stores reusable session bindings in SQLite.
+Because a successful app-server turn can complete without emitting an image
+item, do not configure it as an automatic production fallback for
+`codex-responses`.
 
 The `providers.openai` section reserves an API-key-backed integration surface.
 It is disabled and not registered by the current release.

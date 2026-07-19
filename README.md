@@ -199,7 +199,7 @@ diagnostics, metrics, errors, and the full route contract.
 | Transport | Status | Use it for | Constraint |
 | --- | --- | --- | --- |
 | `codex-responses` | Default, first class | Built-in Codex image generation, explicit models, and image controls | Uses the Codex Responses backend and Codex/ChatGPT OAuth |
-| `codex-app-server` | Supported fallback | Codex lifecycle, edits, references, and reusable threads | Uses automatic image-tool action negotiation and a smaller parameter set |
+| `codex-app-server` | Compatibility transport | Codex lifecycle, edits, references, and reusable threads | Its turn may complete without emitting an image item; do not use it as an automatic production fallback |
 
 `codex-responses` is the built-in Codex path and can route `gpt-image-2`,
 `gpt-image-1.5`, `gpt-image-1`, and `gpt-image-1-mini`. It authenticates with
@@ -225,15 +225,17 @@ both Codex transports and return the stable Codex detail code
 bridge attaches verified images to the current Codex turn. See the
 [Codex contextual-edit integration contract](docs/api.md#codex-contextual-edit-integration).
 
-`codex-app-server` remains available as a fallback. Its upstream turn may
+`codex-app-server` remains available as a compatibility transport. Its upstream turn may
 occasionally finish without emitting an image item; the bridge treats that as
 an error and records content-safe structured counts of observed item types and
-statuses for diagnosis. An API-key-backed official OpenAI provider is reserved
+statuses for diagnosis. Prefer `codex-responses` for production routing rather
+than automatically falling back to app-server. An API-key-backed official OpenAI provider is reserved
 in configuration but is not implemented and never shares Codex OAuth handling.
 
 `codex-responses` retries once by default only when the upstream explicitly
-reports a transient failure before returning an image, including a completed
-response with no image item. Transport timeouts, cancellations, safety or
+reports a transient failure before returning an image, including a failed
+`image_generation_call` or a completed response with no image item. Transport
+timeouts, cancellations, safety or
 permission failures, malformed output, and every unknown outcome are never
 retried automatically. Configure the bounded policy with
 `max_transient_attempts` and `transient_retry_backoff_ms`.

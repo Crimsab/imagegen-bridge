@@ -50,7 +50,7 @@ impl EventState {
                 ErrorCode::Upstream,
                 "Codex Responses image generation tool failed",
             )
-            .retryable(false)
+            .retryable(true)
             .with_detail("upstream_code", "image_call_failed")
         } else {
             BridgeError::new(
@@ -478,7 +478,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_image_call_status_is_reported_without_provider_payloads() {
+    fn failed_image_call_status_is_retryable_without_exposing_provider_payloads() {
         let mut state = EventState::default();
         process_event(
             r#"{"type":"response.output_item.done","item":{"type":"image_generation_call","status":"failed","result":null}}"#,
@@ -494,7 +494,7 @@ mod tests {
         .unwrap();
         let error = state.finish().unwrap_err();
         assert_eq!(error.code, ErrorCode::Upstream);
-        assert!(!error.retryable);
+        assert!(error.retryable);
         assert_eq!(error.details["upstream_code"], "image_call_failed");
         assert_eq!(
             error.details["output_item_types"],

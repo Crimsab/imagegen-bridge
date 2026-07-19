@@ -38,7 +38,7 @@ const SUPPORTED_IMAGE_MODELS: [&str; 4] = [
     "gpt-image-1",
     "gpt-image-1-mini",
 ];
-const INSTRUCTIONS: &str = "You are an image generation assistant inside the Codex backend. Invoke the image_generation tool exactly once and do not answer with text only.";
+const INSTRUCTIONS: &str = "You are an image generation assistant.";
 
 /// Codex OAuth Responses provider configuration.
 #[derive(Clone)]
@@ -534,12 +534,20 @@ impl CodexResponsesProvider {
             "type": "image_generation",
             "model": image_model,
             "size": parameters.size.to_string(),
-            "quality": parameters.quality.to_string(),
-            "output_format": parameters.output_format.to_string(),
-            "background": parameters.background.to_string(),
-            "moderation": parameters.moderation.to_string(),
-            "action": parameters.action.to_string()
+            "output_format": parameters.output_format.to_string()
         });
+        if parameters.quality != Quality::Auto {
+            tool["quality"] = json!(parameters.quality.to_string());
+        }
+        if parameters.background != Background::Auto {
+            tool["background"] = json!(parameters.background.to_string());
+        }
+        if parameters.moderation != Moderation::Auto {
+            tool["moderation"] = json!(parameters.moderation.to_string());
+        }
+        if parameters.action != ImageAction::Auto {
+            tool["action"] = json!(parameters.action.to_string());
+        }
         if let Some(compression) = parameters.output_compression {
             tool["output_compression"] = json!(compression);
         }
@@ -556,11 +564,7 @@ impl CodexResponsesProvider {
             "instructions": INSTRUCTIONS,
             "input": [{"type": "message", "role": "user", "content": user_content}],
             "tools": [tool],
-            "tool_choice": {
-                "type": "allowed_tools",
-                "mode": "required",
-                "tools": [{"type": "image_generation"}]
-            },
+            "tool_choice": {"type": "image_generation"},
             "stream": true,
             "store": false
         })
@@ -797,11 +801,14 @@ fn contextual_prompt(request: &ImageRequest) -> String {
         ),
         ImageOperation::Generate { .. } => request.prompt.clone(),
         ImageOperation::Edit {
+            reference_images, ..
+        } if reference_images.is_empty() => request.prompt.clone(),
+        ImageOperation::Edit {
             images,
             reference_images,
             ..
         } => format!(
-            "Edit the first {sources} attached source image(s) according to the prompt. The following {references} attached image(s), if any, are visual references only. Prompt: {prompt}",
+            "Edit the first {sources} attached source image(s) according to the prompt. The following {references} attached image(s) are visual references only. Prompt: {prompt}",
             sources = images.len(),
             references = reference_images.len(),
             prompt = request.prompt
@@ -1100,6 +1107,24 @@ mod tests {
     }
 
     #[test]
+    fn default_parameters_use_the_minimal_codex_image_tool_contract() {
+        let provider = provider();
+        let request = ImageRequest::generate("test");
+        let body = provider.request_body(
+            &request,
+            "gpt-image-2",
+            &[json!({"type":"input_text","text":"test"})],
+        );
+        let tool = &body["tools"][0];
+        assert_eq!(body["instructions"], INSTRUCTIONS);
+        assert_eq!(body["tool_choice"], json!({"type":"image_generation"}));
+        assert!(tool.get("quality").is_none());
+        assert!(tool.get("background").is_none());
+        assert!(tool.get("moderation").is_none());
+        assert!(tool.get("action").is_none());
+    }
+
+    #[test]
     fn model_selection_changes_payload_and_model_specific_capabilities() {
         let provider = provider();
         let request = ImageRequest::generate("test");
@@ -1109,7 +1134,7 @@ mod tests {
             &[json!({"type":"input_text","text":"test"})],
         );
         assert_eq!(body["tools"][0]["model"], "gpt-image-1.5");
-        assert_eq!(body["tools"][0]["action"], "auto");
+        assert!(body["tools"][0].get("action").is_none());
 
         let image_two = provider.capability_document(Some("gpt-image-2")).unwrap();
         assert!(!image_two.backgrounds.contains(&Background::Transparent));
@@ -1160,20 +1185,17 @@ mod tests {
         };
         let mut request = ImageRequest::generate("replace the blue shape with a red circle");
         request.operation = ImageOperation::Edit {
-            images: vec![source.clone()],
+            images: vec![source],
             mask: None,
-            reference_images: vec![source],
+            reference_images: Vec::new(),
         };
-        request.parameters.action = ImageAction::Edit;
 
         let content = provider.input_content(&request).await.unwrap();
-        assert_eq!(content.len(), 3);
+        assert_eq!(content.len(), 2);
         assert_eq!(content[0]["type"], "input_text");
-        assert!(
-            content[0]["text"]
-                .as_str()
-                .unwrap()
-                .contains("first 1 attached source image")
+        assert_eq!(
+            content[0]["text"],
+            "replace the blue shape with a red circle"
         );
         assert!(
             content[1..]
@@ -1187,8 +1209,41 @@ mod tests {
         }));
 
         let body = provider.request_body(&request, "gpt-image-2", &content);
-        assert_eq!(body["tools"][0]["action"], "edit");
-        assert_eq!(body["input"][0]["content"].as_array().unwrap().len(), 3);
+        assert!(body["tools"][0].get("action").is_none());
+        assert_eq!(body["input"][0]["content"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn contextual_edit_distinguishes_additional_visual_references() {
+        let provider = provider();
+        let source = ImageInput {
+            source: ImageSource::Base64 {
+                data: ONE_PIXEL_PNG.to_owned(),
+            },
+            media_type: Some("image/png".to_owned()),
+            filename: Some("source.png".to_owned()),
+        };
+        let mut request = ImageRequest::generate("replace the blue shape with a red circle");
+        request.operation = ImageOperation::Edit {
+            images: vec![source.clone()],
+            mask: None,
+            reference_images: vec![source],
+        };
+
+        let content = provider.input_content(&request).await.unwrap();
+        assert_eq!(content.len(), 3);
+        assert!(
+            content[0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("first 1 attached source image")
+        );
+        assert!(
+            content[0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("following 1 attached image")
+        );
     }
 
     #[test]
