@@ -104,7 +104,7 @@ jobs:
           mkdir -p "dist/$asset"
           install -m 0755 "target/${{ matrix.target }}/release/imagegen-bridge" "dist/$asset/imagegen-bridge"
           cp LICENSE README.md "dist/$asset/"
-          tar -C dist -czf "dist/$asset.tar.gz" "$asset"
+          tar -C "dist/$asset" -czf "../$asset.tar.gz" imagegen-bridge README.md LICENSE
           rm -rf "dist/$asset"
 
       - name: Package Windows binary
@@ -115,7 +115,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path "dist/$asset" | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/imagegen-bridge.exe" "dist/$asset/imagegen-bridge.exe"
           Copy-Item LICENSE, README.md "dist/$asset/"
-          Compress-Archive -Path "dist/$asset" -DestinationPath "dist/$asset.zip"
+          Compress-Archive -Path "dist/$asset/*" -DestinationPath "dist/$asset.zip"
           Remove-Item -Recurse -Force "dist/$asset"
 
       - name: Upload release archive

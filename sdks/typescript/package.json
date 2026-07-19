@@ -1,6 +1,6 @@
 {
   "name": "imagegen-bridge",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Typed Bun and Node SDK for Imagegen Bridge",
   "license": "MIT",
   "repository": {

@@ -52,9 +52,7 @@ fn extract_tar(bytes: &[u8]) -> Result<Vec<u8>, BridgeError> {
         let path = entry
             .path()
             .map_err(|_| protocol("release archive path is invalid"))?;
-        if path.components().count() == 1
-            && path.as_ref() == std::path::Path::new("imagegen-bridge")
-        {
+        if entry.header().entry_type().is_file() && is_expected_path(&path, "imagegen-bridge") {
             return read_bounded(&mut entry);
         }
     }
@@ -71,13 +69,22 @@ fn extract_zip(bytes: &[u8]) -> Result<Vec<u8>, BridgeError> {
         let Some(path) = entry.enclosed_name() else {
             continue;
         };
-        if path.components().count() == 1 && path == std::path::Path::new("imagegen-bridge.exe") {
+        if entry.is_file() && is_expected_path(&path, "imagegen-bridge.exe") {
             return read_bounded(&mut entry);
         }
     }
     Err(protocol(
         "release archive does not contain imagegen-bridge.exe",
     ))
+}
+
+fn is_expected_path(path: &std::path::Path, expected_name: &str) -> bool {
+    let components = path.components().collect::<Vec<_>>();
+    (1..=2).contains(&components.len())
+        && components
+            .iter()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+        && path.file_name() == Some(std::ffi::OsStr::new(expected_name))
 }
 
 fn read_bounded(reader: &mut impl std::io::Read) -> Result<Vec<u8>, BridgeError> {
@@ -122,7 +129,11 @@ mod tests {
             header.set_size(payload.len() as u64);
             header.set_mode(0o755);
             header.set_cksum();
-            builder.append_data(&mut header, "imagegen-bridge", payload.as_slice())?;
+            builder.append_data(
+                &mut header,
+                "imagegen-bridge-v0.1.2-linux-x86_64/imagegen-bridge",
+                payload.as_slice(),
+            )?;
             builder.into_inner()?.finish()?;
         }
         assert_eq!(
