@@ -67,8 +67,8 @@ tokens from publishing later versions.
 5. Create and push an annotated version tag:
 
    ```sh
-   git tag -a v0.1.3 -m "Imagegen Bridge v0.1.3"
-   git push origin v0.1.3
+   git tag -a v0.1.4 -m "Imagegen Bridge v0.1.4"
+   git push origin v0.1.4
    ```
 
 The workflows reject a tag whose version does not match every package. Never

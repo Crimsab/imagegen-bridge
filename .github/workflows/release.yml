@@ -104,7 +104,7 @@ jobs:
           mkdir -p "dist/$asset"
           install -m 0755 "target/${{ matrix.target }}/release/imagegen-bridge" "dist/$asset/imagegen-bridge"
           cp LICENSE README.md "dist/$asset/"
-          tar -C "dist/$asset" -czf "../$asset.tar.gz" imagegen-bridge README.md LICENSE
+          tar -czf "dist/$asset.tar.gz" -C "dist/$asset" imagegen-bridge README.md LICENSE
           rm -rf "dist/$asset"
 
       - name: Package Windows binary

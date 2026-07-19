@@ -5,7 +5,7 @@ exposes its dashboard and API at `http://127.0.0.1:8787`. It does not clone the
 repository and does not compile Rust locally.
 
 - **Container package:** [GitHub Container Registry](https://github.com/Crimsab/imagegen-bridge/pkgs/container/imagegen-bridge)
-- **Image:** `ghcr.io/crimsab/imagegen-bridge:0.1.3`
+- **Image:** `ghcr.io/crimsab/imagegen-bridge:0.1.4`
 - **Platforms:** Linux AMD64 and ARM64
 - **Registry login:** not required; the package is public
 
@@ -96,7 +96,7 @@ Treat the output like a password. Do not paste it into issues, logs, or chat.
 Pull the released image explicitly:
 
 ```sh
-docker pull ghcr.io/crimsab/imagegen-bridge:0.1.3
+docker pull ghcr.io/crimsab/imagegen-bridge:0.1.4
 ```
 
 The same image is listed in `compose.package.yaml`. Compose then starts it with
@@ -178,10 +178,10 @@ Open the [package versions](https://github.com/Crimsab/imagegen-bridge/pkgs/cont
 and choose a released tag. Add or update this line in `.env`:
 
 ```dotenv
-IMAGEGEN_BRIDGE_IMAGE=ghcr.io/crimsab/imagegen-bridge:0.1.3
+IMAGEGEN_BRIDGE_IMAGE=ghcr.io/crimsab/imagegen-bridge:0.1.4
 ```
 
-Replace `0.1.3` with the desired release, then recreate the container:
+Replace `0.1.4` with the desired release, then recreate the container:
 
 ```sh
 docker compose -f compose.package.yaml pull
