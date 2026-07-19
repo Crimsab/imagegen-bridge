@@ -7,6 +7,7 @@ The resilience matrix is also offline. Run a quick complete pass with:
 
 ```sh
 bun run tools/resilience-harness.ts --scenario all --soak-seconds 5 --json
+bun test tools/release-notes.test.ts
 ```
 
 See [Capacity and failure testing](capacity.md) for load, 3x-envelope stress,

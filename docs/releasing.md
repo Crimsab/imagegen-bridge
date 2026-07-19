@@ -9,6 +9,14 @@ tests the tagged source and creates a GitHub Release containing:
 - a Windows x86-64 CLI archive;
 - a `SHA256SUMS` file.
 
+Release notes require no hand-written Markdown. The tagged workflow finds the
+previous stable SemVer tag, asks GitHub for categorized pull-request notes,
+reads the first-parent commit history, and generates a temporary
+`release-notes.md`. The resulting release always contains automatic highlights,
+Conventional Commit categories, linked commits, contributors, the full compare
+link, downloads, and package destinations. If GitHub cannot generate PR notes,
+the local commit-based sections still make the release complete.
+
 Publishing that GitHub Release starts the package workflow. Its independent
 jobs publish the Rust workspace to crates.io, the Python SDK to PyPI, the
 TypeScript SDK to npm, and a multi-architecture container to GHCR. A registry
@@ -73,6 +81,13 @@ tokens from publishing later versions.
 
 The workflows reject a tag whose version does not match every package. Never
 reuse or move a published version tag; create a new patch release instead.
+
+Use Conventional Commit subjects so automatic categories remain meaningful:
+`feat:` for compatible functionality, `fix:` for corrections, `perf:` for
+performance, and `docs:`, `test:`, `refactor:`, `ci:`, `build:`, or `chore:`
+for their corresponding maintenance areas. Add `!` or a `BREAKING CHANGE:`
+footer when a public contract is intentionally incompatible. Unrecognized
+subjects remain visible under `Other changes`; they never disappear.
 
 The standalone updater trusts only the immutable assets of the latest GitHub
 Release and requires an exact `SHA256SUMS` entry before extraction. Keep archive

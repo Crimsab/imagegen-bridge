@@ -153,6 +153,9 @@ jobs:
         with:
           bun-version: 1.3.13
 
+      - name: Test automatic release notes
+        run: bun test tools/release-notes.test.ts
+
       - name: Build shared SDK contract server
         run: cargo build --locked -p imagegen-bridge-sdk-mock-server
 
