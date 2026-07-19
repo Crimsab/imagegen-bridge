@@ -62,9 +62,15 @@ probe.
 | `imagegen-bridge preset` | Save and reuse complete request settings |
 | `imagegen-bridge providers` | Inspect providers, models, and capabilities |
 | `imagegen-bridge background remove` | Remove a flat background locally |
+| `imagegen-bridge update` | Check, install, or roll back verified releases |
 
 Run `imagegen-bridge <command> --help` for every option. The complete CLI
 reference is in [docs/cli.md](docs/cli.md).
+
+The CLI checks for a new GitHub Release at most once per day after successful
+interactive commands. It never checks during server, dashboard, JSON, plain, or
+quiet execution and never sends telemetry. Set
+`IMAGEGEN_BRIDGE_NO_UPDATE_CHECK=1` to disable the passive check completely.
 
 ## Common workflows
 

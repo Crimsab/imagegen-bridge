@@ -577,6 +577,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "filetime"
+version = "0.2.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c287a33c7f0a620c38e641e7f60827713987b3c0f26e8ddc9462cc69cf75759"
+dependencies = [
+ "cfg-if",
+ "libc",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -590,6 +600,7 @@ checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
+ "zlib-rs",
 ]
 
 [[package]]
@@ -994,7 +1005,7 @@ dependencies = [
 
 [[package]]
 name = "imagegen-bridge"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "imagegen-bridge-artifacts",
@@ -1010,7 +1021,7 @@ dependencies = [
 
 [[package]]
 name = "imagegen-bridge-artifacts"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base16ct",
  "base64",
@@ -1030,7 +1041,7 @@ dependencies = [
 
 [[package]]
 name = "imagegen-bridge-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "assert_cmd",
  "base16ct",
@@ -1038,23 +1049,28 @@ dependencies = [
  "clap",
  "clap_complete",
  "clap_mangen",
+ "flate2",
  "imagegen-bridge",
  "imagegen-bridge-server",
  "predicates",
+ "reqwest",
+ "semver",
  "serde",
  "serde_json",
  "sha2",
+ "tar",
  "tempfile",
  "tokio",
  "tokio-util",
  "toml",
  "tracing",
  "tracing-subscriber",
+ "zip",
 ]
 
 [[package]]
 name = "imagegen-bridge-codex-app-server"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "base64",
@@ -1072,7 +1088,7 @@ dependencies = [
 
 [[package]]
 name = "imagegen-bridge-codex-responses"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "base64",
@@ -1092,7 +1108,7 @@ dependencies = [
 
 [[package]]
 name = "imagegen-bridge-config"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "imagegen-bridge-artifacts",
  "imagegen-bridge-core",
@@ -1107,7 +1123,7 @@ dependencies = [
 
 [[package]]
 name = "imagegen-bridge-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "futures-core",
@@ -1121,7 +1137,7 @@ dependencies = [
 
 [[package]]
 name = "imagegen-bridge-runtime"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "base16ct",
@@ -1144,7 +1160,7 @@ dependencies = [
 
 [[package]]
 name = "imagegen-bridge-schema-gen"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "imagegen-bridge-core",
  "imagegen-bridge-server",
@@ -1153,7 +1169,7 @@ dependencies = [
 
 [[package]]
 name = "imagegen-bridge-sdk-mock-server"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "axum",
  "base64",
@@ -1167,7 +1183,7 @@ dependencies = [
 
 [[package]]
 name = "imagegen-bridge-server"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "axum",
@@ -2293,6 +2309,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
+]
+
+[[package]]
 name = "tempfile"
 version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2610,6 +2636,12 @@ name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
+
+[[package]]
+name = "typed-path"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e28f89b80c87b8fb0cf04ab448d5dd0dd0ade2f8891bae878de66a75a28600e"
 
 [[package]]
 name = "typenum"
@@ -3097,6 +3129,25 @@ dependencies = [
  "quote",
  "syn",
 ]
+
+[[package]]
+name = "zip"
+version = "8.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d04a6b5381502aa6087c94c669499eb1602eb9c5e8198e534de571f7154809b"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "indexmap",
+ "memchr",
+ "typed-path",
+]
+
+[[package]]
+name = "zlib-rs"
+version = "0.6.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b142a20ec14a91d5bc708c1dc21b080c550113d8aa77afa29635673a65dd02c5"
 
 [[package]]
 name = "zmij"

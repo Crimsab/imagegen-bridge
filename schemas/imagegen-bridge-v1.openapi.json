@@ -3322,7 +3322,7 @@
   "info": {
     "description": "Provider-neutral image generation over Codex OAuth with native and OpenAI-familiar surfaces.",
     "title": "Imagegen Bridge API",
-    "version": "0.1.1"
+    "version": "0.1.2"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -3562,7 +3562,7 @@
               "application/json": {
                 "example": {
                   "artifact_storage_enabled": true,
-                  "bridge_version": "0.1.1",
+                  "bridge_version": "0.1.2",
                   "configuration": {
                     "authentication_required": true,
                     "default_provider": "codex-responses",
@@ -5134,7 +5134,7 @@
                         "gpt-image-1-mini"
                       ],
                       "name": "codex-responses",
-                      "version": "0.1.1"
+                      "version": "0.1.2"
                     }
                   ]
                 },

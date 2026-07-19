@@ -26,11 +26,11 @@ use crate::{
     args::{
         ArtifactCommand, BackgroundCommand, Cli, Command, ConfigCommand, EditArgs, GenerateArgs,
         ImageArgs, PresentationArgs, PresetCommand, ProviderCommand, SchemaArgs, SchemaKind,
-        SessionCommand,
+        SessionCommand, UpdateArgs,
     },
     dashboard, doctor,
     output::Output,
-    presentation, setup,
+    presentation, setup, update,
 };
 
 pub(crate) async fn run(cli: Cli, output: &Output) -> Result<(), BridgeError> {
@@ -51,6 +51,7 @@ pub(crate) async fn run(cli: Cli, output: &Output) -> Result<(), BridgeError> {
         }
         Command::Man(args) => return man(&args.output),
         Command::Schema(args) => return schema(args, output),
+        Command::Update(args) => return update_command(args, output).await,
         _ => {}
     }
     if let Command::Setup(args) = &cli.command {
@@ -77,10 +78,18 @@ pub(crate) async fn run(cli: Cli, output: &Output) -> Result<(), BridgeError> {
         Command::Config(args) => config(args.command, &resolved, output),
         Command::Artifacts(args) => artifacts(args.command, &resolved, output),
         Command::AuthDoctor(args) => auth_doctor(args.provider, resolved, output).await,
-        Command::Setup(_) | Command::Completions(_) | Command::Man(_) | Command::Schema(_) => {
+        Command::Setup(_)
+        | Command::Update(_)
+        | Command::Completions(_)
+        | Command::Man(_)
+        | Command::Schema(_) => {
             unreachable!()
         }
     }
+}
+
+async fn update_command(args: &UpdateArgs, output: &Output) -> Result<(), BridgeError> {
+    update::run(&args.command, output).await
 }
 
 async fn background(

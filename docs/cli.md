@@ -53,6 +53,53 @@ image, verifies it through the ordinary runtime, returns dimensions/format and
 elapsed time, and does not retain image bytes because it requests metadata
 output.
 
+## Updates and rollback
+
+An explicit check is read-only and works without bridge configuration:
+
+```sh
+imagegen-bridge update check
+imagegen-bridge update check --json
+```
+
+For a standalone binary, preview the target and backup location before applying
+the update. The release archive must match its entry in the release
+`SHA256SUMS`; replacement is atomic and retains one previous binary beside the
+executable.
+
+```sh
+imagegen-bridge update install --dry-run
+imagegen-bridge update install --yes
+imagegen-bridge update rollback --dry-run
+imagegen-bridge update rollback --yes
+```
+
+On Windows, `update check` and dry-run planning are supported, but replacing a
+running executable is left to the verified release archive installer. Linux and
+macOS standalone binaries support the atomic self-update path.
+
+Self-replacement is intentionally refused inside a container. Run the Docker
+update from the host instead; it updates only `IMAGEGEN_BRIDGE_IMAGE` in the
+selected environment file, pulls and recreates only the bridge service, and
+restores the previous pin if Compose fails.
+
+```sh
+imagegen-bridge update docker \
+  --compose-file compose.package.yaml \
+  --env-file .env \
+  --dry-run
+imagegen-bridge update docker \
+  --compose-file compose.package.yaml \
+  --env-file .env \
+  --yes
+```
+
+After successful interactive CLI commands, a background check may print one
+short update notice to the terminal at most once per day. It is skipped for
+JSON/plain output, quiet mode, CI, server/dashboard processes, redirected
+stderr, and network failures. It sends no telemetry and can be disabled with
+`IMAGEGEN_BRIDGE_NO_UPDATE_CHECK=1`.
+
 ## Generation and editing
 
 Every normalized request field is available either through a complete native

@@ -25,6 +25,33 @@ fn help_and_version_are_available_without_configuration() {
         .success()
         .stdout(predicate::str::contains("--attach-only"))
         .stdout(predicate::str::contains("--no-open"));
+    cargo_bin_cmd!("imagegen-bridge")
+        .args(["update", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("check"))
+        .stdout(predicate::str::contains("install"))
+        .stdout(predicate::str::contains("docker"))
+        .stdout(predicate::str::contains("rollback"));
+}
+
+#[test]
+fn update_mutations_fail_closed_without_confirmation() {
+    cargo_bin_cmd!("imagegen-bridge")
+        .args(["update", "install", "--json"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("pass --yes"));
+    cargo_bin_cmd!("imagegen-bridge")
+        .args(["update", "docker", "--json"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("pass --yes"));
+    cargo_bin_cmd!("imagegen-bridge")
+        .args(["update", "rollback", "--json"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("pass --yes"));
 }
 
 #[test]

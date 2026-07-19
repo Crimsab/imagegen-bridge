@@ -7,6 +7,7 @@ mod doctor;
 mod output;
 mod presentation;
 mod setup;
+mod update;
 
 use clap::Parser as _;
 
@@ -14,6 +15,7 @@ use clap::Parser as _;
 #[must_use]
 pub fn main_entry() -> std::process::ExitCode {
     let cli = args::Cli::parse();
+    let passive_update_check = cli.allows_passive_update_check();
     let output = output::Output::new(
         cli.output_mode(),
         cli.quiet,
@@ -31,7 +33,12 @@ pub fn main_entry() -> std::process::ExitCode {
         }
     };
     match runtime.block_on(commands::run(cli, &output)) {
-        Ok(()) => std::process::ExitCode::SUCCESS,
+        Ok(()) => {
+            if passive_update_check {
+                runtime.block_on(update::notify_if_available(&output));
+            }
+            std::process::ExitCode::SUCCESS
+        }
         Err(error) => {
             output.error(&error);
             std::process::ExitCode::from(output::exit_code(error.code))

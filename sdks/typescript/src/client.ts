@@ -166,7 +166,7 @@ export class ImagegenBridgeClient {
     );
     this.#headers = {
       accept: "application/json",
-      "user-agent": "imagegen-bridge-typescript/0.1.1",
+      "user-agent": "imagegen-bridge-typescript/0.1.2",
       ...options.headers,
       ...(options.bearerToken ? { authorization: `Bearer ${options.bearerToken}` } : {}),
       "accept-encoding": "identity",

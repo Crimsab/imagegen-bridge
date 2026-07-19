@@ -67,9 +67,14 @@ tokens from publishing later versions.
 5. Create and push an annotated version tag:
 
    ```sh
-   git tag -a v0.1.0 -m "Imagegen Bridge v0.1.0"
-   git push origin v0.1.0
+   git tag -a v0.1.2 -m "Imagegen Bridge v0.1.2"
+   git push origin v0.1.2
    ```
 
 The workflows reject a tag whose version does not match every package. Never
 reuse or move a published version tag; create a new patch release instead.
+
+The standalone updater trusts only the immutable assets of the latest GitHub
+Release and requires an exact `SHA256SUMS` entry before extraction. Keep archive
+names and checksum generation in the release workflow stable, or treat any
+intentional naming change as an updater compatibility change.

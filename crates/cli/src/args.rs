@@ -70,6 +70,20 @@ impl Cli {
             OutputMode::Human
         }
     }
+
+    pub(crate) fn allows_passive_update_check(&self) -> bool {
+        matches!(self.output_mode(), OutputMode::Human)
+            && !self.quiet
+            && !matches!(
+                self.command,
+                Command::Serve(_)
+                    | Command::Dashboard(_)
+                    | Command::Update(_)
+                    | Command::Completions(_)
+                    | Command::Man(_)
+                    | Command::Schema(_)
+            )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,6 +119,8 @@ pub(crate) enum Command {
     Config(ConfigArgs),
     /// Manage bridge-owned artifacts.
     Artifacts(ArtifactsArgs),
+    /// Check for, install, or roll back Imagegen Bridge releases.
+    Update(UpdateArgs),
     /// Verify provider authentication without generating an image.
     AuthDoctor(AuthDoctorArgs),
     /// Print or verify generated wire schemas.
@@ -113,6 +129,51 @@ pub(crate) enum Command {
     Completions(CompletionsArgs),
     /// Generate a manual page.
     Man(ManArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct UpdateArgs {
+    #[command(subcommand)]
+    pub command: UpdateCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum UpdateCommand {
+    /// Check GitHub Releases without changing the installation.
+    Check,
+    /// Replace this standalone binary with the latest verified release.
+    Install {
+        /// Show the update target and backup plan without downloading or replacing the binary.
+        #[arg(long, short = 'n')]
+        dry_run: bool,
+        /// Confirm replacement without prompting.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Update a Compose deployment and its pinned `IMAGEGEN_BRIDGE_IMAGE` value.
+    Docker {
+        /// Compose file containing the imagegen-bridge service.
+        #[arg(long, default_value = "compose.package.yaml", value_name = "FILE")]
+        compose_file: PathBuf,
+        /// Environment file whose `IMAGEGEN_BRIDGE_IMAGE` pin will be updated atomically.
+        #[arg(long, default_value = ".env", value_name = "FILE")]
+        env_file: PathBuf,
+        /// Show the pull/recreate plan without modifying files or containers.
+        #[arg(long, short = 'n')]
+        dry_run: bool,
+        /// Confirm the image pin change and Compose recreation.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Restore the previous standalone binary retained by the last update.
+    Rollback {
+        /// Show the rollback plan without replacing the binary.
+        #[arg(long, short = 'n')]
+        dry_run: bool,
+        /// Confirm rollback without prompting.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Debug, Args)]

@@ -47,6 +47,28 @@ impl Output {
         matches!(self.mode, OutputMode::Plain)
     }
 
+    pub(crate) const fn is_quiet(&self) -> bool {
+        self.quiet
+    }
+
+    pub(crate) fn text(&self, message: &str) -> Result<(), BridgeError> {
+        if self.quiet {
+            return Ok(());
+        }
+        let mut stdout = io::stdout().lock();
+        writeln!(stdout, "{}", terminal_safe(message))
+            .map_err(|_| output_error("could not write command output"))
+    }
+
+    pub(crate) fn notice(&self, message: &str) -> Result<(), BridgeError> {
+        if self.quiet || !self.is_human() {
+            return Ok(());
+        }
+        let mut stderr = io::stderr().lock();
+        writeln!(stderr, "{}", terminal_safe(message))
+            .map_err(|_| output_error("could not write command notice"))
+    }
+
     pub(crate) fn value(&self, value: &impl Serialize) -> Result<(), BridgeError> {
         let mut stdout = io::stdout().lock();
         match self.mode {

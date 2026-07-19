@@ -1,7 +1,7 @@
 {
   "provider": "codex-app-server",
   "model": "gpt-image-2",
-  "implementation_version": "0.1.1",
+  "implementation_version": "0.1.2",
   "experimental": false,
   "generation": true,
   "edits": true,
