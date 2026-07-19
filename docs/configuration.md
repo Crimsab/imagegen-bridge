@@ -31,6 +31,11 @@ The complete example is [`config.example.toml`](https://github.com/Crimsab/image
 | `runtime.global.max_queued` | `64` | Global waiting-room capacity |
 | `runtime.provider_default.max_concurrent` | `4` | Default active calls per provider |
 | `runtime.provider_default.max_queued` | `16` | Default provider queue capacity |
+| `runtime.circuit_breaker.enabled` | `true` | Guard every provider independently |
+| `runtime.circuit_breaker.failure_threshold` | `5` | Consecutive dependency failures before opening |
+| `runtime.circuit_breaker.open_duration_ms` | `180000` | Recovery cooldown, independent of request duration |
+| `runtime.circuit_breaker.half_open_max_calls` | `1` | Simultaneous recovery probes |
+| `runtime.circuit_breaker.success_threshold` | `1` | Successful probes required to close |
 | `runtime.request.max_outputs` | `16` | Maximum normalized outputs per request |
 | `runtime.request.max_inputs` | `16` | Maximum source and reference inputs |
 | `runtime.request.max_timeout_ms` | `1800000` | Highest accepted request deadline |
@@ -86,6 +91,7 @@ It is disabled and not registered by the current release.
 | `server.read_timeout_ms` | `0` | Socket read-idle timeout, disabled at zero |
 | `server.write_timeout_ms` | `30000` | Progress-based socket write stall timeout |
 | `server.bearer_token_env` | unset | Environment variable holding the API bearer |
+| `server.activation_lock` | unset | Cross-process singleton lock acquired before OAuth/provider bootstrap |
 
 The runtime request deadline limits generation duration. Socket timeouts protect
 network progress and are not substitutes for that deadline.

@@ -174,6 +174,15 @@ const fn compatible_code(code: ErrorCode) -> &'static str {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        let retry_after_seconds = self
+            .envelope
+            .error
+            .imagegen_bridge
+            .details
+            .get("retry_after_ms")
+            .and_then(Value::as_u64)
+            .map_or(1, |milliseconds| milliseconds.saturating_add(999) / 1_000)
+            .max(1);
         let mut response = (self.status, Json(*self.envelope)).into_response();
         if self.status == StatusCode::UNAUTHORIZED {
             response.headers_mut().insert(
@@ -184,10 +193,9 @@ impl IntoResponse for ApiError {
         if matches!(
             self.status,
             StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE
-        ) {
-            response
-                .headers_mut()
-                .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+        ) && let Ok(value) = HeaderValue::from_str(&retry_after_seconds.to_string())
+        {
+            response.headers_mut().insert(header::RETRY_AFTER, value);
         }
         response
     }
@@ -221,7 +229,7 @@ mod tests {
         let error = BridgeError::new(ErrorCode::SafetyRejected, "request was blocked")
             .with_detail("field", "prompt")
             .with_provider("codex-app-server");
-        let projected = ApiError::from_bridge(error, RequestId("request-1".to_owned()));
+        let projected = ApiError::from_bridge(error, RequestId("request-1".to_owned(), None));
         let envelope = projected.envelope();
         assert_eq!(envelope.error.error_type, "image_generation_user_error");
         assert_eq!(envelope.error.code, "moderation_blocked");
@@ -231,5 +239,17 @@ mod tests {
             ErrorCode::SafetyRejected
         );
         assert_eq!(envelope.request_id, "request-1");
+    }
+
+    #[test]
+    fn circuit_cooldown_sets_a_ceiling_retry_after() {
+        let response = ApiError::from_bridge(
+            BridgeError::new(ErrorCode::Overloaded, "circuit open")
+                .retryable(true)
+                .with_detail("retry_after_ms", 180_001_u64),
+            RequestId("request-2".to_owned(), None),
+        )
+        .into_response();
+        assert_eq!(response.headers()[header::RETRY_AFTER], "181");
     }
 }

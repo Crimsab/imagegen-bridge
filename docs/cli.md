@@ -94,6 +94,11 @@ imagegen-bridge update docker \
   --yes
 ```
 
+For a no-502 planned handoff with exactly one OAuth-active slot, use
+`compose.handoff.yaml` and add `--active-passive`. The updater places the
+OAuth-sterile gateway in bounded hold, stops the old slot, readiness-gates the
+new slot, and rolls back automatically on failure.
+
 After successful interactive CLI commands, a background check may print one
 short update notice to the terminal at most once per day. It is skipped for
 JSON/plain output, quiet mode, CI, server/dashboard processes, redirected
@@ -274,6 +279,7 @@ imagegen-bridge session delete gallery --dry-run --json
 imagegen-bridge session delete gallery --force --json
 imagegen-bridge serve
 imagegen-bridge serve --bind 127.0.0.1:9000
+imagegen-bridge gateway --state-file /coord/active-slot
 imagegen-bridge dashboard
 imagegen-bridge dashboard --no-open
 imagegen-bridge dashboard --attach-only --json

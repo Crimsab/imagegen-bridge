@@ -3,7 +3,11 @@
 use std::{collections::BTreeMap, fmt::Write as _, sync::Mutex, time::Duration};
 
 use imagegen_bridge_core::{BridgeError, ErrorCode, ImageResponse};
-use imagegen_bridge_runtime::RuntimeQueueSnapshot;
+use imagegen_bridge_runtime::{CircuitBreakerSnapshot, RuntimeQueueSnapshot};
+
+const DURATION_BUCKETS_MS: [u128; 12] = [
+    100, 500, 1_000, 5_000, 10_000, 30_000, 60_000, 120_000, 180_000, 300_000, 600_000, 1_800_000,
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct MetricKey {
@@ -22,6 +26,9 @@ struct Observation {
     queue_samples: u64,
     generated_bytes: u128,
     normalizations: u64,
+    operation_buckets: [u64; DURATION_BUCKETS_MS.len()],
+    provider_buckets: [u64; DURATION_BUCKETS_MS.len()],
+    queue_buckets: [u64; DURATION_BUCKETS_MS.len()],
 }
 
 /// In-memory bounded metric aggregation keyed only by registered provider and stable code.
@@ -41,8 +48,12 @@ impl ServerMetrics {
             Ok(response) => ("success", "none", Some(response)),
             Err(error) => ("error", error_code_name(error.code), None),
         };
+        let effective_provider = match result {
+            Ok(response) => response.provider.as_str(),
+            Err(error) => error.provider.as_deref().unwrap_or(provider),
+        };
         let key = MetricKey {
-            provider: provider.to_owned(),
+            provider: effective_provider.to_owned(),
             result: status,
             code,
         };
@@ -55,15 +66,24 @@ impl ServerMetrics {
         observation.operation_millis = observation
             .operation_millis
             .saturating_add(elapsed.as_millis());
+        observe(&mut observation.operation_buckets, elapsed.as_millis());
         if let Some(response) = success {
             observation.provider_millis = observation
                 .provider_millis
                 .saturating_add(u128::from(response.timings.provider_ms));
             observation.provider_samples = observation.provider_samples.saturating_add(1);
+            observe(
+                &mut observation.provider_buckets,
+                u128::from(response.timings.provider_ms),
+            );
             observation.queue_millis = observation
                 .queue_millis
                 .saturating_add(u128::from(response.timings.queue_ms));
             observation.queue_samples = observation.queue_samples.saturating_add(1);
+            observe(
+                &mut observation.queue_buckets,
+                u128::from(response.timings.queue_ms),
+            );
             observation.generated_bytes = observation.generated_bytes.saturating_add(
                 response
                     .data
@@ -81,6 +101,7 @@ impl ServerMetrics {
         &self,
         queues: &RuntimeQueueSnapshot,
         provider_restarts: &BTreeMap<String, u64>,
+        circuits: &BTreeMap<String, CircuitBreakerSnapshot>,
     ) -> String {
         let observations = self
             .observations
@@ -90,11 +111,11 @@ impl ServerMetrics {
             "# HELP imagegen_bridge_requests_total Completed image operations by registered provider and stable result.\n\
              # TYPE imagegen_bridge_requests_total counter\n\
              # HELP imagegen_bridge_operation_duration_seconds End-to-end image operation duration.\n\
-             # TYPE imagegen_bridge_operation_duration_seconds summary\n\
+             # TYPE imagegen_bridge_operation_duration_seconds histogram\n\
              # HELP imagegen_bridge_provider_duration_seconds Provider-reported successful execution duration.\n\
-             # TYPE imagegen_bridge_provider_duration_seconds summary\n\
+             # TYPE imagegen_bridge_provider_duration_seconds histogram\n\
              # HELP imagegen_bridge_queue_duration_seconds Successful request admission queue duration.\n\
-             # TYPE imagegen_bridge_queue_duration_seconds summary\n\
+             # TYPE imagegen_bridge_queue_duration_seconds histogram\n\
              # HELP imagegen_bridge_generated_bytes_total Verified generated image bytes.\n\
              # TYPE imagegen_bridge_generated_bytes_total counter\n\
              # HELP imagegen_bridge_normalizations_total Explicit parameter normalizations.\n\
@@ -120,6 +141,13 @@ impl ServerMetrics {
                 "imagegen_bridge_operation_duration_seconds_count{{{labels}}} {}",
                 value.requests
             );
+            render_buckets(
+                &mut output,
+                "imagegen_bridge_operation_duration_seconds",
+                &labels,
+                &value.operation_buckets,
+                value.requests,
+            );
             if value.provider_samples > 0 {
                 let _ = writeln!(
                     output,
@@ -131,6 +159,13 @@ impl ServerMetrics {
                     "imagegen_bridge_provider_duration_seconds_count{{{labels}}} {}",
                     value.provider_samples
                 );
+                render_buckets(
+                    &mut output,
+                    "imagegen_bridge_provider_duration_seconds",
+                    &labels,
+                    &value.provider_buckets,
+                    value.provider_samples,
+                );
                 let _ = writeln!(
                     output,
                     "imagegen_bridge_queue_duration_seconds_sum{{{labels}}} {}",
@@ -140,6 +175,13 @@ impl ServerMetrics {
                     output,
                     "imagegen_bridge_queue_duration_seconds_count{{{labels}}} {}",
                     value.queue_samples
+                );
+                render_buckets(
+                    &mut output,
+                    "imagegen_bridge_queue_duration_seconds",
+                    &labels,
+                    &value.queue_buckets,
+                    value.queue_samples,
                 );
                 let _ = writeln!(
                     output,
@@ -178,8 +220,60 @@ impl ServerMetrics {
                 "imagegen_bridge_provider_restarts_total{{provider=\"{provider}\"}} {restarts}"
             );
         }
+        output.push_str(
+            "# HELP imagegen_bridge_circuit_state Current per-provider circuit state as a one-hot gauge.\n\
+             # TYPE imagegen_bridge_circuit_state gauge\n\
+             # HELP imagegen_bridge_circuit_rejections_total Calls rejected by a provider circuit.\n\
+             # TYPE imagegen_bridge_circuit_rejections_total counter\n\
+             # HELP imagegen_bridge_circuit_transitions_total Circuit state transitions since startup.\n\
+             # TYPE imagegen_bridge_circuit_transitions_total counter\n",
+        );
+        for (provider, circuit) in circuits {
+            for state in ["closed", "open", "half_open"] {
+                let value = u8::from(circuit.state.as_str() == state);
+                let _ = writeln!(
+                    output,
+                    "imagegen_bridge_circuit_state{{provider=\"{provider}\",state=\"{state}\"}} {value}"
+                );
+            }
+            let _ = writeln!(
+                output,
+                "imagegen_bridge_circuit_rejections_total{{provider=\"{provider}\"}} {}",
+                circuit.rejected_calls
+            );
+            let _ = writeln!(
+                output,
+                "imagegen_bridge_circuit_transitions_total{{provider=\"{provider}\"}} {}",
+                circuit.transitions
+            );
+        }
         output
     }
+}
+
+fn observe(buckets: &mut [u64; DURATION_BUCKETS_MS.len()], milliseconds: u128) {
+    for (index, upper) in DURATION_BUCKETS_MS.iter().enumerate() {
+        if milliseconds <= *upper {
+            buckets[index] = buckets[index].saturating_add(1);
+        }
+    }
+}
+
+fn render_buckets(
+    output: &mut String,
+    metric: &str,
+    labels: &str,
+    buckets: &[u64; DURATION_BUCKETS_MS.len()],
+    total: u64,
+) {
+    for (upper, count) in DURATION_BUCKETS_MS.iter().zip(buckets) {
+        let _ = writeln!(
+            output,
+            "{metric}_bucket{{{labels},le=\"{}\"}} {count}",
+            seconds(*upper)
+        );
+    }
+    let _ = writeln!(output, "{metric}_bucket{{{labels},le=\"+Inf\"}} {total}");
 }
 
 fn seconds(milliseconds: u128) -> String {
@@ -226,6 +320,7 @@ mod tests {
                 providers_queued: [("codex-app-server".to_owned(), 1)].into_iter().collect(),
             },
             &[("codex-app-server".to_owned(), 2)].into_iter().collect(),
+            &BTreeMap::new(),
         );
         assert!(rendered.contains("provider=\"codex-app-server\""));
         assert!(rendered.contains("code=\"rate_limited\""));

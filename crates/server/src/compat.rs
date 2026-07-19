@@ -577,7 +577,7 @@ mod tests {
                 input_fidelity: Some("high".to_owned()),
                 ..EditFields::default()
             },
-            RequestId("test-request".to_owned()),
+            RequestId("test-request".to_owned(), None),
         )
         .unwrap();
         assert_eq!(request.parameters.input_fidelity, Some(InputFidelity::High));

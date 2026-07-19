@@ -50,6 +50,7 @@ use crate::{
 };
 
 const REQUEST_ID_HEADER: &str = "x-request-id";
+const TRACEPARENT_HEADER: &str = "traceparent";
 const MAX_CURSOR_BYTES: usize = 256;
 const MAX_PAGE_SIZE: usize = 100;
 const MAX_IDEMPOTENCY_KEY_BYTES: usize = 512;
@@ -187,17 +188,50 @@ impl ServerState {
 
 /// Safe bridge-generated request correlation ID.
 #[derive(Debug, Clone)]
-pub struct RequestId(pub(crate) String);
+pub struct RequestId(pub(crate) String, pub(crate) Option<String>);
 
 impl RequestId {
     pub(crate) fn new() -> Self {
-        Self(Uuid::now_v7().to_string())
+        Self(Uuid::now_v7().to_string(), None)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct TraceContext {
+    trace_id: String,
+    span_id: String,
+    flags: String,
+    parent_span_id: Option<String>,
+}
+
+impl TraceContext {
+    fn from_headers(headers: &HeaderMap) -> Self {
+        let incoming = headers
+            .get(TRACEPARENT_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(parse_traceparent);
+        let (trace_id, parent_span_id, flags) = incoming.map_or_else(
+            || (new_trace_id(), None, "01".to_owned()),
+            |(trace_id, parent_span_id, flags)| (trace_id, Some(parent_span_id), flags),
+        );
+        Self {
+            trace_id,
+            span_id: new_span_id(),
+            flags,
+            parent_span_id,
+        }
+    }
+
+    fn header_value(&self) -> String {
+        format!("00-{}-{}-{}", self.trace_id, self.span_id, self.flags)
     }
 }
 
 /// Builds the complete route graph with configured body and concurrency bounds.
 pub fn router(state: ServerState, settings: &ServerSettings) -> Router {
-    state.readiness.start(state.runtime.registry().clone());
+    state
+        .readiness
+        .start(state.runtime.registry().clone(), state.jobs.clone());
     let mut protected = Router::new()
         .route("/v1/images", post(execute_image))
         .route("/v1/images/stream", post(stream_image))
@@ -305,12 +339,29 @@ async fn request_id(
     mut request: axum::extract::Request,
     next: middleware::Next,
 ) -> Response {
-    let request_id = RequestId::new();
+    let request_id_value = request
+        .headers()
+        .get(REQUEST_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| valid_correlation_value(value, 128))
+        .map_or_else(|| RequestId::new().0, ToOwned::to_owned);
+    let trace = TraceContext::from_headers(request.headers());
+    let request_id = RequestId(request_id_value, Some(trace.trace_id.clone()));
     let route = redacted_route(request.uri().path());
     let method = request.method().clone();
     let started = Instant::now();
     request.extensions_mut().insert(request_id.clone());
-    let mut response = next.run(request).await;
+    request.extensions_mut().insert(trace.clone());
+    let span = tracing::info_span!(
+        "imagegen_bridge.http_request",
+        request_id = %request_id.0,
+        trace_id = %trace.trace_id,
+        span_id = %trace.span_id,
+        parent_span_id = ?trace.parent_span_id,
+        method = %method,
+        route = %route.unwrap_or("unmatched")
+    );
+    let mut response = next.run(request).instrument(span).await;
     if let Some(route) = route {
         state
             .events
@@ -318,6 +369,9 @@ async fn request_id(
     }
     if let Ok(value) = HeaderValue::from_str(&request_id.0) {
         response.headers_mut().insert(REQUEST_ID_HEADER, value);
+    }
+    if let Ok(value) = HeaderValue::from_str(&trace.header_value()) {
+        response.headers_mut().insert(TRACEPARENT_HEADER, value);
     }
     response
 }
@@ -356,6 +410,16 @@ async fn readiness(State(state): State<ServerState>) -> Response {
 struct RuntimeDiagnostics {
     global_queued: usize,
     providers_queued: std::collections::BTreeMap<String, usize>,
+    circuit_breakers: std::collections::BTreeMap<String, CircuitDiagnostics>,
+}
+
+#[derive(Serialize)]
+struct CircuitDiagnostics {
+    state: &'static str,
+    consecutive_failures: u32,
+    retry_after_ms: u64,
+    rejected_calls: u64,
+    transitions: u64,
 }
 
 #[derive(Serialize)]
@@ -390,6 +454,23 @@ async fn operator_diagnostics(
         runtime: RuntimeDiagnostics {
             global_queued: queue.global_queued,
             providers_queued: queue.providers_queued,
+            circuit_breakers: state
+                .runtime
+                .circuit_breaker_snapshot()
+                .into_iter()
+                .map(|(provider, snapshot)| {
+                    (
+                        provider,
+                        CircuitDiagnostics {
+                            state: snapshot.state.as_str(),
+                            consecutive_failures: snapshot.consecutive_failures,
+                            retry_after_ms: snapshot.retry_after_ms,
+                            rejected_calls: snapshot.rejected_calls,
+                            transitions: snapshot.transitions,
+                        },
+                    )
+                })
+                .collect(),
         },
         jobs,
         providers: state.runtime.registry().readiness().await,
@@ -414,7 +495,11 @@ async fn prometheus_metrics(State(state): State<ServerState>) -> Response {
         })
         .collect();
     let body = state.metrics.as_ref().map_or_else(String::new, |metrics| {
-        metrics.render(&state.runtime.queue_snapshot(), &provider_restarts)
+        metrics.render(
+            &state.runtime.queue_snapshot(),
+            &provider_restarts,
+            &state.runtime.circuit_breaker_snapshot(),
+        )
     });
     (
         [
@@ -1189,6 +1274,7 @@ async fn run_request_internal(
     let span = tracing::info_span!(
         "imagegen_bridge.image_operation",
         request_id = %request_id.0,
+        trace_id = %request_id.1.as_deref().unwrap_or("untraced"),
         provider = %provider
     );
     let context = ExecutionContext {
@@ -1213,8 +1299,16 @@ async fn run_request_internal(
         metrics.record(&provider, &result, started.elapsed());
     }
     match &result {
-        Ok(_) => {
-            tracing::info!(request_id = %request_id.0, provider = %provider, "image operation completed");
+        Ok(response) => {
+            tracing::info!(
+                request_id = %request_id.0,
+                trace_id = %request_id.1.as_deref().unwrap_or("untraced"),
+                provider = %response.provider,
+                duration_ms = elapsed_millis(started),
+                provider_ms = response.timings.provider_ms,
+                queue_ms = response.timings.queue_ms,
+                "image operation completed"
+            );
         }
         Err(error) => {
             let upstream_code = error.details.get("upstream_code").and_then(Value::as_str);
@@ -1229,9 +1323,11 @@ async fn run_request_internal(
             let image_call_statuses = error.details.get("image_call_statuses");
             tracing::warn!(
                 request_id = %request_id.0,
+                trace_id = %request_id.1.as_deref().unwrap_or("untraced"),
                 provider = %provider,
                 error_code = ?error.code,
                 retryable = error.retryable,
+                duration_ms = elapsed_millis(started),
                 upstream_code = ?upstream_code,
                 http_status = ?http_status,
                 outcome = ?outcome,
@@ -1244,6 +1340,55 @@ async fn run_request_internal(
         }
     }
     result.map_err(|error| ApiError::from_bridge(error, request_id))
+}
+
+fn parse_traceparent(value: &str) -> Option<(String, String, String)> {
+    let mut parts = value.split('-');
+    let version = parts.next()?;
+    let trace_id = parts.next()?;
+    let parent_id = parts.next()?;
+    let flags = parts.next()?;
+    let valid_hex = trace_id
+        .bytes()
+        .chain(parent_id.bytes())
+        .chain(flags.bytes())
+        .all(|byte| byte.is_ascii_hexdigit());
+    if parts.next().is_some()
+        || version != "00"
+        || trace_id.len() != 32
+        || parent_id.len() != 16
+        || flags.len() != 2
+        || trace_id.bytes().all(|byte| byte == b'0')
+        || parent_id.bytes().all(|byte| byte == b'0')
+        || !valid_hex
+    {
+        return None;
+    }
+    Some((
+        trace_id.to_ascii_lowercase(),
+        parent_id.to_ascii_lowercase(),
+        flags.to_ascii_lowercase(),
+    ))
+}
+
+fn new_trace_id() -> String {
+    Uuid::now_v7().simple().to_string()
+}
+
+fn new_span_id() -> String {
+    Uuid::now_v7().simple().to_string()[..16].to_owned()
+}
+
+fn valid_correlation_value(value: &str, maximum: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= maximum
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+}
+
+fn elapsed_millis(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 fn apply_idempotency_header(
@@ -1435,6 +1580,9 @@ mod tests {
             request: ImageRequest,
             context: ProviderContext,
         ) -> Result<ImageResponse, BridgeError> {
+            if request.prompt == "capacity-slow" {
+                tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+            }
             if request.parameters.partial_images > 0
                 && let Some(events) = &context.events
             {
@@ -1598,6 +1746,32 @@ mod tests {
         let body = authorized.into_body().collect().await.unwrap().to_bytes();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["items"][0]["models"][0], "test-image");
+    }
+
+    #[tokio::test]
+    async fn propagates_safe_request_and_w3c_trace_correlation() {
+        let app = test_router(None);
+        let response = app
+            .oneshot(
+                Request::get("/health/live")
+                    .header(REQUEST_ID_HEADER, "caller-request-7")
+                    .header(
+                        TRACEPARENT_HEADER,
+                        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.headers()[REQUEST_ID_HEADER], "caller-request-7");
+        let traceparent = response.headers()[TRACEPARENT_HEADER].to_str().unwrap();
+        assert!(traceparent.starts_with("00-4bf92f3577b34da6a3ce929d0e0e4736-"));
+        assert!(traceparent.ends_with("-01"));
+        assert_ne!(
+            traceparent,
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+        );
     }
 
     #[tokio::test]
@@ -2447,5 +2621,84 @@ mod tests {
         assert!(body.contains("imagegen_bridge_queue_depth"));
         assert!(!body.contains("never expose this prompt"));
         assert!(!body.contains("metrics-secret"));
+    }
+
+    #[tokio::test]
+    async fn stress_spike_and_abbreviated_soak_overload_boundedly_then_recover() {
+        let registry =
+            ProviderRegistry::new([Arc::new(ReadyProvider) as Arc<dyn ImageProvider>], "ready")
+                .unwrap();
+        let runtime_config = RuntimeConfig {
+            global_limit: imagegen_bridge_runtime::ConcurrencyLimit {
+                max_concurrent: 2,
+                max_queued: 4,
+            },
+            default_provider_limit: imagegen_bridge_runtime::ConcurrencyLimit {
+                max_concurrent: 2,
+                max_queued: 4,
+            },
+            ..RuntimeConfig::default()
+        };
+        let runtime = Arc::new(ImagegenRuntime::new(registry, runtime_config).unwrap());
+        let app = router(
+            ServerState::with_bearer(Arc::clone(&runtime), None),
+            &ServerSettings::default(),
+        );
+        let body = serde_json::to_vec(&ImageRequest::generate("capacity-slow")).unwrap();
+        let mut tasks = tokio::task::JoinSet::new();
+        for _ in 0..40 {
+            let service = app.clone();
+            let body = body.clone();
+            tasks.spawn(async move {
+                service
+                    .oneshot(
+                        Request::post("/v1/images")
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .body(Body::from(body))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap()
+                    .status()
+            });
+        }
+        let mut succeeded = 0;
+        let mut overloaded = 0;
+        let mut unexpected = 0;
+        while let Some(status) = tasks.join_next().await {
+            match status.unwrap() {
+                StatusCode::OK => succeeded += 1,
+                StatusCode::SERVICE_UNAVAILABLE => overloaded += 1,
+                _ => unexpected += 1,
+            }
+        }
+        assert!(succeeded >= 2);
+        assert!(overloaded > 0);
+        assert_eq!(unexpected, 0);
+        assert_eq!(runtime.queue_snapshot().global_queued, 0);
+        assert!(
+            runtime
+                .queue_snapshot()
+                .providers_queued
+                .values()
+                .all(|queued| *queued == 0)
+        );
+
+        for _ in 0..100 {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::post("/v1/images")
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            serde_json::to_vec(&ImageRequest::generate("soak-fast")).unwrap(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        assert_eq!(runtime.queue_snapshot().global_queued, 0);
     }
 }

@@ -29,6 +29,7 @@ const MAX_PARTIAL_PREVIEW_BYTES: usize = 16 * 1024 * 1024;
 const MAX_PARTIAL_PREVIEW_BYTES_U64: u64 = 16 * 1024 * 1024;
 const MAX_PARTIAL_PREVIEW_BASE64_CHARS: usize =
     (MAX_PARTIAL_PREVIEW_BYTES.saturating_add(2) / 3).saturating_mul(4);
+const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(31 * 60);
 
 /// Latest verified transient preview for one running durable job.
 #[derive(Debug, Clone)]
@@ -239,8 +240,15 @@ impl JobManager {
         })
     }
 
+    /// Verifies that the durable store is queryable and retention admission is healthy.
+    pub(crate) async fn is_ready(&self) -> bool {
+        self.retention_healthy.load(Ordering::Acquire) && self.store.statistics().await.is_ok()
+    }
+
     /// Stops queued dispatch and waits a bounded interval for active state to settle.
     pub async fn shutdown(&self) {
+        // Stop accepting and claiming queued work, but do not cancel already-dispatched
+        // provider calls: their upstream outcome would otherwise be unknowable.
         self.shutdown.cancel();
         let wait = async {
             loop {
@@ -251,7 +259,14 @@ impl JobManager {
                 notified.await;
             }
         };
-        let _ = tokio::time::timeout(Duration::from_secs(15), wait).await;
+        if tokio::time::timeout(SHUTDOWN_DRAIN_TIMEOUT, wait)
+            .await
+            .is_err()
+        {
+            for cancellation in self.active.lock().await.values() {
+                cancellation.cancel();
+            }
+        }
     }
 
     fn spawn_retention_loop(self: &Arc<Self>) {
@@ -316,7 +331,7 @@ impl JobManager {
             return Ok(());
         }
 
-        let cancellation = self.shutdown.child_token();
+        let cancellation = CancellationToken::new();
         let key = (auth_scope.clone(), id.clone());
         self.active
             .lock()

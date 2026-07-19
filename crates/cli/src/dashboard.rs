@@ -268,6 +268,11 @@ pub(crate) fn initialize_server_tracing(enabled: bool) {
         .with_writer(std::io::stderr)
         .with_target(false)
         .with_current_span(true)
+        .with_span_list(true)
+        .with_span_events(
+            tracing_subscriber::fmt::format::FmtSpan::NEW
+                | tracing_subscriber::fmt::format::FmtSpan::CLOSE,
+        )
         .with_max_level(tracing_subscriber::filter::LevelFilter::INFO)
         .try_init()
         .is_ok();

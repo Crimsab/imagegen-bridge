@@ -59,6 +59,7 @@ probe.
 | `imagegen-bridge edit` | Edit an image or use reference images |
 | `imagegen-bridge dashboard` | Open or start the embedded dashboard |
 | `imagegen-bridge serve` | Run the HTTP API explicitly |
+| `imagegen-bridge gateway` | Hold and route requests across single-active blue/green handoffs |
 | `imagegen-bridge preset` | Save and reuse complete request settings |
 | `imagegen-bridge providers` | Inspect providers, models, and capabilities |
 | `imagegen-bridge background remove` | Remove a flat background locally |
@@ -71,6 +72,12 @@ The CLI checks for a new GitHub Release at most once per day after successful
 interactive commands. It never checks during server, dashboard, JSON, plain, or
 quiet execution and never sends telemetry. Set
 `IMAGEGEN_BRIDGE_NO_UPDATE_CHECK=1` to disable the passive check completely.
+
+The runtime includes per-provider circuit breakers, W3C trace correlation,
+bounded duration metrics, deterministic capacity/failure testing, and an
+active/passive updater that never runs two OAuth-backed slots concurrently.
+See [the resilience model](docs/resilience.md) and
+[capacity guide](docs/capacity.md).
 
 ## Common workflows
 

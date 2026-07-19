@@ -187,6 +187,9 @@ jobs:
       - name: Validate agent skill discovery
         run: bunx skills@1.5.17 add . --list | grep -q generate-images-with-bridge
 
+      - name: Run offline resilience matrix
+        run: bun run tools/resilience-harness.ts --scenario all --soak-seconds 5 --json
+
   container:
     name: Hardened container
     if: ${{ github.event.repository.visibility == 'public' }}

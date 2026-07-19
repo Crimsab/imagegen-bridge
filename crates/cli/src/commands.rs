@@ -28,7 +28,7 @@ use crate::{
         ImageArgs, PresentationArgs, PresetCommand, ProviderCommand, SchemaArgs, SchemaKind,
         SessionCommand, UpdateArgs,
     },
-    dashboard, doctor,
+    dashboard, doctor, gateway,
     output::Output,
     presentation, setup, update,
 };
@@ -52,6 +52,7 @@ pub(crate) async fn run(cli: Cli, output: &Output) -> Result<(), BridgeError> {
         Command::Man(args) => return man(&args.output),
         Command::Schema(args) => return schema(args, output),
         Command::Update(args) => return update_command(args, output).await,
+        Command::Gateway(args) => return gateway::run(args, output).await,
         _ => {}
     }
     if let Command::Setup(args) = &cli.command {
@@ -79,6 +80,7 @@ pub(crate) async fn run(cli: Cli, output: &Output) -> Result<(), BridgeError> {
         Command::Artifacts(args) => artifacts(args.command, &resolved, output),
         Command::AuthDoctor(args) => auth_doctor(args.provider, resolved, output).await,
         Command::Setup(_)
+        | Command::Gateway(_)
         | Command::Update(_)
         | Command::Completions(_)
         | Command::Man(_)
@@ -668,6 +670,8 @@ async fn serve_command(
         resolved.config.server.bind = address;
     }
     resolved.config.validate()?;
+    let _activation_lock =
+        acquire_activation_lock(resolved.config.server.activation_lock.as_deref())?;
     dashboard::initialize_server_tracing(resolved.config.server.tracing.enabled);
     let address: SocketAddr = resolved
         .config
@@ -703,6 +707,29 @@ async fn serve_command(
     }
     let shutdown = application.shutdown().await;
     result.and(shutdown)
+}
+
+fn acquire_activation_lock(path: Option<&Path>) -> Result<Option<std::fs::File>, BridgeError> {
+    let Some(path) = path else { return Ok(None) };
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(|_| invalid("could not open the configured activation lock"))?;
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(std::fs::TryLockError::WouldBlock) => Err(BridgeError::new(
+            ErrorCode::Overloaded,
+            "another OAuth-active bridge slot holds the activation lock",
+        )
+        .retryable(true)
+        .with_detail("retry_after_ms", 1_000_u64)),
+        Err(std::fs::TryLockError::Error(_)) => {
+            Err(invalid("could not acquire the configured activation lock"))
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -1099,4 +1126,21 @@ fn input(message: &str) -> BridgeError {
 
 fn internal(message: &str) -> BridgeError {
     BridgeError::new(ErrorCode::Internal, message)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn activation_lock_allows_exactly_one_live_holder() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("oauth-active.lock");
+        let first = acquire_activation_lock(Some(&path)).unwrap();
+        let second = acquire_activation_lock(Some(&path)).unwrap_err();
+        assert_eq!(second.code, ErrorCode::Overloaded);
+        drop(first);
+        assert!(acquire_activation_lock(Some(&path)).is_ok());
+    }
 }

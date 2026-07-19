@@ -14,6 +14,15 @@ max_queued = 64
 max_concurrent = 4
 max_queued = 16
 
+# Slow successful generations do not count as breaker failures. The three-minute
+# cooldown starts only after repeated qualifying provider failures.
+[runtime.circuit_breaker]
+enabled = true
+failure_threshold = 5
+open_duration_ms = 180000
+half_open_max_calls = 1
+success_threshold = 1
+
 [runtime.request]
 max_prompt_bytes = 131072
 max_negative_prompt_bytes = 65536
@@ -102,6 +111,7 @@ project_env = "OPENAI_PROJECT_ID"
 
 [server]
 bind = "127.0.0.1:8787"
+# activation_lock = "/shared/coord/oauth-active.lock"
 max_body_bytes = 83886080
 max_header_bytes = 32768
 max_connections = 256

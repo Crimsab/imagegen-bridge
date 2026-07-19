@@ -17,10 +17,13 @@ use imagegen_bridge_core::{
 };
 use tokio::sync::{Mutex, Notify, OwnedSemaphorePermit, mpsc};
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument as _;
 use uuid::Uuid;
 
 use crate::{
+    CircuitBreakerConfig, CircuitBreakerSnapshot,
     admission::AdmissionGate,
+    circuit_breaker::CircuitBreaker,
     idempotency::{IdempotencyAction, IdempotencyConfig, IdempotencyCoordinator},
     materialize::{MaterializationConfig, OutputMaterializer},
     registry::ProviderRegistry,
@@ -62,6 +65,10 @@ pub struct RuntimeConfig {
     pub default_provider_limit: ConcurrencyLimit,
     /// Per-provider limit overrides.
     pub provider_limits: BTreeMap<String, ConcurrencyLimit>,
+    /// Default per-provider circuit-breaker policy.
+    pub default_circuit_breaker: CircuitBreakerConfig,
+    /// Per-provider circuit-breaker overrides.
+    pub circuit_breakers: BTreeMap<String, CircuitBreakerConfig>,
     /// Scoped replay coordination policy.
     pub idempotency: IdempotencyConfig,
     /// Output verification and delivery policy.
@@ -81,6 +88,8 @@ impl Default for RuntimeConfig {
             },
             default_provider_limit: ConcurrencyLimit::default(),
             provider_limits: BTreeMap::new(),
+            default_circuit_breaker: CircuitBreakerConfig::default(),
+            circuit_breakers: BTreeMap::new(),
             idempotency: IdempotencyConfig::default(),
             materialization: MaterializationConfig::default(),
         }
@@ -134,6 +143,7 @@ pub struct ImagegenRuntime {
     config: RuntimeConfig,
     global_gate: Arc<AdmissionGate>,
     provider_gates: BTreeMap<String, Arc<AdmissionGate>>,
+    circuit_breakers: BTreeMap<String, Arc<CircuitBreaker>>,
     idempotency: IdempotencyCoordinator,
     materializer: OutputMaterializer,
     shutdown: CancellationToken,
@@ -182,12 +192,16 @@ impl ImagegenRuntime {
         for name in config.provider_limits.keys() {
             registry.resolve(Some(name))?;
         }
+        for name in config.circuit_breakers.keys() {
+            registry.resolve(Some(name))?;
+        }
         let global_gate = Arc::new(AdmissionGate::new(
             config.global_limit.max_concurrent,
             config.global_limit.max_queued,
             "global",
         )?);
         let mut provider_gates = BTreeMap::new();
+        let mut circuit_breakers = BTreeMap::new();
         for (name, _) in registry.entries() {
             let limit = config
                 .provider_limits
@@ -202,6 +216,12 @@ impl ImagegenRuntime {
                     format!("provider:{name}"),
                 )?),
             );
+            let breaker = config
+                .circuit_breakers
+                .get(name)
+                .copied()
+                .unwrap_or(config.default_circuit_breaker);
+            circuit_breakers.insert(name.to_owned(), Arc::new(CircuitBreaker::new(breaker)?));
         }
         let idempotency = IdempotencyCoordinator::new(config.idempotency)?;
         let materializer = OutputMaterializer::new(config.materialization.clone())?;
@@ -210,6 +230,7 @@ impl ImagegenRuntime {
             config,
             global_gate,
             provider_gates,
+            circuit_breakers,
             idempotency,
             materializer,
             shutdown: CancellationToken::new(),
@@ -361,6 +382,15 @@ impl ImagegenRuntime {
         }
     }
 
+    /// Returns redaction-safe per-provider circuit state.
+    #[must_use]
+    pub fn circuit_breaker_snapshot(&self) -> BTreeMap<String, CircuitBreakerSnapshot> {
+        self.circuit_breakers
+            .iter()
+            .map(|(name, breaker)| (name.clone(), breaker.snapshot()))
+            .collect()
+    }
+
     /// Stops admissions, cancels active operations, and releases providers.
     pub async fn shutdown(&self) -> Result<(), BridgeError> {
         let mut stored_result = self.shutdown_result.lock().await;
@@ -447,6 +477,12 @@ impl ImagegenRuntime {
 
         for (index, route) in routes.iter().enumerate() {
             let attempt_started = Instant::now();
+            let attempt_span = tracing::info_span!(
+                "imagegen_bridge.provider_attempt",
+                request_id = %request_id,
+                provider = %route.provider,
+                attempt_index = index
+            );
             match self
                 .execute_route(
                     &request,
@@ -457,6 +493,7 @@ impl ImagegenRuntime {
                     operation,
                     events.clone(),
                 )
+                .instrument(attempt_span)
                 .await
             {
                 Ok(execution) => {
@@ -530,15 +567,59 @@ impl ImagegenRuntime {
     ) -> Result<RouteExecution, BridgeError> {
         let provider = self.registry.resolve(Some(&route.provider))?;
         let descriptor = provider.descriptor();
+        let breaker = self
+            .circuit_breakers
+            .get(&descriptor.name)
+            .ok_or_else(|| configuration_error("provider has no configured circuit breaker"))?;
+        let breaker_permit = breaker.acquire(&descriptor.name)?;
         let provider_gate = self
             .provider_gates
             .get(&descriptor.name)
             .ok_or_else(|| configuration_error("provider has no configured admission gate"))?;
         let queue_started = Instant::now();
-        let _provider_permit = self
+        let provider_permit = self
             .acquire_controlled(provider_gate, deadline, external_cancellation, operation)
-            .await?;
+            .await;
+        let _provider_permit = match provider_permit {
+            Ok(permit) => permit,
+            Err(error) => {
+                drop(breaker_permit);
+                return Err(error);
+            }
+        };
         let queue_ms = elapsed_ms(queue_started);
+        let result = self
+            .execute_route_admitted(
+                request,
+                request_id,
+                route,
+                deadline,
+                external_cancellation,
+                operation,
+                events,
+                provider,
+                descriptor,
+                queue_ms,
+            )
+            .await;
+        breaker_permit.finish(&result);
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn execute_route_admitted(
+        &self,
+        request: &ImageRequest,
+        request_id: &str,
+        route: &ProviderRoute,
+        deadline: Instant,
+        external_cancellation: &CancellationToken,
+        operation: &CancellationToken,
+        events: Option<mpsc::Sender<ProviderEvent>>,
+        provider: Arc<dyn imagegen_bridge_core::ImageProvider>,
+        descriptor: imagegen_bridge_core::ProviderDescriptor,
+        queue_ms: u64,
+    ) -> Result<RouteExecution, BridgeError> {
         let capabilities = self
             .await_controlled(
                 provider.capabilities(route.model.as_deref()),
@@ -895,6 +976,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::CircuitState;
 
     const ONE_PIXEL_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
@@ -1190,6 +1272,14 @@ mod tests {
         primary: &Arc<RouteProvider>,
         fallback: &Arc<RouteProvider>,
     ) -> ImagegenRuntime {
+        routing_runtime_with(primary, fallback, |_| {})
+    }
+
+    fn routing_runtime_with(
+        primary: &Arc<RouteProvider>,
+        fallback: &Arc<RouteProvider>,
+        mutate: impl FnOnce(&mut RuntimeConfig),
+    ) -> ImagegenRuntime {
         let registry = ProviderRegistry::new(
             [
                 Arc::clone(primary) as Arc<dyn ImageProvider>,
@@ -1198,7 +1288,9 @@ mod tests {
             primary.name,
         )
         .unwrap();
-        ImagegenRuntime::new(registry, RuntimeConfig::default()).unwrap()
+        let mut config = RuntimeConfig::default();
+        mutate(&mut config);
+        ImagegenRuntime::new(registry, config).unwrap()
     }
 
     #[tokio::test]
@@ -1424,6 +1516,63 @@ mod tests {
         );
         assert_eq!(primary.execute_calls.load(Ordering::Acquire), 0);
         assert_eq!(fallback.execute_calls.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn open_primary_circuit_fails_fast_and_preserves_explicit_fallback() {
+        let primary = Arc::new(RouteProvider::new(
+            "primary",
+            Some(RouteFailure::KnownUpstream),
+        ));
+        let fallback = Arc::new(RouteProvider::new("fallback", None));
+        let runtime = routing_runtime_with(&primary, &fallback, |config| {
+            config.default_circuit_breaker.failure_threshold = 1;
+        });
+        let mut request = ImageRequest::generate("test breaker fallback");
+        request.routing.fallback_policy = FallbackPolicy::OnError;
+        request.routing.fallbacks.push(ProviderRoute {
+            provider: "fallback".to_owned(),
+            model: None,
+        });
+        assert_eq!(
+            runtime.execute(request.clone()).await.unwrap().provider,
+            "fallback"
+        );
+        assert_eq!(
+            runtime.circuit_breaker_snapshot()["primary"].state,
+            CircuitState::Open
+        );
+        let second = runtime.execute(request).await.unwrap();
+        assert_eq!(second.provider, "fallback");
+        assert_eq!(primary.execute_calls.load(Ordering::Acquire), 1);
+        assert_eq!(fallback.execute_calls.load(Ordering::Acquire), 2);
+    }
+
+    #[tokio::test]
+    async fn unknown_outcome_opens_only_for_later_calls_without_retrying_current_call() {
+        let primary = Arc::new(RouteProvider::new(
+            "primary",
+            Some(RouteFailure::UnknownOutcome),
+        ));
+        let fallback = Arc::new(RouteProvider::new("fallback", None));
+        let runtime = routing_runtime_with(&primary, &fallback, |config| {
+            config.default_circuit_breaker.failure_threshold = 1;
+        });
+        let mut request = ImageRequest::generate("test unknown outcome");
+        request.routing.fallback_policy = FallbackPolicy::OnError;
+        request.routing.fallbacks.push(ProviderRoute {
+            provider: "fallback".to_owned(),
+            model: None,
+        });
+        let first = runtime.execute(request.clone()).await.unwrap_err();
+        assert_eq!(first.details["outcome"], "unknown");
+        assert_eq!(fallback.execute_calls.load(Ordering::Acquire), 0);
+        assert_eq!(
+            runtime.circuit_breaker_snapshot()["primary"].state,
+            CircuitState::Open
+        );
+        assert_eq!(runtime.execute(request).await.unwrap().provider, "fallback");
+        assert_eq!(primary.execute_calls.load(Ordering::Acquire), 1);
     }
 
     #[tokio::test]

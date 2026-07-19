@@ -4,6 +4,7 @@ mod args;
 mod commands;
 mod dashboard;
 mod doctor;
+mod gateway;
 mod output;
 mod presentation;
 mod setup;

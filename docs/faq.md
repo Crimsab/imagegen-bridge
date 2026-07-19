@@ -1,5 +1,13 @@
 # Frequently asked questions
 
+## Why can three images take several minutes?
+
+Generation is provider-latency-bound. With `max_parallel_outputs = 2`, a batch
+of three runs in two waves; observed medium-quality provider calls have taken
+roughly 95–119 seconds each. Inspect response `timings`: `provider_ms` near
+`total_ms` with `queue_ms` near zero means the bridge is not the bottleneck.
+Browser ChatGPT can use different defaults and infrastructure.
+
 ## Does the bridge require an OpenAI API key?
 
 No. The default `codex-responses` provider uses your existing Codex and ChatGPT

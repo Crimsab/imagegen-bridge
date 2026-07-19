@@ -39,12 +39,13 @@ Never commit this directory. The repository ignores `deploy/codex-home/`.
 
 ## Compose
 
-There are two Compose entry points:
+There are three Compose entry points:
 
 | File | Purpose | Image source |
 | --- | --- | --- |
 | `compose.package.yaml` | Standalone released deployment | Pulls the pinned GHCR package |
 | `compose.yaml` | Source build and image development | Builds the included `Dockerfile` |
+| `compose.handoff.yaml` | Single-OAuth-active blue/green handoff | Stable gateway plus released slots |
 
 For a deployment without a repository checkout, follow the
 [Docker quickstart](docker-quickstart.md). The commands below are specifically
@@ -88,15 +89,69 @@ backoff for failures that are explicitly safe to retry. Set
 The accepted range is `1..=2`; unknown outcomes are never retried regardless of
 configuration.
 
+## Active/passive zero-error handoff
+
+`compose.handoff.yaml` exposes only the gateway. The gateway has no Codex home,
+OAuth credential, state database, artifact store, or provider process. It reads
+only `deploy/coord/active-slot`, whose value is `blue`, `green`, or `hold`.
+
+Only one bridge slot runs at a time. During an update the updater writes
+`hold`, so the bounded gateway retains new requests without dispatching them.
+It gracefully stops the active slot, starts the inactive image, requires deep
+provider readiness, switches the file atomically, and releases held requests.
+Because the old slot is stopped before the new one starts, the slots never use
+OAuth concurrently. Both also contend on `server.activation_lock` stored in
+the shared durable state volume; the cross-process kernel lock is acquired before OAuth discovery or provider
+bootstrap and is released automatically on exit or crash. A failed readiness
+gate stops the candidate, restores its
+pin, restarts the old slot, and routes held requests back to it.
+
+Initial start:
+
+```sh
+install -d deploy/coord
+printf 'blue\n' > deploy/coord/active-slot
+docker compose -f compose.handoff.yaml up -d gateway blue
+```
+
+Upgrade after reviewing the dry-run:
+
+```sh
+imagegen-bridge update docker \
+  --active-passive \
+  --compose-file compose.handoff.yaml \
+  --coordination-file deploy/coord/active-slot \
+  --dry-run
+
+imagegen-bridge update docker \
+  --active-passive \
+  --compose-file compose.handoff.yaml \
+  --coordination-file deploy/coord/active-slot \
+  --yes
+```
+
+The bundled budget allows 31 minutes for an already-dispatched request or
+durable worker to drain, three minutes for candidate readiness, and 35 minutes
+for held gateway requests. The gateway also enforces an 80 MiB streaming input
+limit, a 31-minute forward deadline, and a 60-second response-stream idle
+deadline. If configured request limits exceed these values, raise the gateway
+hold/forward timeout, slot `stop_grace_period`, updater readiness timeout, and
+request deadline as one coherent inequality: `hold > drain + readiness +
+margin`. The bounded hold prevents a planned handoff from becoming a 502. A
+host crash can still leave an already-dispatched remote generation with an
+unknown outcome; idempotency safeguards continue to apply.
+
 ## Health and shutdown
 
 `GET /health/live` is public and content-free for container health checks.
-`GET /health/ready` reads a detail-free cached provider snapshot. Provider
-probes run on a bounded background cadence; full per-provider state remains in
+`GET /health/ready` reads a detail-free cached provider snapshot and verifies
+that enabled durable SQLite state is queryable with healthy retention
+admission. Probes run on a bounded background cadence; full state remains in
 the authenticated `GET /v1/diagnostics` response.
 `GET /metrics` is enabled in the container profile and protected by the bridge
-bearer token. Compose allows 45 seconds for SIGTERM-driven draining, provider
-shutdown, SQLite completion, and Codex child termination before SIGKILL.
+bearer token. The ordinary Compose profile allows 45 seconds for shutdown; the
+handoff profile allows 31 minutes so active synchronous and durable work can
+settle before provider shutdown and SIGKILL.
 
 ## Backups and upgrades
 

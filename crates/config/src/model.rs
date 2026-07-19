@@ -57,6 +57,10 @@ pub struct RuntimeSettings {
     pub provider_default: ConcurrencySettings,
     /// Per-provider overrides by stable provider name.
     pub providers: BTreeMap<String, ConcurrencySettings>,
+    /// Default per-provider circuit-breaker policy.
+    pub circuit_breaker: CircuitBreakerSettings,
+    /// Per-provider circuit-breaker overrides by stable provider name.
+    pub circuit_breakers: BTreeMap<String, CircuitBreakerSettings>,
     /// Intrinsic request limits.
     pub request: RequestLimitSettings,
     /// Idempotency replay bounds.
@@ -75,8 +79,38 @@ impl Default for RuntimeSettings {
             },
             provider_default: ConcurrencySettings::default(),
             providers: BTreeMap::new(),
+            circuit_breaker: CircuitBreakerSettings::default(),
+            circuit_breakers: BTreeMap::new(),
             request: RequestLimitSettings::default(),
             idempotency: IdempotencySettings::default(),
+        }
+    }
+}
+
+/// One provider circuit-breaker policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CircuitBreakerSettings {
+    /// Enable the breaker for this provider.
+    pub enabled: bool,
+    /// Consecutive dependency failures required to open the circuit.
+    pub failure_threshold: u32,
+    /// Recovery delay before the first half-open probe, in milliseconds.
+    pub open_duration_ms: u64,
+    /// Simultaneous half-open probes.
+    pub half_open_max_calls: u32,
+    /// Successful half-open probes required to close the circuit.
+    pub success_threshold: u32,
+}
+
+impl Default for CircuitBreakerSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            failure_threshold: 5,
+            open_duration_ms: 3 * 60 * 1_000,
+            half_open_max_calls: 1,
+            success_threshold: 1,
         }
     }
 }
@@ -451,6 +485,8 @@ pub struct ServerSettings {
     pub bind: String,
     /// Optional environment variable containing bridge bearer auth.
     pub bearer_token_env: Option<String>,
+    /// Optional cross-process activation lock acquired before provider bootstrap.
+    pub activation_lock: Option<PathBuf>,
     /// Maximum HTTP request body bytes.
     pub max_body_bytes: u64,
     /// Maximum header bytes.
@@ -474,6 +510,7 @@ impl Default for ServerSettings {
         Self {
             bind: "127.0.0.1:8787".to_owned(),
             bearer_token_env: None,
+            activation_lock: None,
             max_body_bytes: 80 * 1024 * 1024,
             max_header_bytes: 32 * 1024,
             max_connections: 256,

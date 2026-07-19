@@ -1,0 +1,96 @@
+name: imagegen-bridge-handoff
+
+x-bridge-slot: &bridge-slot
+  restart: unless-stopped
+  profiles: ["slots"]
+  environment:
+    TZ: ${TZ:-Europe/Rome}
+    IMAGEGEN_BRIDGE_BEARER_TOKEN: ${IMAGEGEN_BRIDGE_BEARER_TOKEN:?set a bridge bearer token}
+  command:
+    - imagegen-bridge
+    - --quiet
+    - --set
+    - 'inputs.local_roots=["/workspace"]'
+    - --set
+    - 'artifacts.root="/data/artifacts"'
+    - --set
+    - 'providers.codex_app_server.session_database="/data/state/sessions.sqlite3"'
+    - --set
+    - 'server.bind="0.0.0.0:8787"'
+    - --set
+    - 'server.activation_lock="/data/state/oauth-active.lock"'
+    - --set
+    - 'server.bearer_token_env="IMAGEGEN_BRIDGE_BEARER_TOKEN"'
+    - --set
+    - 'server.metrics.enabled=true'
+    - --set
+    - 'server.jobs.database="/data/state/jobs.sqlite3"'
+    - serve
+  volumes:
+    - ${IMAGEGEN_BRIDGE_CODEX_HOME:-./codex-home}:/codex-home
+    - ${IMAGEGEN_BRIDGE_COORD_DIR:-./deploy/coord}:/coord
+    - imagegen_bridge_state:/data/state
+    - imagegen_bridge_artifacts:/data/artifacts
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=1777
+    - /home/imagegen:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=0700
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  pids_limit: 256
+  stop_grace_period: 1860s
+  healthcheck:
+    test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8787/health/ready"]
+    interval: 5s
+    timeout: 3s
+    retries: 36
+    start_period: 10s
+
+services:
+  gateway:
+    image: ${IMAGEGEN_BRIDGE_GATEWAY_IMAGE:-ghcr.io/crimsab/imagegen-bridge:0.2.0}
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Europe/Rome}
+    command:
+      - imagegen-bridge
+      - --quiet
+      - gateway
+      - --bind
+      - 0.0.0.0:8787
+      - --blue
+      - http://blue:8787
+      - --green
+      - http://green:8787
+      - --state-file
+      - /coord/active-slot
+      - --hold-timeout-ms
+      - ${IMAGEGEN_BRIDGE_HANDOFF_TIMEOUT_MS:-2100000}
+    ports:
+      - "${IMAGEGEN_BRIDGE_LISTEN_HOST:-127.0.0.1}:${IMAGEGEN_BRIDGE_PORT:-8787}:8787"
+    volumes:
+      - ${IMAGEGEN_BRIDGE_COORD_DIR:-./deploy/coord}:/coord:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=1777
+      - /home/imagegen:rw,noexec,nosuid,nodev,size=8m,uid=10001,gid=10001,mode=0700
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8787/health/live"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  blue:
+    <<: *bridge-slot
+    image: ${IMAGEGEN_BRIDGE_BLUE_IMAGE:-ghcr.io/crimsab/imagegen-bridge:0.2.0}
+
+  green:
+    <<: *bridge-slot
+    image: ${IMAGEGEN_BRIDGE_GREEN_IMAGE:-ghcr.io/crimsab/imagegen-bridge:0.2.0}
+
+volumes:
+  imagegen_bridge_state:
+  imagegen_bridge_artifacts:

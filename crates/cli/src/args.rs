@@ -77,6 +77,7 @@ impl Cli {
             && !matches!(
                 self.command,
                 Command::Serve(_)
+                    | Command::Gateway(_)
                     | Command::Dashboard(_)
                     | Command::Update(_)
                     | Command::Completions(_)
@@ -107,6 +108,8 @@ pub(crate) enum Command {
     Background(BackgroundArgs),
     /// Run the bounded HTTP API until interrupted.
     Serve(ServeArgs),
+    /// Run the stable active/passive deployment gateway without OAuth access.
+    Gateway(GatewayArgs),
     /// Open, attach to, or start the local embedded dashboard.
     Dashboard(DashboardArgs),
     /// Inspect configured providers.
@@ -129,6 +132,40 @@ pub(crate) enum Command {
     Completions(CompletionsArgs),
     /// Generate a manual page.
     Man(ManArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct GatewayArgs {
+    /// Gateway listener exposed to clients.
+    #[arg(long, default_value = "127.0.0.1:8787")]
+    pub bind: String,
+    /// Internal blue backend base URL.
+    #[arg(long, default_value = "http://imagegen-bridge-blue:8787")]
+    pub blue: String,
+    /// Internal green backend base URL.
+    #[arg(long, default_value = "http://imagegen-bridge-green:8787")]
+    pub green: String,
+    /// Coordination file containing `blue`, `green`, or `hold`.
+    #[arg(long, default_value = "/coord/active-slot")]
+    pub state_file: PathBuf,
+    /// Maximum time a request may wait during a planned handoff.
+    #[arg(long, default_value_t = 2_100_000)]
+    pub hold_timeout_ms: u64,
+    /// Backend readiness polling interval while held.
+    #[arg(long, default_value_t = 250)]
+    pub probe_interval_ms: u64,
+    /// Maximum simultaneous gateway requests, including held requests.
+    #[arg(long, default_value_t = 256)]
+    pub max_connections: usize,
+    /// Maximum streamed request body bytes.
+    #[arg(long, default_value_t = 80 * 1024 * 1024)]
+    pub max_body_bytes: usize,
+    /// Maximum time from backend dispatch through the complete response stream.
+    #[arg(long, default_value_t = 1_860_000)]
+    pub forward_timeout_ms: u64,
+    /// Maximum idle time between response body chunks.
+    #[arg(long, default_value_t = 60_000)]
+    pub response_idle_timeout_ms: u64,
 }
 
 #[derive(Debug, Args)]
@@ -164,6 +201,22 @@ pub(crate) enum UpdateCommand {
         /// Confirm the image pin change and Compose recreation.
         #[arg(long)]
         yes: bool,
+        /// Use the bundled gateway and mutually exclusive blue/green slots.
+        #[arg(long)]
+        active_passive: bool,
+        /// Host path mounted into the gateway as `/coord/active-slot`.
+        #[arg(long, default_value = "deploy/coord/active-slot", value_name = "FILE")]
+        coordination_file: PathBuf,
+        /// Persistent host file recording the last verified active slot.
+        #[arg(
+            long,
+            default_value = ".imagegen-bridge-active-slot",
+            value_name = "FILE"
+        )]
+        slot_file: PathBuf,
+        /// Maximum seconds to wait for the new slot readiness gate.
+        #[arg(long, default_value_t = 180)]
+        readiness_timeout_secs: u64,
     },
     /// Restore the previous standalone binary retained by the last update.
     Rollback {

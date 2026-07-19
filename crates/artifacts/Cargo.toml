@@ -18,7 +18,7 @@ base64 = "0.22"
 cap-std = "4.0.2"
 futures-util = "0.3"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
-imagegen-bridge-core = { path = "../core", version = "0.1.4" }
+imagegen-bridge-core = { path = "../core", version = "0.2.0" }
 imagesize = { version = "0.15.0", default-features = false, features = ["jpeg", "png", "webp"] }
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "stream"] }
 serde = { version = "1", features = ["derive"] }

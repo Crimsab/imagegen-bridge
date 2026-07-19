@@ -102,6 +102,8 @@ Codex / ChatGPT OAuth
   <a href="sdks/"><strong>SDKs</strong><span>Rust, Python, and TypeScript integration.</span></a>
   <a href="configuration/"><strong>Configuration</strong><span>Defaults, precedence, limits, and safe profiles.</span></a>
   <a href="limits/"><strong>Guarantees</strong><span>Retries, concurrency, idempotency, and restarts.</span></a>
+  <a href="resilience/"><strong>Resilience</strong><span>Circuit breakers, correlated telemetry, and zero-error handoff.</span></a>
+  <a href="capacity/"><strong>Capacity</strong><span>Load, stress, spike, soak, and deterministic fault injection.</span></a>
   <a href="operations/"><strong>Operations</strong><span>Health, backups, upgrades, rollback, and rotation.</span></a>
   <a href="faq/"><strong>FAQ</strong><span>OAuth, privacy, exposure, providers, and persistence.</span></a>
   <a href="testing/"><strong>Testing</strong><span>Offline gates, OAuth smoke tests, and dashboard QA.</span></a>

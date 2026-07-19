@@ -1,6 +1,7 @@
 //! Provider orchestration and durable runtime state.
 
 mod admission;
+mod circuit_breaker;
 mod fanout;
 mod idempotency;
 mod materialize;
@@ -11,6 +12,7 @@ mod sqlite_presets;
 mod sqlite_sessions;
 mod transparency;
 
+pub use circuit_breaker::{CircuitBreakerConfig, CircuitBreakerSnapshot, CircuitState};
 pub use fanout::*;
 pub use idempotency::IdempotencyConfig;
 pub use materialize::MaterializationConfig;

@@ -2,7 +2,7 @@ name: imagegen-bridge
 
 services:
   imagegen-bridge:
-    image: ${IMAGEGEN_BRIDGE_IMAGE:-ghcr.io/crimsab/imagegen-bridge:0.1.4}
+    image: ${IMAGEGEN_BRIDGE_IMAGE:-ghcr.io/crimsab/imagegen-bridge:0.2.0}
     restart: unless-stopped
     environment:
       TZ: ${TZ:-Europe/Rome}

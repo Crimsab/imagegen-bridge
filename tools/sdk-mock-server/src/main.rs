@@ -149,7 +149,7 @@ async fn diagnostics(headers: HeaderMap) -> Response {
         return response;
     }
     Json(json!({
-        "bridge_version": "0.1.4-test",
+        "bridge_version": "0.2.0-test",
         "configuration": {
             "version": 1,
             "default_provider": "codex-responses",

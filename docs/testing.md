@@ -3,6 +3,19 @@
 The default test suite is deterministic and does not read Codex OAuth state,
 contact an image provider, or generate paid/subscription-backed images.
 
+The resilience matrix is also offline. Run a quick complete pass with:
+
+```sh
+bun run tools/resilience-harness.ts --scenario all --soak-seconds 5 --json
+```
+
+See [Capacity and failure testing](capacity.md) for load, 3x-envelope stress,
+spike, soak, fault injection, interpretation, and live-target safeguards.
+The harness `faults` mode validates deterministic dependency fixtures. The
+Rust runtime/provider tests below exercise bridge behavior for 429/502,
+timeouts, process exit, malformed protocol, breaker/fallback, and unknown
+outcomes.
+
 ## Offline gates
 
 Run the Rust contract, lint, schema, process, and integration suite:

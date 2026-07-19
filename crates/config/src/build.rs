@@ -7,7 +7,7 @@ use imagegen_bridge_artifacts::{
 };
 use imagegen_bridge_core::{BridgeError, RequestLimits};
 use imagegen_bridge_runtime::{
-    ConcurrencyLimit, IdempotencyConfig, MaterializationConfig, RuntimeConfig,
+    CircuitBreakerConfig, ConcurrencyLimit, IdempotencyConfig, MaterializationConfig, RuntimeConfig,
 };
 use url::Url;
 
@@ -69,6 +69,13 @@ impl BridgeConfig {
                 .iter()
                 .map(|(provider, limit)| (provider.clone(), concurrency(*limit)))
                 .collect(),
+            default_circuit_breaker: circuit_breaker(self.runtime.circuit_breaker),
+            circuit_breakers: self
+                .runtime
+                .circuit_breakers
+                .iter()
+                .map(|(provider, settings)| (provider.clone(), circuit_breaker(*settings)))
+                .collect(),
             idempotency: IdempotencyConfig {
                 max_entries: self.runtime.idempotency.max_entries,
                 max_completed_bytes: self.runtime.idempotency.max_completed_bytes,
@@ -118,6 +125,16 @@ impl BridgeConfig {
             max_artifacts: self.artifacts.retention.max_artifacts,
             max_scan_entries: self.artifacts.retention.max_scan_entries,
         })
+    }
+}
+
+const fn circuit_breaker(settings: crate::CircuitBreakerSettings) -> CircuitBreakerConfig {
+    CircuitBreakerConfig {
+        enabled: settings.enabled,
+        failure_threshold: settings.failure_threshold,
+        open_duration: Duration::from_millis(settings.open_duration_ms),
+        half_open_max_calls: settings.half_open_max_calls,
+        success_threshold: settings.success_threshold,
     }
 }
 

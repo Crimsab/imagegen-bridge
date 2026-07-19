@@ -20,6 +20,11 @@ redaction-safe operational details.
 
 ## Upgrade
 
+For deployments that cannot accept a restart gap, use the active/passive
+gateway and updater described in [Deployment and operations](deployment.md).
+It readiness-gates the candidate and rolls back automatically while ensuring
+that only one OAuth-backed slot runs at a time.
+
 1. Read the release notes and retain the current image tag.
 2. Take a SQLite-consistent state backup.
 3. Run `config check` with the new binary or image.

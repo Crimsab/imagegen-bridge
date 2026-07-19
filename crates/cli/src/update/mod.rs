@@ -37,11 +37,26 @@ pub(crate) async fn run(command: &UpdateCommand, output: &Output) -> Result<(), 
             env_file,
             dry_run,
             yes,
+            active_passive,
+            coordination_file,
+            slot_file,
+            readiness_timeout_secs,
         } => {
             require_confirmation(*dry_run, *yes)?;
             let release = refresh_cache(false).await?;
             ensure_newer(&release)?;
-            let result = install::docker(&release, compose_file, env_file, *dry_run, *yes).await?;
+            let result = install::docker(
+                &release,
+                compose_file,
+                env_file,
+                *dry_run,
+                *yes,
+                *active_passive,
+                coordination_file,
+                slot_file,
+                *readiness_timeout_secs,
+            )
+            .await?;
             output.value(&result)
         }
         UpdateCommand::Rollback { dry_run, yes } => {

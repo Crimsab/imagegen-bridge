@@ -63,6 +63,21 @@ impl BridgeConfig {
             }
             validate_concurrency("runtime.providers.*", *limit, &mut issue);
         }
+        validate_circuit_breaker(
+            "runtime.circuit_breaker",
+            self.runtime.circuit_breaker,
+            &mut issue,
+        );
+        for (provider, breaker) in &self.runtime.circuit_breakers {
+            if !valid_provider_name(provider) {
+                issue(
+                    "runtime.circuit_breakers",
+                    "invalid",
+                    "provider circuit-breaker key is invalid",
+                );
+            }
+            validate_circuit_breaker("runtime.circuit_breakers.*", *breaker, &mut issue);
+        }
         if self.runtime.default_timeout_ms == 0
             || self.runtime.default_timeout_ms > self.runtime.request.max_timeout_ms
         {
@@ -318,6 +333,18 @@ impl BridgeConfig {
                 "server request and connection limits, except the optional read-stall timeout, must be greater than zero",
             );
         }
+        if self
+            .server
+            .activation_lock
+            .as_ref()
+            .is_some_and(|path| path.as_os_str().is_empty())
+        {
+            issue(
+                "server.activation_lock",
+                "invalid",
+                "activation lock path must not be empty",
+            );
+        }
         if self.server.jobs.enabled
             && (self.server.jobs.database.as_os_str().is_empty()
                 || self.server.jobs.max_pending == 0
@@ -390,6 +417,29 @@ fn validate_concurrency(
             field,
             "out_of_range",
             "maximum concurrency must be greater than zero",
+        );
+    }
+}
+
+fn validate_circuit_breaker(
+    field: &'static str,
+    settings: crate::CircuitBreakerSettings,
+    issue: &mut impl FnMut(&'static str, &'static str, &'static str),
+) {
+    if settings.enabled
+        && (settings.failure_threshold == 0
+            || settings.failure_threshold > 10_000
+            || settings.open_duration_ms == 0
+            || settings.open_duration_ms > 24 * 60 * 60 * 1_000
+            || settings.half_open_max_calls == 0
+            || settings.half_open_max_calls > 100
+            || settings.success_threshold == 0
+            || settings.success_threshold > 100)
+    {
+        issue(
+            field,
+            "out_of_range",
+            "enabled circuit-breaker thresholds, probe limits, and cooldown must be within bounds",
         );
     }
 }
