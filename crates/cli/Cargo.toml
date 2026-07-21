@@ -35,7 +35,7 @@ tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "proce
 tokio-util = { version = "0.7", features = ["rt"] }
 toml = "1.1"
 tower = { version = "0.5", features = ["limit", "load-shed"] }
-tower-http = { version = "0.6", features = ["limit"] }
+tower-http = { version = "0.7", features = ["limit"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json"] }
 zip = { version = "8.1.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
